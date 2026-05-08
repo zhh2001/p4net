@@ -7,6 +7,7 @@ from p4net.runtime.exceptions import (
     PrivilegeError,
     TcError,
 )
+from p4net.runtime.link import VethPair
 from p4net.runtime.netns import NetworkNamespace
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "P4NetError",
     "PrivilegeError",
     "TcError",
+    "VethPair",
 ]
