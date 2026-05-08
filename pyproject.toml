@@ -58,4 +58,5 @@ testpaths = ["tests"]
 addopts = "-ra -q"
 markers = [
   "integration: requires root and Linux network namespaces",
+  "requires_p4c: requires the 'p4c' compiler binary on PATH",
 ]
