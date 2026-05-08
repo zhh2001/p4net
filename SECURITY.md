@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report suspected security issues privately by email to
-`<contact email to be set before first public release>`. Do not file public
+`1652709417@qq.com`. Do not file public
 issues for unreported vulnerabilities.
 
 ## Scope

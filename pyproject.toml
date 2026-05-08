@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 authors = [{ name = "The p4net Authors" }]
+maintainers = [{ name = "Henghua Zhang", email = "1652709417@qq.com" }]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
