@@ -208,6 +208,37 @@ def test_link_level_ip_on_host_endpoint_kept() -> None:
     assert link.a.ip == "192.168.1.1/24"
 
 
+def test_add_link_mac_overrides_populate_endpoints() -> None:
+    t = Topology()
+    t.add_host("h1")
+    t.add_switch("s1", Path("p.p4"))
+    link = t.add_link(
+        "h1",
+        "s1",
+        mac_a="aa:bb:cc:dd:ee:01",
+        mac_b="aa:bb:cc:dd:ee:02",
+    )
+    assert link.a.mac == "aa:bb:cc:dd:ee:01"
+    assert link.b.mac == "aa:bb:cc:dd:ee:02"
+
+
+def test_add_link_mac_allowed_on_switch_endpoint() -> None:
+    """Unlike IP, MAC is allowed on switch endpoints (hint for veth side config)."""
+    t = Topology()
+    t.add_host("h1")
+    t.add_switch("s1", Path("p.p4"))
+    link = t.add_link("h1", "s1", mac_b="aa:bb:cc:dd:ee:02")
+    assert link.b.mac == "aa:bb:cc:dd:ee:02"
+
+
+def test_add_link_invalid_mac_rejected() -> None:
+    t = Topology()
+    t.add_host("h1")
+    t.add_switch("s1", Path("p.p4"))
+    with pytest.raises(TopologyError, match="invalid LinkEndpoint MAC"):
+        t.add_link("h1", "s1", mac_a="not-a-mac")
+
+
 # ---------------------------------------------------------------------------
 # neighbors_of / port_assignments
 # ---------------------------------------------------------------------------
@@ -443,10 +474,24 @@ def _build_sample() -> Topology:
     t.add_host("h2", ip="10.0.0.2/24")
     t.add_switch("s1", Path("examples/basic.p4"), cpu_port=255)
     t.add_switch("s2", Path("examples/basic.p4"), pcap_enabled=False, log_level="debug")
-    t.add_link("h1", "s1")
+    # Host endpoint MAC override + switch endpoint MAC override (round-trip coverage).
+    t.add_link("h1", "s1", mac_a="aa:bb:cc:dd:ee:11", mac_b="aa:bb:cc:dd:ee:12")
     t.add_link("h2", "s2", bandwidth="10mbit", delay="5ms", jitter="1ms", loss_pct=0.5, mtu=1450)
-    t.add_link("s1", "s2")
+    t.add_link("s1", "s2", mac_b="aa:bb:cc:dd:ee:22")
     return t
+
+
+def test_round_trip_preserves_macs() -> None:
+    t = _build_sample()
+    payload = t.to_dict()
+    t2 = Topology.from_dict(payload)
+    # The first link in the sample has MAC overrides on both endpoints.
+    first = t2.links[0]
+    assert first.a.mac == "aa:bb:cc:dd:ee:11"
+    assert first.b.mac == "aa:bb:cc:dd:ee:12"
+    # And the third link has a switch-side MAC override.
+    third = t2.links[2]
+    assert third.b.mac == "aa:bb:cc:dd:ee:22"
 
 
 def test_to_dict_from_dict_round_trip() -> None:

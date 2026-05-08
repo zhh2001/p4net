@@ -68,11 +68,44 @@ def test_link_endpoint_node_must_be_non_empty() -> None:
 
 
 def test_link_endpoint_full_fields() -> None:
-    ep = LinkEndpoint(node="h1", port=0, iface_name="h1-eth0", ip="10.0.0.1/24")
+    ep = LinkEndpoint(
+        node="h1",
+        port=0,
+        iface_name="h1-eth0",
+        ip="10.0.0.1/24",
+        mac="aa:bb:cc:dd:ee:ff",
+    )
     assert ep.node == "h1"
     assert ep.port == 0
     assert ep.iface_name == "h1-eth0"
     assert ep.ip == "10.0.0.1/24"
+    assert ep.mac == "aa:bb:cc:dd:ee:ff"
+
+
+def test_link_endpoint_mac_unset_passes_through() -> None:
+    ep = LinkEndpoint(node="h1")
+    assert ep.mac is None
+
+
+def test_link_endpoint_valid_mac_accepted() -> None:
+    ep = LinkEndpoint(node="h1", mac="00:11:22:33:44:55")
+    assert ep.mac == "00:11:22:33:44:55"
+
+
+@pytest.mark.parametrize(
+    "bad_mac",
+    [
+        "",
+        "aa:bb:cc:dd:ee",
+        "aa:bb:cc:dd:ee:ff:gg",
+        "aa-bb-cc-dd-ee-ff",
+        "ZZ:ZZ:ZZ:ZZ:ZZ:ZZ",
+        "aa:bb:cc:dd:ee:fff",
+    ],
+)
+def test_link_endpoint_invalid_mac_rejected(bad_mac: str) -> None:
+    with pytest.raises(TopologyError, match="invalid LinkEndpoint MAC"):
+        LinkEndpoint(node="h1", mac=bad_mac)
 
 
 def test_link_a_must_be_linkendpoint() -> None:

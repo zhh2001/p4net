@@ -58,6 +58,7 @@ def _endpoint_to_dict(ep: LinkEndpoint) -> dict[str, Any]:
         "port": ep.port,
         "iface_name": ep.iface_name,
         "ip": ep.ip,
+        "mac": ep.mac,
     }
 
 
@@ -157,6 +158,8 @@ class Topology:
         port_b: int | None = None,
         ip_a: str | None = None,
         ip_b: str | None = None,
+        mac_a: str | None = None,
+        mac_b: str | None = None,
         bandwidth: str | None = None,
         delay: str | None = None,
         jitter: str | None = None,
@@ -185,8 +188,12 @@ class Topology:
             raise TopologyError(
                 "P4 switch data ports do not carry IP addresses; remove ip_b from the add_link call"
             )
-        ep_a = LinkEndpoint(node=node_a.name, port=port_a_val, iface_name=iface_a, ip=ip_a)
-        ep_b = LinkEndpoint(node=node_b.name, port=port_b_val, iface_name=iface_b, ip=ip_b)
+        ep_a = LinkEndpoint(
+            node=node_a.name, port=port_a_val, iface_name=iface_a, ip=ip_a, mac=mac_a
+        )
+        ep_b = LinkEndpoint(
+            node=node_b.name, port=port_b_val, iface_name=iface_b, ip=ip_b, mac=mac_b
+        )
         link = Link(
             a=ep_a,
             b=ep_b,
@@ -346,12 +353,14 @@ class Topology:
                 port=link_data["a"].get("port"),
                 iface_name=link_data["a"].get("iface_name"),
                 ip=link_data["a"].get("ip"),
+                mac=link_data["a"].get("mac"),
             )
             ep_b = LinkEndpoint(
                 node=link_data["b"]["node"],
                 port=link_data["b"].get("port"),
                 iface_name=link_data["b"].get("iface_name"),
                 ip=link_data["b"].get("ip"),
+                mac=link_data["b"].get("mac"),
             )
             topo._links.append(
                 Link(

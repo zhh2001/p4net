@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from p4net.topo.exceptions import TopologyError
 
 _MTU_MIN = 68
 _MTU_MAX = 65535
+_MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,13 @@ class LinkEndpoint:
     port: int | None = None
     iface_name: str | None = None
     ip: str | None = None
+    mac: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.mac is not None and not _MAC_RE.match(self.mac):
+            raise TopologyError(
+                f"invalid LinkEndpoint MAC {self.mac!r}: must be 'XX:XX:XX:XX:XX:XX'"
+            )
 
 
 @dataclass(frozen=True)
