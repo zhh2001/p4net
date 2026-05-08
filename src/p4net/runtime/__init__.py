@@ -9,6 +9,7 @@ from p4net.runtime.exceptions import (
 )
 from p4net.runtime.link import VethPair
 from p4net.runtime.netns import NetworkNamespace
+from p4net.runtime.tc import apply_netem, clear_qdisc
 
 __all__ = [
     "LinkError",
@@ -18,4 +19,6 @@ __all__ = [
     "PrivilegeError",
     "TcError",
     "VethPair",
+    "apply_netem",
+    "clear_qdisc",
 ]
