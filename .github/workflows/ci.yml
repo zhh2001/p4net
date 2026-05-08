@@ -36,3 +36,21 @@ jobs:
 
       - name: Pytest
         run: pytest
+
+  integration-test:
+    runs-on: ubuntu-22.04
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: pip install -e '.[dev]'
+
+      - name: Run integration tests as root
+        run: sudo "$(which pytest)" -m integration --run-integration
