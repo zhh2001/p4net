@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
-from p4net.runtime import NamespaceError, NetworkNamespace
+from p4net.runtime import NamespaceError, NetworkNamespace, NSProcess
 
 
 @pytest.mark.parametrize(
@@ -159,10 +159,94 @@ def test_exec_timeout_kills_process(mock_nspopen: MagicMock) -> None:
     proc.release.assert_called_once()
 
 
-def test_popen_returns_handle(mock_nspopen: MagicMock) -> None:
+def test_popen_returns_nsprocess(mock_nspopen: MagicMock) -> None:
     proc: Any = mock_nspopen.proc
     proc.pid = 1234
+    proc.poll.return_value = None
     ns = NetworkNamespace("alpha")
     handle = ns.popen(["sleep", "60"])
-    assert handle is proc
+    assert isinstance(handle, NSProcess)
+    assert handle.pid == 1234
     mock_nspopen.assert_called_once()
+
+
+def test_nsprocess_forwards_methods(mock_nspopen: MagicMock) -> None:
+    proc: Any = mock_nspopen.proc
+    proc.pid = 7777
+    proc.poll.return_value = 0
+    proc.wait.return_value = 0
+    ns = NetworkNamespace("alpha")
+    handle = ns.popen(["true"])
+    assert handle.poll() == 0
+    assert handle.wait(timeout=1.0) == 0
+    handle.terminate()
+    proc.terminate.assert_called_once()
+    handle.kill()
+    proc.kill.assert_called_once()
+
+
+def test_nsprocess_close_is_idempotent() -> None:
+    fake = MagicMock()
+    np = NSProcess(fake)
+    np.close()
+    np.close()
+    np.close()
+    fake.release.assert_called_once()
+
+
+def test_nsprocess_close_swallows_release_errors() -> None:
+    fake = MagicMock()
+    fake.release.side_effect = RuntimeError("boom")
+    np = NSProcess(fake)
+    # Must not raise.
+    np.close()
+    fake.release.assert_called_once()
+
+
+def test_nsprocess_context_manager_terminates_running_process() -> None:
+    fake = MagicMock()
+    # Process appears alive on first poll, then dies.
+    fake.poll.side_effect = [None, 0, 0]
+    with NSProcess(fake):
+        pass
+    fake.terminate.assert_called_once()
+    fake.wait.assert_called_with(timeout=5)
+    fake.release.assert_called_once()
+
+
+def test_nsprocess_context_manager_kills_stubborn_process() -> None:
+    fake = MagicMock()
+    # Stays alive even after terminate+wait, then dies after kill.
+    fake.poll.side_effect = [None, None, 0]
+    with NSProcess(fake):
+        pass
+    fake.terminate.assert_called_once()
+    fake.kill.assert_called_once()
+    fake.release.assert_called_once()
+
+
+def test_nsprocess_context_manager_skips_shutdown_if_already_exited() -> None:
+    fake = MagicMock()
+    fake.poll.return_value = 0
+    with NSProcess(fake):
+        pass
+    fake.terminate.assert_not_called()
+    fake.kill.assert_not_called()
+    fake.release.assert_called_once()
+
+
+def test_nsprocess_context_manager_does_not_suppress_body_exception() -> None:
+    fake = MagicMock()
+    fake.poll.return_value = 0
+    fake.release.side_effect = RuntimeError("release failure")
+    with pytest.raises(ValueError, match="from body"), NSProcess(fake):
+        raise ValueError("from body")
+    fake.release.assert_called_once()
+
+
+def test_nsprocess_del_does_not_raise() -> None:
+    fake = MagicMock()
+    fake.release.side_effect = RuntimeError("destroy failure")
+    np = NSProcess(fake)
+    # Trigger __del__ explicitly; it must not raise even though release fails.
+    np.__del__()
