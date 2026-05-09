@@ -1,8 +1,14 @@
-"""Linux network namespace primitive backed by pyroute2.
+"""Linux network namespace primitive.
 
 `NetworkNamespace` is a thin lifecycle wrapper around `/var/run/netns/<name>`.
-All operations talk to netlink via pyroute2 (`pyroute2.netns`, `pyroute2.NSPopen`)
-rather than shelling out to `ip netns`.
+Lifecycle (`create`/`destroy`/`exists`) talks to netlink via pyroute2's
+`netns` module. In-namespace command execution (`exec`/`popen`) shells out
+to the standard `ip netns exec` wrapper rather than `pyroute2.NSPopen`:
+`NSPopen` forks a Python helper before `setns()`, which deadlocks under any
+multi-threaded Python parent (e.g. pytest after a `P4RuntimeClient` has
+opened its bidirectional stream). `subprocess.Popen` of `ip netns exec`
+forks-and-execs straight into the iproute2 binary, bypassing the unsafe
+fork+Python window entirely.
 """
 
 from __future__ import annotations
@@ -14,7 +20,6 @@ from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import IO, Any
 
-from pyroute2 import NSPopen
 from pyroute2 import netns as _netns
 
 from p4net.runtime.exceptions import NamespaceError
@@ -86,34 +91,14 @@ class NetworkNamespace:
         raises `subprocess.CalledProcessError` if `check` and the exit
         status is non-zero, raises `subprocess.TimeoutExpired` on timeout.
         """
-        kwargs: dict[str, Any] = {}
-        if env is not None:
-            kwargs["env"] = dict(env)
-        if capture_output:
-            kwargs["stdout"] = subprocess.PIPE
-            kwargs["stderr"] = subprocess.PIPE
-        proc = NSPopen(self._name, list(argv), **kwargs)
-        try:
-            try:
-                stdout, stderr = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                raise
-            returncode = proc.returncode
-        finally:
-            proc.release()
-        result: subprocess.CompletedProcess[bytes] = subprocess.CompletedProcess(
-            args=list(argv),
-            returncode=returncode,
-            stdout=stdout,
-            stderr=stderr,
+        full_argv = ["ip", "netns", "exec", self._name, *argv]
+        return subprocess.run(
+            full_argv,
+            timeout=timeout,
+            check=check,
+            capture_output=capture_output,
+            env=dict(env) if env is not None else None,
         )
-        if check and returncode != 0:
-            raise subprocess.CalledProcessError(
-                returncode, list(argv), output=stdout, stderr=stderr
-            )
-        return result
 
     def popen(
         self,
@@ -126,11 +111,12 @@ class NetworkNamespace:
     ) -> NSProcess:
         """Spawn a long-running process inside this namespace.
 
-        Returns an `NSProcess` wrapping `pyroute2.NSPopen`. The wrapper
-        exposes a `subprocess.Popen`-compatible surface and ensures the
-        underlying namespace handle is released on context-manager exit,
-        on `close()`, or as a last resort during garbage collection.
+        Returns an `NSProcess` wrapping a regular `subprocess.Popen` of
+        `ip netns exec <name> <argv>`. The wrapper exposes a
+        `subprocess.Popen`-compatible surface (`pid`, `poll`, `wait`,
+        `terminate`, `kill`, `close`).
         """
+        full_argv = ["ip", "netns", "exec", self._name, *argv]
         kwargs: dict[str, Any] = {}
         if env is not None:
             kwargs["env"] = dict(env)
@@ -140,9 +126,12 @@ class NetworkNamespace:
             kwargs["stderr"] = stderr
         if stdin is not None:
             kwargs["stdin"] = stdin
-        popen = NSPopen(self._name, list(argv), **kwargs)
+        popen = subprocess.Popen(full_argv, **kwargs)
         logger.debug(
-            "spawned process %r in namespace %r (pid=%d)", list(argv), self._name, popen.pid
+            "spawned process %r in namespace %r (pid=%d)",
+            list(argv),
+            self._name,
+            popen.pid,
         )
         return NSProcess(popen)
 
@@ -166,10 +155,12 @@ class NetworkNamespace:
 class NSProcess:
     """A process running inside a `NetworkNamespace`.
 
-    Wraps `pyroute2.NSPopen` and ensures the underlying namespace handle is
-    released on context-manager exit, on `close()`, and as a last resort
-    during garbage collection. The forwarded API mirrors `subprocess.Popen`:
-    `pid`, `poll()`, `wait(timeout=None)`, `terminate()`, `kill()`.
+    Wraps a regular `subprocess.Popen` returned by `NetworkNamespace.popen`.
+    The forwarded API (`pid`, `poll`, `wait`, `terminate`, `kill`) mirrors
+    `subprocess.Popen`. `close()` is preserved as a no-op so callers from
+    earlier phases keep working unchanged: there is no namespace-side
+    handle to release because the wrapped process is a regular child of
+    `ip netns exec`.
     """
 
     def __init__(self, popen: Any) -> None:
@@ -194,14 +185,14 @@ class NSProcess:
         self._popen.kill()
 
     def close(self) -> None:
-        """Release the underlying NSPopen helper. Idempotent."""
-        if self._closed:
-            return
+        """Idempotent no-op preserved for API stability.
+
+        Earlier phases needed this method to release a `pyroute2.NSPopen`
+        helper; with a regular `subprocess.Popen` there is nothing to
+        release, but the method is kept so callers compiled against the
+        old API don't break. Calling `close` more than once is safe.
+        """
         self._closed = True
-        try:
-            self._popen.release()
-        except Exception as exc:
-            logger.debug("NSProcess.close: release() raised: %r", exc)
 
     def __enter__(self) -> NSProcess:
         return self
@@ -226,10 +217,7 @@ class NSProcess:
                     except Exception as kerr:
                         logger.debug("NSProcess.__exit__: kill/wait failed: %r", kerr)
         finally:
-            try:
-                self.close()
-            except Exception as cerr:
-                logger.debug("NSProcess.__exit__: close failed: %r", cerr)
+            self.close()
 
     def __del__(self) -> None:
         # __del__ must never raise; swallow everything.
