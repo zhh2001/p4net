@@ -57,7 +57,12 @@ module = ["pyroute2", "pyroute2.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "p4", "p4.*"]
+module = [
+  "grpc", "grpc.*",
+  "google.protobuf", "google.protobuf.*",
+  "google.rpc", "google.rpc.*",
+  "p4", "p4.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -56,6 +56,41 @@ class CounterData:
     byte_count: int
 
 
+def _extract_p4_canonical_codes(exc: grpc.RpcError) -> list[int]:
+    """Pull per-update `p4.v1.Error.canonical_code` ints out of a gRPC error."""
+    codes: list[int] = []
+    try:
+        metadata = exc.trailing_metadata() or ()
+    except Exception:
+        return codes
+    for key, value in metadata:
+        if key.lower() != "grpc-status-details-bin":
+            continue
+        try:
+            from google.rpc import status_pb2
+
+            rpc_status = status_pb2.Status()
+            rpc_status.MergeFromString(value)
+        except Exception:
+            continue
+        for detail in rpc_status.details:
+            try:
+                if detail.Is(p4runtime_pb2.Error.DESCRIPTOR):
+                    err = p4runtime_pb2.Error()
+                    detail.Unpack(err)
+                    codes.append(int(err.canonical_code))
+            except Exception:
+                continue
+    return codes
+
+
+def _grpc_code_for(canonical: int) -> grpc.StatusCode | None:
+    for sc in grpc.StatusCode:
+        if sc.value[0] == canonical:
+            return sc
+    return None
+
+
 class P4RuntimeClient:
     """gRPC client for a single P4Runtime device."""
 
@@ -702,6 +737,21 @@ class P4RuntimeClient:
             detail = exc.details() or ""
         except Exception:
             detail = ""
+        # P4Runtime batches per-update statuses inside an outer UNKNOWN gRPC
+        # error; the per-update canonical_code is encoded as a `p4.v1.Error`
+        # entry in `grpc-status-details-bin`. Resolve to the real code so
+        # callers see DuplicateEntryError / EntryNotFoundError instead of a
+        # generic UNKNOWN.
+        if code == grpc.StatusCode.UNKNOWN:
+            for canonical in _extract_p4_canonical_codes(exc):
+                if canonical == 0:
+                    continue
+                resolved = _grpc_code_for(canonical)
+                if resolved is not None:
+                    code = resolved
+                    if not detail:
+                        detail = f"P4Runtime canonical_code={canonical}"
+                    break
         if code == grpc.StatusCode.UNAVAILABLE:
             return ConnectionError(f"gRPC unavailable for {self._target!r}: {detail}")
         if code == grpc.StatusCode.NOT_FOUND:
