@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 import os
+
+# The bundled `p4runtime` proto stubs were generated against an older protoc
+# and do not load under modern `google.protobuf` C++ descriptors. Set the
+# python-impl env var here, before any test file imports `p4.config.v1.*`,
+# so that test collection itself does not crash.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 import shutil
 
 import pytest
