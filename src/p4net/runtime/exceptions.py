@@ -21,3 +21,13 @@ class LinkError(P4NetError):
 
 class TcError(P4NetError):
     """Failure configuring traffic control / netem."""
+
+
+class BMv2NotFoundError(P4NetError):
+    """Raised when the configured simple_switch_grpc binary is not on PATH."""
+
+
+class BMv2StartupError(P4NetError):
+    """Raised when a BMv2 process fails to start, fails to become ready,
+    or exits unexpectedly during startup.
+    """
