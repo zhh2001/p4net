@@ -230,6 +230,31 @@ def test_safe_invokes_validate(patched: dict[str, Any], tmp_path: Path) -> None:
     net.stop()
 
 
+def test_extra_compile_args_passed_through(patched: dict[str, Any], tmp_path: Path) -> None:
+    topo = _make_simple_topology()
+    net = Network(
+        topo,
+        log_dir=tmp_path / "logs",
+        extra_compile_args=("--Wdisable=unused", "-DSOME_FLAG"),
+    )
+    net.start()
+    try:
+        kwargs = patched["compiler"].compile.call_args.kwargs
+        assert kwargs.get("extra_args") == ("--Wdisable=unused", "-DSOME_FLAG")
+    finally:
+        net.stop()
+
+
+def test_extra_compile_args_default_is_empty_tuple(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        kwargs = patched["compiler"].compile.call_args.kwargs
+        assert kwargs.get("extra_args") == ()
+    finally:
+        net.stop()
+
+
 # ---------------------------------------------------------------------------
 # Rollback paths
 # ---------------------------------------------------------------------------

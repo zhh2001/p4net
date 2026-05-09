@@ -16,7 +16,7 @@ import contextlib
 import logging
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
 
@@ -54,6 +54,7 @@ class Network:
         log_dir: Path | None = None,
         pcap_dir: Path | None = None,
         unsafe: bool = False,
+        extra_compile_args: Sequence[str] = (),
     ) -> None:
         self._topology = topology
         self._compiler = compiler if compiler is not None else P4Compiler()
@@ -61,6 +62,7 @@ class Network:
         self._log_dir: Path | None = None
         self._pcap_dir = pcap_dir
         self._unsafe = unsafe
+        self._extra_compile_args: tuple[str, ...] = tuple(extra_compile_args)
         self._running = False
         self._registered = False
 
@@ -184,7 +186,11 @@ class Network:
 
         # 4. compile each switch's P4 source
         for sw_name, sw in self._topology.switches.items():
-            self._compile_results[sw_name] = self._compiler.compile(sw.p4_src, arch=sw.arch)
+            self._compile_results[sw_name] = self._compiler.compile(
+                sw.p4_src,
+                arch=sw.arch,
+                extra_args=self._extra_compile_args,
+            )
 
         # 5. cleanup hooks
         install_handlers()
