@@ -52,6 +52,7 @@ def _free_port() -> int:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_p4c
 def test_empty_start_lifecycle(compiled_json: Path, tmp_path: Path) -> None:
     sw = BMv2Switch(
         "s1",
@@ -83,6 +84,7 @@ def test_empty_start_lifecycle(compiled_json: Path, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_p4c
 def test_context_manager_real(compiled_json: Path, tmp_path: Path) -> None:
     grpc_port = _free_port()
     thrift_port = _free_port()
@@ -143,6 +145,7 @@ def test_bad_json_path_raises_startup_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_p4c
 def test_grpc_port_collision_raises(compiled_json: Path, tmp_path: Path) -> None:
     """When BMv2 cannot bind its gRPC port, the process dies and `is_running`
     eventually becomes False.
@@ -190,6 +193,7 @@ def test_grpc_port_collision_raises(compiled_json: Path, tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.requires_p4c
 def test_stop_idempotent_on_real_process(compiled_json: Path, tmp_path: Path) -> None:
     sw = BMv2Switch(
         "s_idem",
