@@ -1,0 +1,303 @@
+"""Unit tests for `p4net.control.codec`."""
+
+from __future__ import annotations
+
+import pytest
+
+from p4net.control import (
+    EncodingError,
+    canonicalize,
+    decode_int,
+    encode_int,
+    encode_ipv4,
+    encode_mac,
+    encode_value,
+    parse_lpm,
+    parse_range,
+    parse_ternary,
+)
+
+# ---------------------------------------------------------------------------
+# encode_int
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth", "expected"),
+    [
+        (0, 1, b"\x00"),
+        (1, 1, b"\x01"),
+        (0, 8, b"\x00"),
+        (0xFF, 8, b"\xff"),
+        (0, 16, b"\x00\x00"),
+        (0x1234, 16, b"\x12\x34"),
+        (0, 32, b"\x00\x00\x00\x00"),
+        (0xDEADBEEF, 32, b"\xde\xad\xbe\xef"),
+        (0, 9, b"\x00\x00"),
+        (0x1FF, 9, b"\x01\xff"),
+    ],
+)
+def test_encode_int_widths(value: int, bitwidth: int, expected: bytes) -> None:
+    assert encode_int(value, bitwidth) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [(-1, 8), (256, 8), (1 << 16, 16), (1 << 32, 32)],
+)
+def test_encode_int_rejects_overflow(value: int, bitwidth: int) -> None:
+    with pytest.raises(EncodingError):
+        encode_int(value, bitwidth)
+
+
+@pytest.mark.parametrize("bad_bw", [0, -1, -100])
+def test_encode_int_rejects_bad_bitwidth(bad_bw: int) -> None:
+    with pytest.raises(EncodingError):
+        encode_int(0, bad_bw)
+
+
+def test_encode_int_rejects_bool() -> None:
+    with pytest.raises(EncodingError, match="must be int"):
+        encode_int(True, 8)  # type: ignore[arg-type]
+
+
+def test_encode_int_rejects_non_int() -> None:
+    with pytest.raises(EncodingError, match="must be int"):
+        encode_int("5", 8)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# encode_ipv4
+# ---------------------------------------------------------------------------
+
+
+def test_encode_ipv4_basic() -> None:
+    assert encode_ipv4("0.0.0.0") == b"\x00\x00\x00\x00"
+    assert encode_ipv4("10.0.0.1") == b"\x0a\x00\x00\x01"
+    assert encode_ipv4("255.255.255.255") == b"\xff\xff\xff\xff"
+
+
+@pytest.mark.parametrize("bad", ["", "10.0.0", "10.0.0.300", "not.an.ip", "10.0.0.1/24"])
+def test_encode_ipv4_invalid(bad: str) -> None:
+    with pytest.raises(EncodingError):
+        encode_ipv4(bad)
+
+
+# ---------------------------------------------------------------------------
+# encode_mac
+# ---------------------------------------------------------------------------
+
+
+def test_encode_mac_basic() -> None:
+    assert encode_mac("aa:bb:cc:dd:ee:ff") == b"\xaa\xbb\xcc\xdd\xee\xff"
+    assert encode_mac("00:00:00:00:00:00") == b"\x00" * 6
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "aa:bb:cc:dd:ee",
+        "aa-bb-cc-dd-ee-ff",
+        "ZZ:ZZ:ZZ:ZZ:ZZ:ZZ",
+        "aa:bb:cc:dd:ee:fff",
+    ],
+)
+def test_encode_mac_invalid(bad: str) -> None:
+    with pytest.raises(EncodingError):
+        encode_mac(bad)
+
+
+# ---------------------------------------------------------------------------
+# encode_value (auto-dispatch)
+# ---------------------------------------------------------------------------
+
+
+def test_encode_value_int() -> None:
+    assert encode_value(255, 8) == b"\xff"
+    assert encode_value(0, 16) == b"\x00\x00"
+
+
+def test_encode_value_ipv4_string_requires_bw32() -> None:
+    assert encode_value("10.0.0.1", 32) == b"\x0a\x00\x00\x01"
+    with pytest.raises(EncodingError, match="bitwidth=32"):
+        encode_value("10.0.0.1", 16)
+
+
+def test_encode_value_mac_string_requires_bw48() -> None:
+    assert encode_value("aa:bb:cc:dd:ee:ff", 48) == b"\xaa\xbb\xcc\xdd\xee\xff"
+    with pytest.raises(EncodingError, match="bitwidth=48"):
+        encode_value("aa:bb:cc:dd:ee:ff", 32)
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth", "expected"),
+    [
+        ("0", 8, b"\x00"),
+        ("0xff", 8, b"\xff"),
+        ("0b1010", 8, b"\x0a"),
+        ("255", 8, b"\xff"),
+    ],
+)
+def test_encode_value_string_int_forms(value: str, bitwidth: int, expected: bytes) -> None:
+    assert encode_value(value, bitwidth) == expected
+
+
+def test_encode_value_unparseable_string() -> None:
+    with pytest.raises(EncodingError, match="cannot parse"):
+        encode_value("nonsense", 8)
+
+
+def test_encode_value_bytes_passthrough_with_width_check() -> None:
+    assert encode_value(b"\x01\x02", 16) == b"\x01\x02"
+    assert encode_value(b"\x01", 16) == b"\x01"
+    with pytest.raises(EncodingError, match="exceeds"):
+        encode_value(b"\x01\x02\x03", 16)
+
+
+def test_encode_value_bool_treated_as_int() -> None:
+    # Bool is a subclass of int in Python, but our encoder explicitly accepts it
+    # via the bool branch and forwards as int.
+    assert encode_value(True, 8) == b"\x01"
+    assert encode_value(False, 8) == b"\x00"
+
+
+def test_encode_value_unsupported_type() -> None:
+    with pytest.raises(EncodingError, match="unsupported value type"):
+        encode_value(1.5, 8)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# decode_int
+# ---------------------------------------------------------------------------
+
+
+def test_decode_int_round_trip() -> None:
+    for v, bw in [(0, 8), (1, 8), (255, 8), (0x1234, 16), (0xDEADBEEF, 32)]:
+        encoded = encode_int(v, bw)
+        assert decode_int(encoded, bw) == v
+
+
+def test_decode_int_accepts_canonical_input() -> None:
+    """Canonical (leading-zero-stripped) input also decodes."""
+    assert decode_int(b"\x01", 32) == 1
+    assert decode_int(b"\x00", 32) == 0
+
+
+def test_decode_int_rejects_too_wide() -> None:
+    with pytest.raises(EncodingError, match="too wide"):
+        decode_int(b"\x00\x00\x00\x00\x01", 8)
+
+
+def test_decode_int_rejects_non_bytes() -> None:
+    with pytest.raises(EncodingError, match="must be bytes"):
+        decode_int("01", 8)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# parse_lpm
+# ---------------------------------------------------------------------------
+
+
+def test_parse_lpm_string_form() -> None:
+    enc, plen = parse_lpm("10.0.0.0/24", 32)
+    assert enc == b"\x0a\x00\x00\x00"
+    assert plen == 24
+
+
+def test_parse_lpm_tuple_form() -> None:
+    enc, plen = parse_lpm(("10.1.0.0", 16), 32)
+    assert enc == b"\x0a\x01\x00\x00"
+    assert plen == 16
+
+
+def test_parse_lpm_string_int_value() -> None:
+    enc, plen = parse_lpm((0xC0A80100, 24), 32)
+    assert enc == b"\xc0\xa8\x01\x00"
+    assert plen == 24
+
+
+@pytest.mark.parametrize("bad", ["10.0.0.0", "no/slash/here", "10.0.0.0/abc"])
+def test_parse_lpm_bad_string(bad: str) -> None:
+    with pytest.raises(EncodingError):
+        parse_lpm(bad, 32)
+
+
+@pytest.mark.parametrize("plen", [-1, 33, 100])
+def test_parse_lpm_bad_prefix_len(plen: int) -> None:
+    with pytest.raises(EncodingError, match="out of range"):
+        parse_lpm(("10.0.0.0", plen), 32)
+
+
+def test_parse_lpm_rejects_non_int_prefix() -> None:
+    with pytest.raises(EncodingError, match="prefix length must be int"):
+        parse_lpm(("10.0.0.0", "24"), 32)  # type: ignore[arg-type]
+
+
+def test_parse_lpm_rejects_unknown_form() -> None:
+    with pytest.raises(EncodingError, match="must be string or 2-tuple"):
+        parse_lpm(123, 32)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# parse_ternary
+# ---------------------------------------------------------------------------
+
+
+def test_parse_ternary_basic() -> None:
+    v, m = parse_ternary((0xAB, 0xFF), 8)
+    assert v == b"\xab"
+    assert m == b"\xff"
+
+
+def test_parse_ternary_mixed_str_int() -> None:
+    v, m = parse_ternary(("0x10", 0xF0), 8)
+    assert v == b"\x10"
+    assert m == b"\xf0"
+
+
+def test_parse_ternary_rejects_non_tuple() -> None:
+    with pytest.raises(EncodingError, match="2-tuple"):
+        parse_ternary("not a tuple", 8)  # type: ignore[arg-type]
+
+
+def test_parse_ternary_widths_match() -> None:
+    v, m = parse_ternary((0x12345678, 0xFFFFFFFF), 32)
+    assert len(v) == 4
+    assert len(m) == 4
+
+
+# ---------------------------------------------------------------------------
+# parse_range
+# ---------------------------------------------------------------------------
+
+
+def test_parse_range_basic() -> None:
+    low, high = parse_range((10, 20), 16)
+    assert low == b"\x00\x0a"
+    assert high == b"\x00\x14"
+
+
+def test_parse_range_rejects_non_tuple() -> None:
+    with pytest.raises(EncodingError, match="2-tuple"):
+        parse_range([10, 20], 8)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# canonicalize
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (b"\x00", b"\x00"),
+        (b"\x00\x00\x00", b"\x00"),
+        (b"\x01", b"\x01"),
+        (b"\x00\x00\x01", b"\x01"),
+        (b"\x00\x01\x00", b"\x01\x00"),
+        (b"\xff\xff", b"\xff\xff"),
+    ],
+)
+def test_canonicalize(data: bytes, expected: bytes) -> None:
+    assert canonicalize(data) == expected

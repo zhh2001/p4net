@@ -1,0 +1,211 @@
+"""Indexed, query-friendly view over a parsed `p4.config.v1.P4Info` message."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from p4net.control.codec import (
+    canonicalize,
+    encode_value,
+    parse_lpm,
+    parse_range,
+    parse_ternary,
+)
+from p4net.control.exceptions import (
+    EncodingError,
+    NoSuchActionError,
+    NoSuchFieldError,
+    NoSuchTableError,
+    P4RuntimeError,
+)
+
+
+def _import_p4info() -> Any:
+    from p4.config.v1 import p4info_pb2
+
+    return p4info_pb2
+
+
+def _import_p4runtime() -> Any:
+    from p4.v1 import p4runtime_pb2
+
+    return p4runtime_pb2
+
+
+class P4InfoIndex:
+    """Indexed view of a P4Info message with name → id and encoding helpers."""
+
+    def __init__(self, p4info: Any) -> None:
+        self._p4info = p4info
+        self._tables_by_name: dict[str, Any] = {t.preamble.name: t for t in p4info.tables}
+        self._actions_by_name: dict[str, Any] = {a.preamble.name: a for a in p4info.actions}
+        self._counters_by_name: dict[str, Any] = {c.preamble.name: c for c in p4info.counters}
+
+    @classmethod
+    def from_file(cls, path: Path) -> P4InfoIndex:
+        """Parse a P4Info text-protobuf file."""
+        return cls.from_bytes(Path(path).read_bytes(), text_format=True)
+
+    @classmethod
+    def from_bytes(cls, data: bytes, *, text_format: bool = True) -> P4InfoIndex:
+        """Parse from text or binary protobuf bytes."""
+        p4info_pb2 = _import_p4info()
+        msg = p4info_pb2.P4Info()
+        if text_format:
+            from google.protobuf import text_format as _tf
+
+            _tf.Merge(data.decode("utf-8"), msg)
+        else:
+            msg.ParseFromString(data)
+        return cls(msg)
+
+    @property
+    def raw(self) -> Any:
+        return self._p4info
+
+    @property
+    def table_names(self) -> list[str]:
+        return list(self._tables_by_name)
+
+    @property
+    def action_names(self) -> list[str]:
+        return list(self._actions_by_name)
+
+    # Lookup -------------------------------------------------------------
+
+    def table_id(self, name: str) -> int:
+        t = self._tables_by_name.get(name)
+        if t is None:
+            raise NoSuchTableError(f"no table named {name!r}")
+        return int(t.preamble.id)
+
+    def action_id(self, name: str) -> int:
+        a = self._actions_by_name.get(name)
+        if a is None:
+            raise NoSuchActionError(f"no action named {name!r}")
+        return int(a.preamble.id)
+
+    def counter_id(self, name: str) -> int:
+        c = self._counters_by_name.get(name)
+        if c is None:
+            raise P4RuntimeError(f"no counter named {name!r}")
+        return int(c.preamble.id)
+
+    def table_name(self, table_id: int) -> str:
+        for t in self._tables_by_name.values():
+            if t.preamble.id == table_id:
+                return str(t.preamble.name)
+        raise NoSuchTableError(f"no table with id {table_id}")
+
+    def action_name(self, action_id: int) -> str:
+        for a in self._actions_by_name.values():
+            if a.preamble.id == action_id:
+                return str(a.preamble.name)
+        raise NoSuchActionError(f"no action with id {action_id}")
+
+    def counter_name(self, counter_id: int) -> str:
+        for c in self._counters_by_name.values():
+            if c.preamble.id == counter_id:
+                return str(c.preamble.name)
+        raise P4RuntimeError(f"no counter with id {counter_id}")
+
+    def table_requires_priority(self, name: str) -> bool:
+        """True iff the table has a TERNARY or RANGE match field."""
+        t = self._tables_by_name.get(name)
+        if t is None:
+            raise NoSuchTableError(f"no table named {name!r}")
+        p4info_pb2 = _import_p4info()
+        return any(
+            mf.match_type in (p4info_pb2.MatchField.TERNARY, p4info_pb2.MatchField.RANGE)
+            for mf in t.match_fields
+        )
+
+    def multicast_group_id_unused(self) -> int:
+        """Helper: return 1. The actual selection is delegated to the controller."""
+        return 1
+
+    # Encoding -----------------------------------------------------------
+
+    def encode_match(
+        self,
+        table_name: str,
+        match: Mapping[str, object],
+    ) -> list[Any]:
+        """Build a list of P4Runtime FieldMatch protos for the given table."""
+        table = self._tables_by_name.get(table_name)
+        if table is None:
+            raise NoSuchTableError(f"no table named {table_name!r}")
+        p4info_pb2 = _import_p4info()
+        p4runtime_pb2 = _import_p4runtime()
+
+        fields_by_name: dict[str, Any] = {mf.name: mf for mf in table.match_fields}
+        for key in match:
+            if key not in fields_by_name:
+                raise NoSuchFieldError(f"field {key!r} not present in table {table_name!r}")
+        for mf in table.match_fields:
+            if mf.match_type == p4info_pb2.MatchField.EXACT and mf.name not in match:
+                raise EncodingError(
+                    f"required exact match field {mf.name!r} missing for table {table_name!r}"
+                )
+
+        result: list[Any] = []
+        for mf_name, value in match.items():
+            mf = fields_by_name[mf_name]
+            fm = p4runtime_pb2.FieldMatch()
+            fm.field_id = int(mf.id)
+            bw = int(mf.bitwidth)
+            mt = mf.match_type
+            if mt == p4info_pb2.MatchField.EXACT:
+                fm.exact.value = canonicalize(encode_value(value, bw))  # type: ignore[arg-type]
+            elif mt == p4info_pb2.MatchField.LPM:
+                encoded, plen = parse_lpm(value, bw)  # type: ignore[arg-type]
+                if plen == 0:
+                    # P4Runtime: a missing LPM field is wildcard; encoding plen=0 here would
+                    # be rejected by the switch. Skip the field instead.
+                    continue
+                fm.lpm.value = canonicalize(encoded)
+                fm.lpm.prefix_len = plen
+            elif mt == p4info_pb2.MatchField.TERNARY:
+                v, m = parse_ternary(value, bw)  # type: ignore[arg-type]
+                if all(b == 0 for b in m):
+                    continue  # all-zero mask is wildcard; omit
+                fm.ternary.value = canonicalize(v)
+                fm.ternary.mask = canonicalize(m)
+            elif mt == p4info_pb2.MatchField.RANGE:
+                low, high = parse_range(value, bw)  # type: ignore[arg-type]
+                fm.range.low = canonicalize(low)
+                fm.range.high = canonicalize(high)
+            elif mt == p4info_pb2.MatchField.OPTIONAL:
+                fm.optional.value = canonicalize(encode_value(value, bw))  # type: ignore[arg-type]
+            else:
+                raise EncodingError(f"unsupported match type {mt} for field {mf_name!r}")
+            result.append(fm)
+        return result
+
+    def encode_action(
+        self,
+        action_name: str,
+        params: Mapping[str, object] | None = None,
+    ) -> Any:
+        """Build a P4Runtime Action proto."""
+        action = self._actions_by_name.get(action_name)
+        if action is None:
+            raise NoSuchActionError(f"no action named {action_name!r}")
+        p4runtime_pb2 = _import_p4runtime()
+        params = params or {}
+        params_by_name: dict[str, Any] = {p.name: p for p in action.params}
+        for name in params:
+            if name not in params_by_name:
+                raise NoSuchFieldError(f"param {name!r} not present in action {action_name!r}")
+        for p in action.params:
+            if p.name not in params:
+                raise EncodingError(f"required action param {p.name!r} missing for {action_name!r}")
+        action_proto = p4runtime_pb2.Action()
+        action_proto.action_id = int(action.preamble.id)
+        for p in action.params:
+            ap = action_proto.params.add()
+            ap.param_id = int(p.id)
+            ap.value = canonicalize(encode_value(params[p.name], int(p.bitwidth)))  # type: ignore[arg-type]
+        return action_proto

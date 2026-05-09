@@ -22,6 +22,9 @@ classifiers = [
 ]
 dependencies = [
   "pyroute2>=0.7.12",
+  "grpcio>=1.60",
+  "protobuf>=5.0",
+  "p4runtime>=1.5",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +54,10 @@ files = ["src/p4net"]
 
 [[tool.mypy.overrides]]
 module = ["pyroute2", "pyroute2.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["grpc", "grpc.*", "google.protobuf", "google.protobuf.*", "p4", "p4.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
