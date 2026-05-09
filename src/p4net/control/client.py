@@ -13,6 +13,7 @@ import logging
 import queue
 import threading
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -45,6 +46,14 @@ _SENTINEL = object()
 _PIPELINE_ACTIONS: frozenset[str] = frozenset(
     {"VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"}
 )
+
+
+@dataclass(frozen=True)
+class CounterData:
+    """Decoded value of a P4 indirect counter cell."""
+
+    packet_count: int
+    byte_count: int
 
 
 class P4RuntimeClient:
@@ -502,6 +511,174 @@ class P4RuntimeClient:
             "params": params,
             "priority": int(entry.priority) if entry.priority else None,
         }
+
+    # Counters -----------------------------------------------------------
+
+    def read_counter(
+        self,
+        counter: str,
+        index: int | None = None,
+        *,
+        timeout: float = 5.0,
+    ) -> CounterData | dict[int, CounterData]:
+        """Read one or all populated cells of an indirect counter."""
+        self._require_connected_with_index()
+        idx = self._index
+        assert idx is not None
+        counter_id = idx.counter_id(counter)
+        req = p4runtime_pb2.ReadRequest()
+        req.device_id = self._device_id
+        entity = req.entities.add()
+        entity.counter_entry.counter_id = counter_id
+        if index is not None:
+            entity.counter_entry.index.index = int(index)
+        try:
+            response_iter = self._stub.Read(req, timeout=timeout)
+            collected: dict[int, CounterData] = {}
+            for resp in response_iter:
+                for ent in resp.entities:
+                    if not ent.HasField("counter_entry"):
+                        continue
+                    ce = ent.counter_entry
+                    cell_index = int(ce.index.index)
+                    collected[cell_index] = CounterData(
+                        packet_count=int(ce.data.packet_count),
+                        byte_count=int(ce.data.byte_count),
+                    )
+        except grpc.RpcError as exc:
+            raise self._translate_rpc_error(exc) from exc
+        if index is not None:
+            return collected.get(int(index), CounterData(0, 0))
+        return collected
+
+    def reset_counter(
+        self,
+        counter: str,
+        index: int | None = None,
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        """Zero one or all indices of an indirect counter."""
+        self._require_connected_with_index()
+        idx = self._index
+        assert idx is not None
+        counter_id = idx.counter_id(counter)
+        targets: list[int]
+        if index is None:
+            current = self.read_counter(counter, timeout=timeout)
+            assert isinstance(current, dict)
+            targets = sorted(current.keys())
+            if not targets:
+                return
+        else:
+            targets = [int(index)]
+        req = p4runtime_pb2.WriteRequest()
+        req.device_id = self._device_id
+        if self._role_name:
+            req.role = self._role_name
+        req.election_id.high = self._election_id_high
+        req.election_id.low = self._election_id_low
+        for cell_idx in targets:
+            update = req.updates.add()
+            update.type = p4runtime_pb2.Update.Type.Value("MODIFY")
+            ce = update.entity.counter_entry
+            ce.counter_id = counter_id
+            ce.index.index = int(cell_idx)
+            ce.data.packet_count = 0
+            ce.data.byte_count = 0
+        try:
+            self._stub.Write(req, timeout=timeout)
+        except grpc.RpcError as exc:
+            raise self._translate_rpc_error(exc) from exc
+
+    # Multicast groups ---------------------------------------------------
+
+    def add_multicast_group(
+        self,
+        group_id: int,
+        ports: Sequence[int],
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        """Create a multicast group with one replica per port (instance=1)."""
+        self._mcast_write(group_id, ports, update_type="INSERT", timeout=timeout)
+
+    def modify_multicast_group(
+        self,
+        group_id: int,
+        ports: Sequence[int],
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        self._mcast_write(group_id, ports, update_type="MODIFY", timeout=timeout)
+
+    def delete_multicast_group(
+        self,
+        group_id: int,
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        self._mcast_write(group_id, ports=(), update_type="DELETE", timeout=timeout)
+
+    def _mcast_write(
+        self,
+        group_id: int,
+        ports: Sequence[int],
+        *,
+        update_type: str,
+        timeout: float,
+    ) -> None:
+        self._require_connected()
+        if group_id <= 0:
+            raise EncodingError(f"multicast group_id must be positive, got {group_id}")
+        req = p4runtime_pb2.WriteRequest()
+        req.device_id = self._device_id
+        if self._role_name:
+            req.role = self._role_name
+        req.election_id.high = self._election_id_high
+        req.election_id.low = self._election_id_low
+        update = req.updates.add()
+        update.type = p4runtime_pb2.Update.Type.Value(update_type)
+        mge = update.entity.packet_replication_engine_entry.multicast_group_entry
+        mge.multicast_group_id = int(group_id)
+        if update_type != "DELETE":
+            for port in ports:
+                replica = mge.replicas.add()
+                replica.egress_port = int(port)
+                replica.instance = 1
+        try:
+            self._stub.Write(req, timeout=timeout)
+        except grpc.RpcError as exc:
+            raise self._translate_rpc_error(exc) from exc
+
+    def list_multicast_groups(self, *, timeout: float = 5.0) -> dict[int, list[int]]:
+        """Return ``{group_id: [egress_port, ...]}``.
+
+        Replica instance numbers are flattened away — each port appears once
+        per replica regardless of its instance value (we always write
+        instance=1 ourselves; foreign instance values are still listed but
+        not exposed in this dict shape).
+        """
+        self._require_connected()
+        req = p4runtime_pb2.ReadRequest()
+        req.device_id = self._device_id
+        entity = req.entities.add()
+        entity.packet_replication_engine_entry.multicast_group_entry.multicast_group_id = 0
+        try:
+            response_iter = self._stub.Read(req, timeout=timeout)
+            groups: dict[int, list[int]] = {}
+            for resp in response_iter:
+                for ent in resp.entities:
+                    if not ent.HasField("packet_replication_engine_entry"):
+                        continue
+                    pre = ent.packet_replication_engine_entry
+                    if not pre.HasField("multicast_group_entry"):
+                        continue
+                    mge = pre.multicast_group_entry
+                    groups[int(mge.multicast_group_id)] = [int(r.egress_port) for r in mge.replicas]
+            return groups
+        except grpc.RpcError as exc:
+            raise self._translate_rpc_error(exc) from exc
 
     # Internals ----------------------------------------------------------
 

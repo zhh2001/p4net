@@ -503,3 +503,214 @@ def test_operations_require_connect_first() -> None:
     client = P4RuntimeClient("127.0.0.1:50051", device_id=0)
     with pytest.raises(ConnectionError, match="not connected"):
         client.list_table_entries("ipv4_lpm")
+
+
+# ---------------------------------------------------------------------------
+# Counters
+# ---------------------------------------------------------------------------
+
+
+def _build_p4info_with_counter() -> p4info_pb2.P4Info:
+    p = _build_p4info()
+    c = p.counters.add()
+    c.preamble.id = 3001
+    c.preamble.name = "MyIngress.ingress_pkts"
+    return p
+
+
+@pytest.fixture
+def connected_client_with_counter(
+    patched_grpc: dict[str, Any], tmp_path: Path
+) -> tuple[P4RuntimeClient, dict[str, Any]]:
+    stream: FakeStreamCall = patched_grpc["stream"]
+    stream.responses.put(_make_arbitration_response(0, (1, 0), code=0))
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=0)
+    client.connect(timeout=2.0)
+    p4info = _build_p4info_with_counter()
+    p4info_path = tmp_path / "p.p4info.txtpb"
+    from google.protobuf import text_format
+
+    p4info_path.write_text(text_format.MessageToString(p4info))
+    json_path = tmp_path / "p.json"
+    json_path.write_bytes(b"{}")
+    patched_grpc["stub"].SetForwardingPipelineConfig = MagicMock(return_value=MagicMock())
+    client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path, timeout=2.0)
+    return client, patched_grpc
+
+
+def test_read_counter_single_index(
+    connected_client_with_counter: tuple[P4RuntimeClient, dict[str, Any]],
+) -> None:
+    from p4net.control import CounterData
+
+    client, grpc_mocks = connected_client_with_counter
+    stub: MagicMock = grpc_mocks["stub"]
+    resp = p4runtime_pb2.ReadResponse()
+    e = resp.entities.add()
+    e.counter_entry.counter_id = 3001
+    e.counter_entry.index.index = 0
+    e.counter_entry.data.packet_count = 7
+    e.counter_entry.data.byte_count = 700
+    stub.Read = MagicMock(return_value=iter([resp]))
+    try:
+        result = client.read_counter("MyIngress.ingress_pkts", 0)
+        assert result == CounterData(7, 700)
+        sent = stub.Read.call_args.args[0]
+        assert sent.entities[0].counter_entry.counter_id == 3001
+        assert sent.entities[0].counter_entry.index.index == 0
+    finally:
+        client.disconnect()
+
+
+def test_read_counter_all_indices(
+    connected_client_with_counter: tuple[P4RuntimeClient, dict[str, Any]],
+) -> None:
+    from p4net.control import CounterData
+
+    client, grpc_mocks = connected_client_with_counter
+    stub: MagicMock = grpc_mocks["stub"]
+    resp = p4runtime_pb2.ReadResponse()
+    for i, (pkt, byt) in enumerate([(1, 64), (3, 192)]):
+        e = resp.entities.add()
+        e.counter_entry.counter_id = 3001
+        e.counter_entry.index.index = i
+        e.counter_entry.data.packet_count = pkt
+        e.counter_entry.data.byte_count = byt
+    stub.Read = MagicMock(return_value=iter([resp]))
+    try:
+        result = client.read_counter("MyIngress.ingress_pkts")
+        assert isinstance(result, dict)
+        assert result == {0: CounterData(1, 64), 1: CounterData(3, 192)}
+    finally:
+        client.disconnect()
+
+
+def test_read_counter_missing_index_returns_zero(
+    connected_client_with_counter: tuple[P4RuntimeClient, dict[str, Any]],
+) -> None:
+    from p4net.control import CounterData
+
+    client, grpc_mocks = connected_client_with_counter
+    stub: MagicMock = grpc_mocks["stub"]
+    stub.Read = MagicMock(return_value=iter([p4runtime_pb2.ReadResponse()]))
+    try:
+        result = client.read_counter("MyIngress.ingress_pkts", 5)
+        assert result == CounterData(0, 0)
+    finally:
+        client.disconnect()
+
+
+def test_reset_counter_single_index_writes_zero(
+    connected_client_with_counter: tuple[P4RuntimeClient, dict[str, Any]],
+) -> None:
+    client, grpc_mocks = connected_client_with_counter
+    stub: MagicMock = grpc_mocks["stub"]
+    stub.Write = MagicMock(return_value=MagicMock())
+    try:
+        client.reset_counter("MyIngress.ingress_pkts", 4)
+        req = stub.Write.call_args.args[0]
+        assert len(req.updates) == 1
+        upd = req.updates[0]
+        assert upd.type == p4runtime_pb2.Update.Type.Value("MODIFY")
+        ce = upd.entity.counter_entry
+        assert ce.counter_id == 3001
+        assert ce.index.index == 4
+        assert ce.data.packet_count == 0
+        assert ce.data.byte_count == 0
+    finally:
+        client.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# Multicast
+# ---------------------------------------------------------------------------
+
+
+def test_add_multicast_group_builds_insert(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    stub: MagicMock = connected_client[1]["stub"]
+    stub.Write = MagicMock(return_value=MagicMock())
+    try:
+        client.add_multicast_group(7, [1, 2, 3])
+        req = stub.Write.call_args.args[0]
+        assert len(req.updates) == 1
+        upd = req.updates[0]
+        assert upd.type == p4runtime_pb2.Update.Type.Value("INSERT")
+        mge = upd.entity.packet_replication_engine_entry.multicast_group_entry
+        assert mge.multicast_group_id == 7
+        ports = [(r.egress_port, r.instance) for r in mge.replicas]
+        assert ports == [(1, 1), (2, 1), (3, 1)]
+    finally:
+        client.disconnect()
+
+
+def test_modify_multicast_group_builds_modify(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    stub: MagicMock = connected_client[1]["stub"]
+    stub.Write = MagicMock(return_value=MagicMock())
+    try:
+        client.modify_multicast_group(7, [4, 5])
+        req = stub.Write.call_args.args[0]
+        assert req.updates[0].type == p4runtime_pb2.Update.Type.Value("MODIFY")
+    finally:
+        client.disconnect()
+
+
+def test_delete_multicast_group_no_replicas(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    stub: MagicMock = connected_client[1]["stub"]
+    stub.Write = MagicMock(return_value=MagicMock())
+    try:
+        client.delete_multicast_group(7)
+        req = stub.Write.call_args.args[0]
+        upd = req.updates[0]
+        assert upd.type == p4runtime_pb2.Update.Type.Value("DELETE")
+        mge = upd.entity.packet_replication_engine_entry.multicast_group_entry
+        assert mge.multicast_group_id == 7
+        assert len(mge.replicas) == 0
+    finally:
+        client.disconnect()
+
+
+def test_list_multicast_groups_decodes_response(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    stub: MagicMock = connected_client[1]["stub"]
+    resp = p4runtime_pb2.ReadResponse()
+    e = resp.entities.add()
+    mge = e.packet_replication_engine_entry.multicast_group_entry
+    mge.multicast_group_id = 7
+    for port in (1, 2, 3):
+        r = mge.replicas.add()
+        r.egress_port = port
+        r.instance = 1
+    e2 = resp.entities.add()
+    mge2 = e2.packet_replication_engine_entry.multicast_group_entry
+    mge2.multicast_group_id = 8
+    r2 = mge2.replicas.add()
+    r2.egress_port = 9
+    r2.instance = 1
+    stub.Read = MagicMock(return_value=iter([resp]))
+    try:
+        groups = client.list_multicast_groups()
+        assert groups == {7: [1, 2, 3], 8: [9]}
+    finally:
+        client.disconnect()
+
+
+def test_add_multicast_group_rejects_zero_id(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    try:
+        with pytest.raises(EncodingError, match="must be positive"):
+            client.add_multicast_group(0, [1])
+    finally:
+        client.disconnect()

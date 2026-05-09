@@ -16,7 +16,7 @@ _os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 # `client` imports the p4 stubs at module load; ensure that happens after the
 # protobuf python-impl env var is set above.
-from p4net.control.client import P4RuntimeClient
+from p4net.control.client import CounterData, P4RuntimeClient
 from p4net.control.codec import (
     canonicalize,
     decode_int,
@@ -44,6 +44,7 @@ from p4net.control.p4info_index import P4InfoIndex
 
 __all__ = [
     "ConnectionError",
+    "CounterData",
     "DuplicateEntryError",
     "EncodingError",
     "EntryNotFoundError",
