@@ -124,6 +124,48 @@ class Network:
     def stop(self) -> None:
         self._do_stop()
 
+    # Ping helpers -------------------------------------------------------
+
+    def ping(
+        self,
+        src: str | RunningHost,
+        dst: str | RunningHost,
+        *,
+        count: int = 1,
+        timeout: float = 2.0,
+    ) -> bool:
+        """Run a single ping from `src` to `dst`.
+
+        `src` must resolve to a host in this network. `dst` may be a
+        `RunningHost`, the name of a host in this network, or a literal IP
+        address (anything else is passed verbatim to the underlying ping).
+        Returns True iff at least one reply arrived.
+        """
+        src_host = src if isinstance(src, RunningHost) else self.host(src)
+        if isinstance(dst, RunningHost):
+            return src_host.ping(dst, count=count, timeout=timeout)
+        # Resolve string `dst`: host name first, otherwise pass through as IP.
+        target_host = self._running_hosts.get(dst)
+        if target_host is not None:
+            return src_host.ping(target_host, count=count, timeout=timeout)
+        return src_host.ping(dst, count=count, timeout=timeout)
+
+    def pingall(
+        self,
+        *,
+        count: int = 1,
+        timeout: float = 2.0,
+    ) -> dict[tuple[str, str], bool]:
+        """Run pings between every ordered pair of distinct hosts that have a primary IP."""
+        eligible = {name: rh for name, rh in self._running_hosts.items() if rh.primary_ip}
+        result: dict[tuple[str, str], bool] = {}
+        for src_name, src_host in eligible.items():
+            for dst_name, dst_host in eligible.items():
+                if src_name == dst_name:
+                    continue
+                result[(src_name, dst_name)] = src_host.ping(dst_host, count=count, timeout=timeout)
+        return result
+
     # ----- Internal start/stop ------------------------------------------
 
     def _do_start(self) -> None:

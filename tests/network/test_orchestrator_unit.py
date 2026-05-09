@@ -488,3 +488,97 @@ def test_stop_before_start_is_noop(patched: dict[str, Any]) -> None:
 def test_calls_at_least_for_call(patched: dict[str, Any]) -> None:
     """Sanity: `call` is importable from unittest.mock so the test file imports cleanly."""
     _ = call  # touch to silence unused-import warnings if ruff hides them
+
+
+# ---------------------------------------------------------------------------
+# ping / pingall
+# ---------------------------------------------------------------------------
+
+
+def test_ping_resolves_host_names(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        # Replace each running host's namespace.exec with a controllable mock.
+        h1 = net.host("h1")
+        h2 = net.host("h2")
+        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(returncode=0)
+        )
+        # Ping by name → uses h2's primary_ip.
+        ok = net.ping("h1", "h2", count=2, timeout=1.0)
+        assert ok is True
+        argv = h1.namespace.exec.call_args.args[0]
+        assert argv == ["ping", "-c", "2", "-W", "1", h2.primary_ip]
+    finally:
+        net.stop()
+
+
+def test_ping_with_running_host_objects(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        h1 = net.host("h1")
+        h2 = net.host("h2")
+        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(returncode=0)
+        )
+        assert net.ping(h1, h2) is True
+    finally:
+        net.stop()
+
+
+def test_ping_with_unknown_dst_passes_string_through(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        h1 = net.host("h1")
+        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(returncode=1)
+        )
+        # An IP literal that's not a known host name is passed through.
+        result = net.ping("h1", "203.0.113.5")
+        assert result is False
+        argv = h1.namespace.exec.call_args.args[0]
+        assert argv[-1] == "203.0.113.5"
+    finally:
+        net.stop()
+
+
+def test_pingall_returns_pair_results(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        for name in ("h1", "h2"):
+            h = net.host(name)
+            h.namespace.exec = MagicMock(  # type: ignore[method-assign]
+                return_value=MagicMock(returncode=0)
+            )
+        result = net.pingall()
+        assert set(result.keys()) == {("h1", "h2"), ("h2", "h1")}
+        assert all(result.values())
+    finally:
+        net.stop()
+
+
+def test_pingall_skips_hosts_without_primary_ip(patched: dict[str, Any], tmp_path: Path) -> None:
+    topo = Topology()
+    topo.add_host("h1", ip="10.0.0.1/24")
+    topo.add_host("h2")  # no IP
+    topo.add_switch("s1", p4_src=Path("p.p4"))
+    topo.add_link("h1", "s1")
+    topo.add_link("h2", "s1")
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        h1 = net.host("h1")
+        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
+            return_value=MagicMock(returncode=0)
+        )
+        result = net.pingall()
+        # h2 has no primary_ip, so no pings involving h2 should be issued.
+        assert result == {}
+    finally:
+        net.stop()
