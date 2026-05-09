@@ -21,6 +21,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="run tests that require the 'p4c' compiler binary on PATH",
     )
+    parser.addoption(
+        "--run-bmv2",
+        action="store_true",
+        default=False,
+        help="run tests that require the simple_switch_grpc binary on PATH",
+    )
 
 
 def pytest_collection_modifyitems(
@@ -29,6 +35,7 @@ def pytest_collection_modifyitems(
 ) -> None:
     _gate_integration(config, items)
     _gate_requires_p4c(config, items)
+    _gate_requires_bmv2(config, items)
 
 
 def _gate_integration(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -57,3 +64,19 @@ def _gate_requires_p4c(config: pytest.Config, items: list[pytest.Item]) -> None:
         for item in items:
             if "requires_p4c" in item.keywords:
                 item.add_marker(skip_no_p4c)
+
+
+def _gate_requires_bmv2(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if not config.getoption("--run-bmv2"):
+        deselected = [item for item in items if "requires_bmv2" in item.keywords]
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = [item for item in items if "requires_bmv2" not in item.keywords]
+        return
+    if shutil.which("simple_switch_grpc") is None:
+        skip_no_bmv2 = pytest.mark.skip(
+            reason="requires_bmv2 tests need 'simple_switch_grpc' on PATH"
+        )
+        for item in items:
+            if "requires_bmv2" in item.keywords:
+                item.add_marker(skip_no_bmv2)

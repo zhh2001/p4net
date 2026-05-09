@@ -59,4 +59,5 @@ addopts = "-ra -q"
 markers = [
   "integration: requires root and Linux network namespaces",
   "requires_p4c: requires the 'p4c' compiler binary on PATH",
+  "requires_bmv2: requires the simple_switch_grpc binary on PATH",
 ]
