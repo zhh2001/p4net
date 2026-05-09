@@ -36,14 +36,23 @@ from p4net.topo import Topology
 topo = Topology()
 h1 = topo.add_host("h1", ip="10.0.0.1/24", mac="00:00:00:00:00:01")
 h2 = topo.add_host("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
-s1 = topo.add_switch("s1", p4_src=Path("simple_routing.p4"))
+s1 = topo.add_switch("s1", p4_src=Path("quick_start.p4"))
 topo.add_link(h1, s1, port_b=1)
 topo.add_link(h2, s1, port_b=2)
 
 with Network(topo) as net:
-    # Static ARP and table programming go here in a real run.
     print(net.pingall())
 ```
+
+A complete runnable version, including the matching `quick_start.p4`
+(a port-2-port swap that needs no runtime table programming) and a tiny
+static-ARP setup, lives in `examples/quick_start/`. Run it with:
+
+```
+sudo python examples/quick_start/quick_start.py
+```
+
+once `p4c` and `simple_switch_grpc` are installed.
 
 ## License
 
