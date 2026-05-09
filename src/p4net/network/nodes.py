@@ -104,8 +104,22 @@ class RunningHost:
                 raise NetworkError(f"cannot ping host {dst.name!r}: no primary IP configured")
         else:
             target = dst
+        # `-W` is a per-reply timeout. `-w` enforces an overall deadline so
+        # the command terminates even when every echo request goes unanswered
+        # (e.g. under 100%-loss netem); without it iputils-ping can hang
+        # indefinitely waiting for the last reply.
+        deadline = max(int(count) * int(timeout) + 1, int(timeout) + 1)
         result = self._namespace.exec(
-            ["ping", "-c", str(int(count)), "-W", str(int(timeout)), target],
+            [
+                "ping",
+                "-c",
+                str(int(count)),
+                "-W",
+                str(int(timeout)),
+                "-w",
+                str(deadline),
+                target,
+            ],
             capture_output=True,
             check=False,
         )

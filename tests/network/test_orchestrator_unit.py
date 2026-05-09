@@ -296,22 +296,17 @@ def test_multi_link_host_first_link_inherits_ip_and_mac(
     net = Network(topo, log_dir=tmp_path / "logs")
     net.start()
     try:
-        # The first veth ('h1-eth0' to s1) should have set_address with
-        # h1's primary IP. The second veth ('h1-eth1' to s2) should have
-        # set_address only with the link override.
-        addr_calls = []
-        for v in patched["veths"]:
-            for c in v.set_address.call_args_list:
-                addr_calls.append(c.args)
-        cidrs = [args[1] for args in addr_calls]
-        assert "10.0.0.1/24" in cidrs  # from Host.ip on first link
-        assert "172.16.0.1/24" in cidrs  # link override on second link
-
-        mac_calls: list[Any] = []
-        for v in patched["veths"]:
-            for c in v.set_mac.call_args_list:
-                mac_calls.append(c.args[1])
-        assert mac_calls.count("aa:bb:cc:dd:ee:01") == 1
+        # Host-side configuration goes through ns.exec(['ip', ...]). Inspect the
+        # h1 namespace mock's exec calls.
+        h1_ns = net.host("h1").namespace
+        argvs: list[list[str]] = [list(c.args[0]) for c in h1_ns.exec.call_args_list]
+        flat = " ".join(" ".join(a) for a in argvs)
+        assert "10.0.0.1/24" in flat  # Host.ip on first link
+        assert "172.16.0.1/24" in flat  # link override on second link
+        mac_addr_calls = [
+            argv for argv in argvs if "address" in argv and "aa:bb:cc:dd:ee:01" in argv
+        ]
+        assert len(mac_addr_calls) == 1
     finally:
         net.stop()
 
@@ -509,7 +504,8 @@ def test_ping_resolves_host_names(patched: dict[str, Any], tmp_path: Path) -> No
         ok = net.ping("h1", "h2", count=2, timeout=1.0)
         assert ok is True
         argv = h1.namespace.exec.call_args.args[0]
-        assert argv == ["ping", "-c", "2", "-W", "1", h2.primary_ip]
+        assert argv[:5] == ["ping", "-c", "2", "-W", "1"]
+        assert argv[-1] == h2.primary_ip
     finally:
         net.stop()
 

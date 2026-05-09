@@ -281,8 +281,13 @@ class Network:
                 veth.move_to_namespace(side, self._namespaces[node.name])  # type: ignore[arg-type]
 
         # Configure addresses + MAC + MTU + state.
+        # Host-side configuration goes through `ip` inside the host namespace
+        # (avoids per-side pyroute2.NetNS churn that surfaces flakiness when
+        # several veth pairs are wired in rapid succession). Switch-side
+        # configuration stays on VethPair's root-ns netlink path.
         for side, ep in (("a", link.a), ("b", link.b)):
             node = self._topology.node(ep.node)
+            assert ep.iface_name is not None
             ip_to_use: str | None = None
             mac_to_use: str | None = None
             if isinstance(node, Host):
@@ -295,18 +300,22 @@ class Network:
                 elif node.mac is not None and node.name not in first_link_seen:
                     mac_to_use = node.mac
                 first_link_seen.add(node.name)
-                self._host_iface_ip[node.name][ep.iface_name or ""] = ip_to_use
-            elif ep.mac is not None:
-                # Switch endpoint MAC override is allowed (phase 2 spec).
-                mac_to_use = ep.mac
-
-            if ip_to_use is not None:
-                veth.set_address(side, ip_to_use)  # type: ignore[arg-type]
-            if mac_to_use is not None:
-                veth.set_mac(side, mac_to_use)  # type: ignore[arg-type]
-            if link.mtu is not None:
-                veth.set_mtu(side, link.mtu)  # type: ignore[arg-type]
-            veth.set_up(side)  # type: ignore[arg-type]
+                self._host_iface_ip[node.name][ep.iface_name] = ip_to_use
+                self._configure_host_iface(
+                    self._namespaces[node.name],
+                    ep.iface_name,
+                    ip=ip_to_use,
+                    mac=mac_to_use,
+                    mtu=link.mtu,
+                )
+            else:
+                if ep.mac is not None:
+                    mac_to_use = ep.mac
+                if mac_to_use is not None:
+                    veth.set_mac(side, mac_to_use)  # type: ignore[arg-type]
+                if link.mtu is not None:
+                    veth.set_mtu(side, link.mtu)  # type: ignore[arg-type]
+                veth.set_up(side)  # type: ignore[arg-type]
 
         # Apply netem impairment on both sides (symmetric shaping).
         if any(x is not None for x in (link.bandwidth, link.delay, link.jitter, link.loss_pct)):
@@ -322,6 +331,23 @@ class Network:
                     jitter=link.jitter,
                     loss_pct=link.loss_pct,
                 )
+
+    @staticmethod
+    def _configure_host_iface(
+        ns: NetworkNamespace,
+        iface: str,
+        *,
+        ip: str | None,
+        mac: str | None,
+        mtu: int | None,
+    ) -> None:
+        if mac is not None:
+            ns.exec(["ip", "link", "set", iface, "address", mac])
+        if mtu is not None:
+            ns.exec(["ip", "link", "set", iface, "mtu", str(mtu)])
+        if ip is not None:
+            ns.exec(["ip", "addr", "add", ip, "dev", iface])
+        ns.exec(["ip", "link", "set", iface, "up"])
 
     def _port_to_iface_for(self, switch_name: str) -> dict[int, str]:
         result: dict[int, str] = {}
