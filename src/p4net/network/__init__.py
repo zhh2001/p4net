@@ -7,8 +7,10 @@ from p4net.network.exceptions import (
     NodeNotFoundError,
 )
 from p4net.network.nodes import RunningHost, RunningSwitch
+from p4net.network.orchestrator import Network
 
 __all__ = [
+    "Network",
     "NetworkAlreadyRunningError",
     "NetworkError",
     "NetworkNotRunningError",
