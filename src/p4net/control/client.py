@@ -447,7 +447,15 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> list[dict[str, Any]]:
-        """Return decoded entries for one table, or all tables if `table` is None."""
+        """Return decoded entries for one table, or all tables if `table` is None.
+
+        The byte values in each entry's ``match`` mapping are returned in
+        P4Runtime canonical form (P4Runtime spec §8.4): they may be shorter
+        than the bitwidth-rounded width because leading zero bytes are
+        stripped. They round-trip correctly through ``insert_table_entry``,
+        ``modify_table_entry``, and ``delete_table_entry`` because
+        ``encode_value`` accepts shorter ``bytes`` inputs.
+        """
         self._require_connected_with_index()
         req = p4runtime_pb2.ReadRequest()
         req.device_id = self._device_id
