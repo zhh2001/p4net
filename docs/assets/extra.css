@@ -1,0 +1,14 @@
+/* Tighter code block padding for terminal output */
+.md-typeset pre > code {
+  font-feature-settings: "calt" 0;
+}
+
+/* Slightly more breathing room between sections */
+.md-typeset h2 {
+  margin-top: 2.5rem;
+}
+
+/* Make the signature in API docs more readable */
+.doc-signature {
+  font-size: 0.85em;
+}

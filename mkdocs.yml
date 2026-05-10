@@ -1,0 +1,166 @@
+site_name: p4net
+site_description: Mininet-style P4 SDN sandbox in Python — BMv2 + P4Runtime native, Linux netns / veth / tc, topology DSL, interactive CLI.
+site_url: https://zhh2001.github.io/p4net/
+site_author: Henghua Zhang
+repo_url: https://github.com/zhh2001/p4net
+repo_name: zhh2001/p4net
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+
+plugins:
+  - search:
+      lang: [en]
+  - i18n:
+      docs_structure: suffix
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh
+          name: 简体中文
+          build: true
+          nav_translations:
+            Home: 首页
+            Getting Started: 入门
+            Installation: 安装
+            Quick Start: 快速上手
+            Concepts: 概念
+            Architecture: 架构
+            Guides: 指南
+            Tutorial: 教程
+            Troubleshooting: 故障排查
+            Reference: 参考
+            CLI Reference: CLI 参考
+            API: API
+            Glossary: 术语表
+            Examples: 示例
+            Development: 开发
+            Contributing: 贡献
+            Releasing: 发版流程
+            Roadmap: 路线图
+            Changelog: 变更日志
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            separate_signature: true
+            line_length: 80
+            docstring_style: google
+            members_order: source
+            filters: ["!^_"]
+  - social:
+      cards_layout_options:
+        background_color: "#3F51B5"
+        color: "#FFFFFF"
+        font_family: Inter
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets:
+      base_path: [".", "docs"]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/zhh2001/p4net
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/p4net/
+  alternate:
+    - name: English
+      link: /p4net/
+      lang: en
+    - name: 简体中文
+      link: /p4net/zh/
+      lang: zh
+
+extra_css:
+  - assets/extra.css
+
+copyright: Copyright &copy; 2026 Henghua Zhang. Apache-2.0 licensed.
+
+strict: true
