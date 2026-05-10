@@ -28,6 +28,7 @@ nav:
       - p4net.control: api/control.md
       - p4net.network: api/network.md
       - p4net.cli: api/cli.md
+    - API Stability: api-stability.md
     - Glossary: glossary.md
   - Examples:
     - Overview: examples/index.md
@@ -112,6 +113,7 @@ plugins:
             Reference: 参考
             CLI Reference: CLI 参考
             API: API
+            API Stability: API 稳定性
             Glossary: 术语表
             Examples: 示例
             Development: 开发
