@@ -20,6 +20,8 @@ from p4net.runtime import (
     VethPair,
     apply_netem,
     clear_qdisc,
+    disable_ipv6,
+    enable_ipv6,
 )
 
 pytestmark = pytest.mark.integration
@@ -109,6 +111,47 @@ def test_veth_ping_then_loss_then_clear() -> None:
             with contextlib.suppress(Exception):
                 if ns.exists:
                     ns.destroy()
+
+
+def test_ipv6_sysctl_and_address_round_trip() -> None:
+    """disable_ipv6 / enable_ipv6 / set_address6 against a real namespace."""
+    ns = NetworkNamespace(_rand("ns"))
+    veth = VethPair(_rand("vE_"), _rand("vF_"))
+    try:
+        ns.create()
+        veth.create()
+        veth.move_to_namespace("a", ns)
+        veth.set_up("a")
+        iface = veth.name_a
+
+        disable_ipv6(ns, iface)
+        out = ns.exec(
+            ["sysctl", "-n", f"net.ipv6.conf.{iface}.disable_ipv6"],
+            capture_output=True,
+        )
+        assert out.stdout.decode().strip() == "1"
+
+        enable_ipv6(ns, iface)
+        out = ns.exec(
+            ["sysctl", "-n", f"net.ipv6.conf.{iface}.disable_ipv6"],
+            capture_output=True,
+        )
+        assert out.stdout.decode().strip() == "0"
+        out = ns.exec(
+            ["sysctl", "-n", f"net.ipv6.conf.{iface}.accept_ra"],
+            capture_output=True,
+        )
+        assert out.stdout.decode().strip() == "0"
+
+        veth.set_address6("a", "fd00::1/64")
+        out = ns.exec(["ip", "-6", "addr", "show", "dev", iface], capture_output=True)
+        assert b"fd00::1/64" in out.stdout
+    finally:
+        with contextlib.suppress(Exception):
+            veth.destroy()
+        with contextlib.suppress(Exception):
+            if ns.exists:
+                ns.destroy()
 
 
 def test_clear_qdisc_idempotent_when_nothing_set() -> None:

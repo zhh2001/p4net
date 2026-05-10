@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import os
 import re
+import socket
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, Literal
@@ -173,6 +174,39 @@ class VethPair:
                 address=str(iface_addr.ip),
                 prefixlen=iface_addr.network.prefixlen,
             )
+        logger.debug("assigned %s to %r", cidr, ifname)
+
+    def set_address6(self, side: Side, cidr: str) -> None:
+        """Assign an IPv6 CIDR (e.g. ``"fd00::1/64"``) to one side of the pair.
+
+        Implementation: same pyroute2 IPRoute path as `set_address`, but with
+        ``family=socket.AF_INET6``. Validates the input via
+        ``ipaddress.IPv6Interface`` and rejects IPv4 strings (their `/0`
+        through `/32` masks would parse as IPv6Interface only by accident).
+        Raises :class:`LinkError` on assignment failure.
+        """
+        _validate_side(side)
+        if isinstance(cidr, str) and "." in cidr:
+            raise ValueError(f"expected IPv6 CIDR, got IPv4-shaped {cidr!r}")
+        try:
+            iface_addr = ipaddress.IPv6Interface(cidr)
+        except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError) as exc:
+            raise ValueError(f"invalid IPv6 CIDR: {cidr!r}") from exc
+        ifname = self._names[side]
+        try:
+            with self._netlink_for(side) as ipr:
+                idx = self._index(ipr, ifname)
+                ipr.addr(
+                    "add",
+                    index=idx,
+                    address=str(iface_addr.ip),
+                    prefixlen=iface_addr.network.prefixlen,
+                    family=socket.AF_INET6,
+                )
+        except LinkError:
+            raise
+        except Exception as exc:
+            raise LinkError(f"failed to assign IPv6 {cidr!r} to {ifname!r}: {exc}") from exc
         logger.debug("assigned %s to %r", cidr, ifname)
 
     def set_mtu(self, side: Side, mtu: int) -> None:

@@ -12,6 +12,7 @@ from p4net.runtime.exceptions import (
 )
 from p4net.runtime.link import VethPair
 from p4net.runtime.netns import NetworkNamespace, NSProcess
+from p4net.runtime.sysctl import disable_ipv6, enable_ipv6
 from p4net.runtime.tc import apply_netem, clear_qdisc
 
 __all__ = [
@@ -28,4 +29,6 @@ __all__ = [
     "VethPair",
     "apply_netem",
     "clear_qdisc",
+    "disable_ipv6",
+    "enable_ipv6",
 ]

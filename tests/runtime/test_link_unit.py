@@ -155,6 +155,40 @@ def test_set_address_calls_addr_add(patch_netlink: MagicMock) -> None:
     patch_netlink.addr.assert_called_once_with("add", index=10, address="10.0.0.1", prefixlen=24)
 
 
+@pytest.mark.parametrize(
+    "bad_cidr",
+    ["not::an::ip", "fd00::1/129", "fd00::ggg", ""],
+)
+def test_set_address6_validates_cidr(patch_netlink: MagicMock, bad_cidr: str) -> None:
+    v = VethPair("va", "vb")
+    _force_created(v)
+    with pytest.raises(ValueError):
+        v.set_address6("a", bad_cidr)
+
+
+def test_set_address6_rejects_ipv4_string(patch_netlink: MagicMock) -> None:
+    v = VethPair("va", "vb")
+    _force_created(v)
+    with pytest.raises(ValueError, match="IPv4-shaped"):
+        v.set_address6("a", "10.0.0.1/24")
+
+
+def test_set_address6_calls_addr_add_with_v6_family(patch_netlink: MagicMock) -> None:
+    import socket as _socket
+
+    patch_netlink.link_lookup.return_value = [10]
+    v = VethPair("va", "vb")
+    _force_created(v)
+    v.set_address6("a", "fd00::1/64")
+    patch_netlink.addr.assert_called_once_with(
+        "add",
+        index=10,
+        address="fd00::1",
+        prefixlen=64,
+        family=_socket.AF_INET6,
+    )
+
+
 @pytest.mark.parametrize("bad_mtu", [-1, 0, 67, 65536, 1_000_000])
 def test_set_mtu_validates_range(patch_netlink: MagicMock, bad_mtu: int) -> None:
     v = VethPair("va", "vb")
