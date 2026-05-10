@@ -9,6 +9,7 @@ from p4net.control import (
     canonicalize,
     decode_int,
     decode_ipv4,
+    decode_ipv6,
     decode_mac,
     encode_int,
     encode_ipv4,
@@ -401,3 +402,63 @@ def test_format_exact_mac() -> None:
 
 def test_format_exact_int() -> None:
     assert format_exact(b"\x01\xff", 9) == "511"
+
+
+# ---------------------------------------------------------------------------
+# decode_ipv6
+# ---------------------------------------------------------------------------
+
+
+def test_decode_ipv6_full_width() -> None:
+    full = b"\xfd\x00" + b"\x00" * 13 + b"\x01"
+    assert len(full) == 16
+    assert decode_ipv6(full) == "fd00::1"
+
+
+def test_decode_ipv6_canonical_short_input_zero_extends_high_side() -> None:
+    # Spec says high-side zero-extend: b"\xfd\x00" canonicalises something
+    # whose value is 0xfd00 — IPv6 0::fd00.
+    assert decode_ipv6(b"\xfd\x00") == "::fd00"
+    # Single non-zero byte: 0::ff
+    assert decode_ipv6(b"\xff") == "::ff"
+    # Empty / all-zero canonical -> all-zero address.
+    assert decode_ipv6(b"") == "::"
+    assert decode_ipv6(b"\x00") == "::"
+
+
+def test_decode_ipv6_round_trip_through_encode_value() -> None:
+    for addr in ("::", "::1", "fd00::1", "2001:db8::1"):
+        encoded = encode_value(addr, 128)
+        assert decode_ipv6(encoded) == addr
+
+
+def test_decode_ipv6_too_wide() -> None:
+    with pytest.raises(EncodingError, match="too wide"):
+        decode_ipv6(b"\x00" * 17)
+
+
+def test_decode_ipv6_rejects_non_bytes() -> None:
+    with pytest.raises(EncodingError, match="must be bytes"):
+        decode_ipv6("fd00::1")  # type: ignore[arg-type]
+
+
+def test_format_lpm_ipv6() -> None:
+    full = b"\xfd\x00" + b"\x00" * 14
+    assert format_lpm(full, 64, 128) == "fd00::/64"
+
+
+def test_format_ternary_ipv6() -> None:
+    val = b"\xfd\x00" + b"\x00" * 14
+    mask = b"\xff\xff" + b"\x00" * 14
+    assert format_ternary(val, mask, 128) == "fd00::&ffff::"
+
+
+def test_format_range_ipv6() -> None:
+    lo = b"\xfd\x00" + b"\x00" * 14
+    hi = b"\xfd\x00" + b"\x00" * 13 + b"\xff"
+    assert format_range(lo, hi, 128) == "[fd00::,fd00::ff]"
+
+
+def test_format_exact_ipv6() -> None:
+    full = b"\xfd\x00" + b"\x00" * 13 + b"\x01"
+    assert format_exact(full, 128) == "fd00::1"

@@ -553,3 +553,47 @@ class TestControllerPacketMetadata:
         idx = P4InfoIndex(p)
         with pytest.raises(NoSuchFieldError):
             idx.encode_packet_out_metadata({"egress_port": 1})
+
+
+# ---------------------------------------------------------------------------
+# IPv6 LPM round-trip (phase 13)
+# ---------------------------------------------------------------------------
+
+
+def _build_p4info_with_ipv6_lpm() -> p4info_pb2.P4Info:
+    p = p4info_pb2.P4Info()
+    a = p.actions.add()
+    a.preamble.id = 1001
+    a.preamble.name = "NoAction"
+    t = p.tables.add()
+    t.preamble.id = 2001
+    t.preamble.name = "MyIngress.ipv6_lpm"
+    mf = t.match_fields.add()
+    mf.id = 1
+    mf.name = "hdr.ipv6.dstAddr"
+    mf.bitwidth = 128
+    mf.match_type = p4info_pb2.MatchField.LPM
+    t.action_refs.add().id = 1001
+    return p
+
+
+def test_encode_decode_match_round_trip_ipv6_lpm() -> None:
+    idx = P4InfoIndex(_build_p4info_with_ipv6_lpm())
+    fms = idx.encode_match("MyIngress.ipv6_lpm", {"hdr.ipv6.dstAddr": "fd00::1/128"})
+    assert len(fms) == 1
+    fm = fms[0]
+    assert fm.HasField("lpm")
+    # Walk back into the raw shape that list_table_entries produces, then
+    # decode_match — that's the round-trip the CLI relies on.
+    raw = {"hdr.ipv6.dstAddr": (bytes(fm.lpm.value), int(fm.lpm.prefix_len))}
+    out = idx.decode_match("MyIngress.ipv6_lpm", raw)
+    assert out == {"hdr.ipv6.dstAddr": "fd00::1/128"}
+
+
+def test_encode_decode_match_round_trip_ipv6_lpm_subnet() -> None:
+    idx = P4InfoIndex(_build_p4info_with_ipv6_lpm())
+    fms = idx.encode_match("MyIngress.ipv6_lpm", {"hdr.ipv6.dstAddr": "fd00::/64"})
+    fm = fms[0]
+    raw = {"hdr.ipv6.dstAddr": (bytes(fm.lpm.value), int(fm.lpm.prefix_len))}
+    out = idx.decode_match("MyIngress.ipv6_lpm", raw)
+    assert out == {"hdr.ipv6.dstAddr": "fd00::/64"}

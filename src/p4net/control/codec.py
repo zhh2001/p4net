@@ -79,6 +79,14 @@ def encode_value(value: int | str | bytes, bitwidth: int) -> bytes:
             if bitwidth != 48:
                 raise EncodingError(f"MAC literal {value!r} requires bitwidth=48, got {bitwidth}")
             return encode_mac(value)
+        if ":" in value:
+            # IPv6 literal (any colon-bearing string that isn't a MAC).
+            if bitwidth != 128:
+                raise EncodingError(f"IPv6 literal {value!r} requires bitwidth=128, got {bitwidth}")
+            try:
+                return ipaddress.IPv6Address(value).packed
+            except (ValueError, ipaddress.AddressValueError) as exc:
+                raise EncodingError(f"invalid IPv6 address {value!r}") from exc
         try:
             n = int(value, 0)
         except ValueError as exc:
@@ -185,12 +193,27 @@ def decode_mac(data: bytes) -> str:
     return ":".join(f"{b:02x}" for b in padded)
 
 
+def decode_ipv6(data: bytes) -> str:
+    """Decode up to 16 canonical bytes as an IPv6 condensed-form string.
+
+    Inputs shorter than 16 bytes are zero-extended on the high side, matching
+    P4Runtime canonical encoding (§8.4). The condensed form is whatever
+    :class:`ipaddress.IPv6Address.__str__` produces (e.g. ``"fd00::1"``).
+    """
+    if not isinstance(data, bytes):
+        raise EncodingError(f"data must be bytes, got {type(data).__name__}")
+    padded = _zero_extend(data, 128)
+    return str(ipaddress.IPv6Address(padded))
+
+
 def _format_value(data: bytes, bitwidth: int) -> str:
-    """Format a single value: IPv4 for 32-bit, MAC for 48-bit, else decimal."""
+    """Format a single value: IPv4 for 32-bit, MAC for 48-bit, IPv6 for 128-bit, else decimal."""
     if bitwidth == 32:
         return decode_ipv4(data)
     if bitwidth == 48:
         return decode_mac(data)
+    if bitwidth == 128:
+        return decode_ipv6(data)
     return str(decode_int(data, bitwidth))
 
 
