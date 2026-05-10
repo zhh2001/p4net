@@ -834,6 +834,27 @@ def test_xterm_terminated_on_stop(
     fake_proc.terminate.assert_called()
 
 
+def test_already_exited_spawn_skips_terminate_and_wait(
+    patched: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If an xterm has already exited (user closed the window), Network.stop()
+    must not call terminate() or wait() on it — only clear it from the list."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    h1 = net.host("h1")
+    fake_proc = MagicMock(name="NSProcess")
+    fake_proc.pid = 1
+    # poll() returns exit code 0 — process already finished.
+    fake_proc.poll = MagicMock(return_value=0)
+    h1.namespace.popen = MagicMock(return_value=fake_proc)  # type: ignore[method-assign]
+    net.xterm("h1")
+    net.stop()
+    fake_proc.terminate.assert_not_called()
+    fake_proc.wait.assert_not_called()
+    fake_proc.kill.assert_not_called()
+
+
 def test_pingall6_skips_v4_only_hosts(patched: dict[str, Any], tmp_path: Path) -> None:
     topo = Topology()
     topo.add_host("h1", ip="10.0.0.1/24", ip6="fd00::1/64")
