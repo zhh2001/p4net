@@ -432,3 +432,124 @@ def test_from_bytes_binary_round_trip(p4info: p4info_pb2.P4Info) -> None:
     binary = p4info.SerializeToString()
     idx = P4InfoIndex.from_bytes(binary, text_format=False)
     assert idx.table_id("MyIngress.ipv4_lpm") == 2001
+
+
+# ---------------------------------------------------------------------------
+# Controller packet metadata
+# ---------------------------------------------------------------------------
+
+
+def _add_controller_metadata(
+    p: p4info_pb2.P4Info,
+    name: str,
+    fields: list[tuple[int, str, int]],
+    *,
+    preamble_id: int,
+) -> p4info_pb2.ControllerPacketMetadata:
+    cpm = p.controller_packet_metadata.add()
+    cpm.preamble.id = preamble_id
+    cpm.preamble.name = name
+    for fid, fname, bw in fields:
+        m = cpm.metadata.add()
+        m.id = fid
+        m.name = fname
+        m.bitwidth = bw
+    return cpm
+
+
+@pytest.fixture
+def p4info_with_controller_metadata() -> p4info_pb2.P4Info:
+    p = p4info_pb2.P4Info()
+    _add_controller_metadata(
+        p,
+        "packet_in",
+        [(1, "ingress_port", 9), (2, "_pad0", 7)],
+        preamble_id=80000001,
+    )
+    _add_controller_metadata(
+        p,
+        "packet_out",
+        [(1, "egress_port", 9), (2, "_pad0", 7)],
+        preamble_id=80000002,
+    )
+    return p
+
+
+class TestControllerPacketMetadata:
+    def test_packet_in_schema(self, p4info_with_controller_metadata: p4info_pb2.P4Info) -> None:
+        idx = P4InfoIndex(p4info_with_controller_metadata)
+        assert idx.packet_in_metadata_schema() == [("ingress_port", 9), ("_pad0", 7)]
+
+    def test_packet_out_schema(self, p4info_with_controller_metadata: p4info_pb2.P4Info) -> None:
+        idx = P4InfoIndex(p4info_with_controller_metadata)
+        assert idx.packet_out_metadata_schema() == [("egress_port", 9), ("_pad0", 7)]
+
+    def test_encode_packet_out_metadata_basic(
+        self, p4info_with_controller_metadata: p4info_pb2.P4Info
+    ) -> None:
+        idx = P4InfoIndex(p4info_with_controller_metadata)
+        out = idx.encode_packet_out_metadata({"egress_port": 1})
+        assert len(out) == 2
+        by_id = {pm.metadata_id: pm for pm in out}
+        assert by_id[1].value == b"\x01"
+        # Missing key -> auto-zero (canonical \x00).
+        assert by_id[2].value == b"\x00"
+
+    def test_encode_packet_out_unknown_field(
+        self, p4info_with_controller_metadata: p4info_pb2.P4Info
+    ) -> None:
+        idx = P4InfoIndex(p4info_with_controller_metadata)
+        with pytest.raises(NoSuchFieldError):
+            idx.encode_packet_out_metadata({"bogus": 0})
+
+    def test_encode_packet_out_overflow(
+        self, p4info_with_controller_metadata: p4info_pb2.P4Info
+    ) -> None:
+        idx = P4InfoIndex(p4info_with_controller_metadata)
+        with pytest.raises(EncodingError):
+            idx.encode_packet_out_metadata({"egress_port": 1024})  # 9-bit max 511
+
+    def test_decode_packet_in_metadata_round_trip(
+        self, p4info_with_controller_metadata: p4info_pb2.P4Info
+    ) -> None:
+        from p4.v1 import p4runtime_pb2
+
+        idx = P4InfoIndex(p4info_with_controller_metadata)
+        msgs = []
+        pm = p4runtime_pb2.PacketMetadata()
+        pm.metadata_id = 1
+        pm.value = b"\x05"
+        msgs.append(pm)
+        pm2 = p4runtime_pb2.PacketMetadata()
+        pm2.metadata_id = 2
+        pm2.value = b"\x00"
+        msgs.append(pm2)
+        out = idx.decode_packet_in_metadata(msgs)
+        assert out == {"ingress_port": 5, "_pad0": 0}
+
+    def test_decode_packet_in_unknown_id_dropped(
+        self, p4info_with_controller_metadata: p4info_pb2.P4Info
+    ) -> None:
+        from p4.v1 import p4runtime_pb2
+
+        idx = P4InfoIndex(p4info_with_controller_metadata)
+        pm = p4runtime_pb2.PacketMetadata()
+        pm.metadata_id = 999  # not in schema
+        pm.value = b"\x01"
+        out = idx.decode_packet_in_metadata([pm])
+        assert out == {}
+
+    def test_no_controller_headers_returns_empty(self) -> None:
+        # Use a P4Info with no controller_packet_metadata.
+        p = p4info_pb2.P4Info()
+        idx = P4InfoIndex(p)
+        assert idx.packet_in_metadata_schema() == []
+        assert idx.packet_out_metadata_schema() == []
+        assert idx.encode_packet_out_metadata({}) == []
+        assert idx.decode_packet_in_metadata([]) == {}
+
+    def test_encode_when_no_packet_out_header_with_metadata_raises(self) -> None:
+        p = p4info_pb2.P4Info()
+        idx = P4InfoIndex(p)
+        with pytest.raises(NoSuchFieldError):
+            idx.encode_packet_out_metadata({"egress_port": 1})

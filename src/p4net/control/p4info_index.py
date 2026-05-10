@@ -46,6 +46,13 @@ class P4InfoIndex:
         self._tables_by_name: dict[str, Any] = {t.preamble.name: t for t in p4info.tables}
         self._actions_by_name: dict[str, Any] = {a.preamble.name: a for a in p4info.actions}
         self._counters_by_name: dict[str, Any] = {c.preamble.name: c for c in p4info.counters}
+        self._packet_in: Any | None = None
+        self._packet_out: Any | None = None
+        for cpm in p4info.controller_packet_metadata:
+            if cpm.preamble.name == "packet_in":
+                self._packet_in = cpm
+            elif cpm.preamble.name == "packet_out":
+                self._packet_out = cpm
 
     @classmethod
     def from_file(cls, path: Path) -> P4InfoIndex:
@@ -281,3 +288,73 @@ class P4InfoIndex:
             ap.param_id = int(p.id)
             ap.value = canonicalize(encode_value(params[p.name], int(p.bitwidth)))  # type: ignore[arg-type]
         return action_proto
+
+    # Controller packet metadata -----------------------------------------
+
+    def packet_in_metadata_schema(self) -> list[tuple[str, int]]:
+        """Return ``[(name, bitwidth), ...]`` for the packet_in controller header.
+
+        Empty list if the program declares no ``@controller_header("packet_in")``.
+        """
+        if self._packet_in is None:
+            return []
+        return [(m.name, int(m.bitwidth)) for m in self._packet_in.metadata]
+
+    def packet_out_metadata_schema(self) -> list[tuple[str, int]]:
+        """Return ``[(name, bitwidth), ...]`` for the packet_out controller header.
+
+        Empty list if the program declares no ``@controller_header("packet_out")``.
+        """
+        if self._packet_out is None:
+            return []
+        return [(m.name, int(m.bitwidth)) for m in self._packet_out.metadata]
+
+    def encode_packet_out_metadata(self, metadata: Mapping[str, object]) -> list[Any]:
+        """Encode controller metadata for a PacketOut.
+
+        Each ``(key, value)`` pair is matched against the packet_out schema;
+        values go through ``encode_value`` with the schema's bitwidth, then
+        wrapped in a ``PacketMetadata`` proto with the corresponding numeric id
+        (P4Runtime uses ids on the wire, not field names). Missing keys are
+        populated with zero-valued bytes of the correct width. Raises
+        ``NoSuchFieldError`` on unknown keys, ``EncodingError`` on width
+        overflow.
+        """
+        if self._packet_out is None:
+            if metadata:
+                raise NoSuchFieldError(
+                    "P4Info declares no packet_out controller header; "
+                    f"cannot encode metadata {dict(metadata)!r}"
+                )
+            return []
+        p4runtime_pb2 = _import_p4runtime()
+        schema_by_name: dict[str, Any] = {m.name: m for m in self._packet_out.metadata}
+        for k in metadata:
+            if k not in schema_by_name:
+                raise NoSuchFieldError(f"field {k!r} not present in packet_out controller header")
+        out: list[Any] = []
+        for m in self._packet_out.metadata:
+            pm = p4runtime_pb2.PacketMetadata()
+            pm.metadata_id = int(m.id)
+            value = metadata.get(m.name, 0)
+            pm.value = canonicalize(encode_value(value, int(m.bitwidth)))  # type: ignore[arg-type]
+            out.append(pm)
+        return out
+
+    def decode_packet_in_metadata(self, metadata: Any) -> dict[str, int]:
+        """Decode PacketIn controller metadata into ``{field_name: int}``.
+
+        Unknown ids (e.g. switch running a different P4Info than the controller
+        has loaded) are silently dropped; the dispatcher logs them at DEBUG.
+        """
+        if self._packet_in is None:
+            return {}
+        schema_by_id: dict[int, Any] = {int(m.id): m for m in self._packet_in.metadata}
+        out: dict[str, int] = {}
+        for pm in metadata:
+            mid = int(pm.metadata_id)
+            m = schema_by_id.get(mid)
+            if m is None:
+                continue
+            out[str(m.name)] = int.from_bytes(bytes(pm.value), "big")
+        return out
