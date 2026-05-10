@@ -141,15 +141,12 @@ def test_ipv6_lpm_ping_and_counter(ipv6_network: Network) -> None:
 # ---------------------------------------------------------------------------
 
 
-_PAYOFF_OUTPUT_FILE = Path("/tmp/p4net-phase13-payoff.txt")
-
-
-def test_ipv6_table_dump_human_form(ipv6_network: Network) -> None:
+def test_ipv6_table_dump_human_form(ipv6_network: Network, tmp_path: Path) -> None:
     _h1, _h2, s1 = _names(ipv6_network)
     d = CommandDispatcher(ipv6_network, color=False)
     out = d.dispatch(f"{s1} table dump MyIngress.ipv6_lpm")
-    # Stash the captured output for the report.
-    _PAYOFF_OUTPUT_FILE.write_text(out)
+    # Stash the captured output under tmp_path for inspection if the test fails.
+    (tmp_path / "table-dump.txt").write_text(out)
     assert "fd00::1/128" in out
     assert "fd00::2/128" in out
     # Raw byte representation must NOT be in the output.
@@ -229,7 +226,3 @@ def test_cli_pingall6_rendering(ipv6_network: Network) -> None:
     assert h2 in out
     # The matrix's success summary appears as 'N/M succeeded'.
     assert "/" in out and "succeeded" in out
-
-
-# Used in the report.
-__all__ = ["_PAYOFF_OUTPUT_FILE"]
