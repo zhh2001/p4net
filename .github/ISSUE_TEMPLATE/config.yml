@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/zhh2001/p4net/discussions
+    about: Open-ended questions and design discussion belong in Discussions, not Issues.
