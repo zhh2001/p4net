@@ -25,6 +25,7 @@ dependencies = [
   "grpcio>=1.60",
   "protobuf>=5.0",
   "p4runtime>=1.5",
+  "prompt_toolkit>=3.0",
 ]
 
 [project.optional-dependencies]
