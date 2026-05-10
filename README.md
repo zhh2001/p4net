@@ -1,9 +1,10 @@
 # p4net
 
 [![CI](https://github.com/zhh2001/p4net/actions/workflows/ci.yml/badge.svg)](https://github.com/zhh2001/p4net/actions/workflows/ci.yml)
-[![Documentation](https://img.shields.io/badge/docs-zhh2001.github.io%2Fp4net-blue)](https://zhh2001.github.io/p4net/)
-[![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](https://www.python.org/downloads/)
+[![PyPI](https://img.shields.io/pypi/v/p4net.svg)](https://pypi.org/project/p4net/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/p4net.svg)](https://pypi.org/project/p4net/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-zhh2001.github.io%2Fp4net-blue)](https://zhh2001.github.io/p4net/)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](#)
 
 A P4Runtime-native SDN simulation framework for BMv2.
