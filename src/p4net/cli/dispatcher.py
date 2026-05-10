@@ -48,6 +48,51 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "Show host interfaces (ip -br addr).",
         "<host> ifconfig",
     ),
+    "<switch> log": (
+        "Print the absolute path of the switch's BMv2 log file.",
+        "<switch> log",
+    ),
+    "<switch> table list": (
+        "List the switch's tables and their match-key types.",
+        "<switch> table list",
+    ),
+    "<switch> table dump": (
+        "Print every entry in the named table.",
+        "<switch> table dump <table>",
+    ),
+    "<switch> table add": (
+        "Insert a table entry.",
+        "<switch> table add <table> match: <k>=<v>[,<k>=<v>...] action: <name> "
+        "[params: <k>=<v>[,<k>=<v>...]] [priority: <int>]",
+    ),
+    "<switch> table del": (
+        "Delete a table entry by match key.",
+        "<switch> table del <table> match: <k>=<v>[,<k>=<v>...] [priority: <int>]",
+    ),
+    "<switch> table clear": (
+        "Delete every entry from a table.",
+        "<switch> table clear <table>",
+    ),
+    "<switch> counter": (
+        "Read a counter cell or all populated cells.",
+        "<switch> counter <name> [<index>]",
+    ),
+    "<switch> counter reset": (
+        "Zero a counter cell or every cell.",
+        "<switch> counter reset <name> [<index>]",
+    ),
+    "<switch> mcast list": (
+        "List multicast groups.",
+        "<switch> mcast list",
+    ),
+    "<switch> mcast add": (
+        "Create a multicast group.",
+        "<switch> mcast add <id> <port>[,<port>...]",
+    ),
+    "<switch> mcast del": (
+        "Delete a multicast group.",
+        "<switch> mcast del <id>",
+    ),
 }
 
 
@@ -71,8 +116,12 @@ class CommandDispatcher:
             "cmd": self._cmd_host_cmd,
             "ifconfig": self._cmd_host_ifconfig,
         }
-        # Switch handlers populated in commit 3.
-        self._switch_handlers: dict[str, SwitchHandler] = {}
+        self._switch_handlers: dict[str, SwitchHandler] = {
+            "log": self._cmd_switch_log,
+            "table": self._cmd_switch_table,
+            "counter": self._cmd_switch_counter,
+            "mcast": self._cmd_switch_mcast,
+        }
         # Help registry can be extended by subclasses or commit 3 monkey-patch.
         self._help_topics: dict[str, tuple[str, str]] = dict(_TOPIC_HELP)
 
@@ -295,6 +344,238 @@ class CommandDispatcher:
                 ) from exc
         return count, timeout
 
+    # ------------------------------------------------------------------
+    # Internal: switch verbs
+    # ------------------------------------------------------------------
+
+    def _cmd_switch_log(self, switch_name: str, tokens: list[str]) -> str:
+        if tokens:
+            raise CLIUsageError(f"{switch_name} log: takes no arguments")
+        sw = self._network.switch(switch_name)
+        return str(sw.bmv2.log_file)
+
+    def _cmd_switch_table(self, switch_name: str, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError(f"{switch_name} table: missing sub-verb (list/dump/add/del/clear)")
+        sub, rest = tokens[0], tokens[1:]
+        sw = self._network.switch(switch_name)
+        if sub == "list":
+            return self._table_list(sw, rest)
+        if sub == "dump":
+            return self._table_dump(sw, rest)
+        if sub == "add":
+            return self._table_add(sw, rest)
+        if sub == "del":
+            return self._table_del(sw, rest)
+        if sub == "clear":
+            return self._table_clear(sw, rest)
+        raise CLIUsageError(
+            f"{switch_name} table: unknown sub-verb {sub!r} "
+            f"(expected one of: list, dump, add, del, clear)"
+        )
+
+    def _table_list(self, switch: object, tokens: list[str]) -> str:
+        if tokens:
+            raise CLIUsageError("table list: takes no arguments")
+        index = switch.client.index  # type: ignore[attr-defined]
+        rows: list[str] = []
+        for table in index.raw.tables:
+            mfs = []
+            for mf in table.match_fields:
+                # Map match_type enum to a friendly name.
+                mt_name = _match_type_label(mf.match_type)
+                mfs.append(f"{mt_name}: {mf.name}")
+            joined = ", ".join(mfs) if mfs else "no match fields"
+            rows.append(f"{table.preamble.name}  ({joined})")
+        if not rows:
+            return "(no tables)"
+        return "\n".join(rows)
+
+    def _table_dump(self, switch: object, tokens: list[str]) -> str:
+        if len(tokens) != 1:
+            raise CLIUsageError("table dump: requires exactly one table name")
+        table = tokens[0]
+        entries = switch.client.list_table_entries(table)  # type: ignore[attr-defined]
+        if not entries:
+            return f"(table {table!r} is empty)"
+        lines: list[str] = []
+        for i, entry in enumerate(entries):
+            lines.append(f"#{i}")
+            lines.append(f"  table:    {entry['table']}")
+            match = entry.get("match", {})
+            lines.append(f"  match:    {dict(match)}")
+            lines.append(f"  action:   {entry.get('action')}")
+            params = entry.get("params") or {}
+            if params:
+                lines.append(f"  params:   {dict(params)}")
+            if entry.get("priority") is not None:
+                lines.append(f"  priority: {entry['priority']}")
+        return "\n".join(lines)
+
+    def _table_add(self, switch: object, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError("table add: missing table name")
+        table = tokens[0]
+        sections = _parse_sections(
+            tokens[1:],
+            allowed={"match", "action", "params", "priority"},
+        )
+        if "match" not in sections:
+            raise CLIUsageError("table add: 'match:' section is required")
+        if "action" not in sections:
+            raise CLIUsageError("table add: 'action:' section is required")
+        match = _parse_kv_pairs(sections["match"])
+        action_tokens = sections["action"]
+        if len(action_tokens) != 1:
+            raise CLIUsageError(
+                f"table add: 'action:' must be a single token, got {action_tokens!r}"
+            )
+        action = action_tokens[0]
+        params = _parse_kv_pairs(sections["params"]) if "params" in sections else None
+        priority = _parse_priority(sections.get("priority"))
+        kwargs: dict[str, object] = {}
+        if priority is not None:
+            kwargs["priority"] = priority
+        try:
+            switch.client.insert_table_entry(  # type: ignore[attr-defined]
+                table, match, action, params, **kwargs
+            )
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
+        return "ok"
+
+    def _table_del(self, switch: object, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError("table del: missing table name")
+        table = tokens[0]
+        sections = _parse_sections(tokens[1:], allowed={"match", "priority"})
+        if "match" not in sections:
+            raise CLIUsageError("table del: 'match:' section is required")
+        match = _parse_kv_pairs(sections["match"])
+        priority = _parse_priority(sections.get("priority"))
+        kwargs: dict[str, object] = {}
+        if priority is not None:
+            kwargs["priority"] = priority
+        try:
+            switch.client.delete_table_entry(table, match, **kwargs)  # type: ignore[attr-defined]
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
+        return "ok"
+
+    def _table_clear(self, switch: object, tokens: list[str]) -> str:
+        if len(tokens) != 1:
+            raise CLIUsageError("table clear: requires exactly one table name")
+        table = tokens[0]
+        try:
+            n = switch.client.clear_table(table)  # type: ignore[attr-defined]
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
+        return f"cleared {n} entries"
+
+    def _cmd_switch_counter(self, switch_name: str, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError(f"{switch_name} counter: missing counter name (or 'reset')")
+        sw = self._network.switch(switch_name)
+        if tokens[0] == "reset":
+            if len(tokens) < 2:
+                raise CLIUsageError(f"{switch_name} counter reset: missing counter name")
+            counter = tokens[1]
+            index = _parse_optional_int(tokens[2:], label=f"{switch_name} counter reset")
+            try:
+                if index is None:
+                    sw.client.reset_counter(counter)
+                else:
+                    sw.client.reset_counter(counter, index)
+            except Exception as exc:
+                return f"error: {type(exc).__name__}: {exc}"
+            return "ok"
+        # read
+        counter = tokens[0]
+        index = _parse_optional_int(tokens[1:], label=f"{switch_name} counter")
+        try:
+            data = (
+                sw.client.read_counter(counter, index)
+                if index is not None
+                else sw.client.read_counter(counter)
+            )
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
+        if isinstance(data, dict):
+            if not data:
+                return "(no populated cells)"
+            lines = [bold("index  pkts        bytes", color=self._color)]
+            for idx in sorted(data):
+                cell = data[idx]
+                lines.append(f"{idx:<6} {cell.packet_count:<11} {cell.byte_count}")
+            return "\n".join(lines)
+        return f"pkts={data.packet_count} bytes={data.byte_count}"
+
+    def _cmd_switch_mcast(self, switch_name: str, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError(f"{switch_name} mcast: missing sub-verb (list/add/del)")
+        sub, rest = tokens[0], tokens[1:]
+        sw = self._network.switch(switch_name)
+        if sub == "list":
+            if rest:
+                raise CLIUsageError(f"{switch_name} mcast list: takes no arguments")
+            try:
+                groups = sw.client.list_multicast_groups()
+            except Exception as exc:
+                return f"error: {type(exc).__name__}: {exc}"
+            if not groups:
+                return "(no multicast groups)"
+            lines = []
+            for gid in sorted(groups):
+                lines.append(f"{gid}: {groups[gid]}")
+            return "\n".join(lines)
+        if sub == "add":
+            if len(rest) != 2:
+                raise CLIUsageError(
+                    f"{switch_name} mcast add: usage 'mcast add <id> <port>[,<port>...]'"
+                )
+            try:
+                gid = int(rest[0])
+            except ValueError as exc:
+                raise CLIUsageError(f"{switch_name} mcast add: id must be an integer") from exc
+            try:
+                ports = [int(p) for p in rest[1].split(",") if p.strip()]
+            except ValueError as exc:
+                raise CLIUsageError(
+                    f"{switch_name} mcast add: ports must be a comma-separated list of integers"
+                ) from exc
+            try:
+                sw.client.add_multicast_group(gid, ports)
+            except Exception as exc:
+                return f"error: {type(exc).__name__}: {exc}"
+            return "ok"
+        if sub == "del":
+            if len(rest) != 1:
+                raise CLIUsageError(f"{switch_name} mcast del: usage 'mcast del <id>'")
+            try:
+                gid = int(rest[0])
+            except ValueError as exc:
+                raise CLIUsageError(f"{switch_name} mcast del: id must be an integer") from exc
+            try:
+                sw.client.delete_multicast_group(gid)
+            except Exception as exc:
+                return f"error: {type(exc).__name__}: {exc}"
+            return "ok"
+        raise CLIUsageError(
+            f"{switch_name} mcast: unknown sub-verb {sub!r} (expected one of: list, add, del)"
+        )
+
+    # ------------------------------------------------------------------
+    # Public helpers used by the completer
+    # ------------------------------------------------------------------
+
+    def table_names_for(self, switch_name: str) -> list[str]:
+        """Return the named switch's table names (for completion)."""
+        try:
+            sw = self._network.switch(switch_name)
+            return list(sw.client.index.table_names)
+        except Exception:
+            return []
+
     @staticmethod
     def _format_cmd_result(result: object) -> str:
         # `result` is a subprocess.CompletedProcess[bytes]; we don't import
@@ -313,3 +594,98 @@ class CommandDispatcher:
         if rc != 0:
             parts.append(f"[exit {rc}]")
         return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Section / kv parsing helpers (for `<switch> table add` etc.)
+# ---------------------------------------------------------------------------
+
+
+def _parse_sections(tokens: list[str], *, allowed: set[str]) -> dict[str, list[str]]:
+    """Walk tokens, splitting on section markers (`match:`, `action:`, ...).
+
+    Any token of the shape `<name>:` is treated as a section marker; if
+    `<name>` is not in `allowed`, raise `CLIUsageError` so typos surface
+    instead of being silently appended to the previous section.
+    """
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for tok in tokens:
+        if tok.endswith(":") and len(tok) > 1:
+            name = tok[:-1]
+            if name not in allowed:
+                raise CLIUsageError(
+                    f"unknown section marker {tok!r} "
+                    f"(expected one of: {sorted(allowed)})"
+                )
+            if name in sections:
+                raise CLIUsageError(f"section {name!r}: appears twice in command")
+            current = name
+            sections[current] = []
+            continue
+        if current is None:
+            raise CLIUsageError(
+                f"unexpected token before any section marker: {tok!r} "
+                f"(expected one of: {sorted(allowed)})"
+            )
+        sections[current].append(tok)
+    for name, vals in list(sections.items()):
+        if not vals and name in {"match", "params"}:
+            raise CLIUsageError(f"section {name!r}: empty")
+    return sections
+
+
+def _parse_kv_pairs(tokens: list[str]) -> dict[str, str]:
+    """Parse `a=1, b=2` (with optional spaces) or `a=1,b=2` into a dict."""
+    joined = ",".join(tokens)
+    out: dict[str, str] = {}
+    for piece in joined.split(","):
+        item = piece.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise CLIUsageError(f"expected key=value, got {item!r}")
+        k, _, v = item.partition("=")
+        key = k.strip()
+        value = v.strip()
+        if not key:
+            raise CLIUsageError(f"empty key in {item!r}")
+        out[key] = value
+    if not out:
+        raise CLIUsageError("expected at least one key=value pair")
+    return out
+
+
+def _parse_priority(tokens: list[str] | None) -> int | None:
+    if tokens is None:
+        return None
+    if len(tokens) != 1:
+        raise CLIUsageError(f"priority: must be a single integer, got {tokens!r}")
+    try:
+        return int(tokens[0])
+    except ValueError as exc:
+        raise CLIUsageError(f"priority: not an integer: {tokens[0]!r}") from exc
+
+
+def _parse_optional_int(tokens: list[str], *, label: str) -> int | None:
+    if not tokens:
+        return None
+    if len(tokens) > 1:
+        raise CLIUsageError(f"{label}: too many arguments")
+    try:
+        return int(tokens[0])
+    except ValueError as exc:
+        raise CLIUsageError(f"{label}: index must be an integer, got {tokens[0]!r}") from exc
+
+
+_MATCH_TYPE_LABELS = {
+    2: "exact",
+    3: "lpm",
+    4: "ternary",
+    5: "range",
+    6: "optional",
+}
+
+
+def _match_type_label(value: int) -> str:
+    return _MATCH_TYPE_LABELS.get(int(value), f"type{value}")
