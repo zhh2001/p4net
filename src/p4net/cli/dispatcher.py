@@ -332,6 +332,12 @@ class CommandDispatcher:
         layout = kvs.get("layout", "LR")
         fmt = kvs.get("format", "png")
         topo = self._network.topology
+        # Validate before rendering so a malformed topology surfaces a clear
+        # error instead of a silently-misleading DOT graph.
+        try:
+            topo.validate()
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
         if path is None:
             return topo.to_graphviz(layout=layout)
         try:

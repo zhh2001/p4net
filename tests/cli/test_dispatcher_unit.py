@@ -606,6 +606,31 @@ def test_topology_graph_render_failure_renders_error(
     assert out.startswith("error: RuntimeError:")
 
 
+def test_topology_graph_validates_before_rendering() -> None:
+    """A malformed topology surfaces validate()'s error instead of dumping DOT."""
+    from p4net.topo import Link, LinkEndpoint, Topology
+    from p4net.topo.exceptions import TopologyError
+
+    real_topo = Topology()
+    real_topo.add_host("h1")
+    real_topo.add_switch("s1", Path("p.p4"))
+    # Bypass add_link's validation: append a Link that references a node
+    # which does not exist. validate() should catch the dangling endpoint.
+    real_topo._links.append(  # type: ignore[attr-defined]
+        Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="ghost"))
+    )
+    with pytest.raises(TopologyError):
+        real_topo.validate()
+    # Confirm via the dispatcher that the error is rendered, not the DOT.
+    net = _make_network(hosts={"h1": _make_host("h1", "10.0.0.1", {})})
+    net.topology = real_topo
+    d = CommandDispatcher(net)
+    out = d.dispatch("topology graph")
+    assert out.startswith("error: TopologyError:")
+    assert "ghost" in out
+    assert "digraph" not in out
+
+
 def test_topology_unknown_subverb(two_host_network: MagicMock) -> None:
     d = CommandDispatcher(two_host_network)
     with pytest.raises(CLIUsageError, match="unknown sub-verb"):

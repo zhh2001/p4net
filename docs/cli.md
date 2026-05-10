@@ -70,7 +70,15 @@ Print the network's running state, host/switch counts, and log directory.
 
 ### `hosts`
 
-List every host with its primary IP and interfaces.
+List every host with its primary IPv4, primary IPv6, and interfaces. Hosts
+without an IPv6 (or IPv4) primary show `-` in the corresponding column.
+
+```
+p4net> hosts
+name  primary_ip   primary_ip6  interfaces
+h1    10.0.0.1/24  fd00::1/64   h1-eth0
+h2    10.0.0.2/24  -            h2-eth0
+```
 
 ### `switches`
 
@@ -90,6 +98,52 @@ H \ H   h1   h2
 2/2 succeeded
 ```
 
+### `pingall6 [count] [timeout]`
+
+IPv6 connectivity matrix over hosts that have a `primary_ip6` set. Same
+matrix renderer as `pingall`. Hosts without IPv6 are silently excluded.
+Returns `(no IPv6-equipped hosts in topology)` if no host has a v6
+address.
+
+```
+p4net> pingall6
+H \ H   h1   h2
+   h1    -    1
+   h2    1    -
+2/2 succeeded
+```
+
+### `topology graph [path] [layout=LR|TB|BT|RL] [format=png|svg|pdf|dot]`
+
+Render the topology as a Graphviz DOT graph.
+
+- No `path` argument: prints the DOT source to stdout.
+- With `path` and `format=dot`: writes the source to that file verbatim,
+  without invoking `dot` (works without graphviz installed).
+- With `path` and any other format: invokes the system `dot` binary to
+  render to the file. Returns the absolute path to the rendered file.
+
+`layout` controls `rankdir` and defaults to `LR`. `format` defaults to
+`png`. The dispatcher calls `Topology.validate()` before rendering, so
+malformed topologies surface a clear error instead of producing
+misleading graphs.
+
+```
+p4net> topology graph layout=TB
+digraph p4net {
+  rankdir=TB;
+  node [fontname="monospace"];
+  "h1" [shape=ellipse, label="h1\n10.0.0.1/24\nfd00::1/64"];
+  "h2" [shape=ellipse, label="h2\n10.0.0.2/24"];
+  "s1" [shape=box, label="s1\ngrpc :50051"];
+  "h1" -> "s1" [arrowhead=none];
+  "h2" -> "s1" [arrowhead=none];
+}
+
+p4net> topology graph /tmp/topo.png
+/tmp/topo.png
+```
+
 ## Host commands
 
 ### `<host> ping <target> [count] [timeout]`
@@ -97,7 +151,9 @@ H \ H   h1   h2
 Ping `<target>` from `<host>`. `<target>` is resolved as a host name
 first (using its primary IP); any string that does not match a host name
 is forwarded verbatim to `iputils-ping`. Defaults: `count=1`,
-`timeout=1.0`.
+`timeout=1.0`. Auto-detects IPv4 vs IPv6 from the target string
+(presence of `:` selects IPv6). Pass `<host> ping6` to force IPv6 when
+both stacks are present.
 
 ```
 p4net> h1 ping h2
@@ -105,6 +161,33 @@ ok
 p4net> h1 ping 8.8.8.8 1 0.5
 fail
 ```
+
+### `<host> ping6 <target> [count] [timeout]`
+
+Explicit IPv6 ping. `<target>` may be a host name (resolved to that
+host's `primary_ip6`) or a literal IPv6 address. Errors out if the
+target is a host name without a `primary_ip6`.
+
+```
+p4net> h1 ping6 h2
+OK
+p4net> h1 ping6 fd00::ff
+FAIL
+```
+
+### `<host> xterm`
+
+Spawn an `xterm` running `bash` inside the host's namespace. Requires
+`$DISPLAY` to be set; raises an error otherwise. The orchestrator
+tracks the spawned process and terminates it on `Network.stop()`.
+
+```
+p4net> h1 xterm
+xterm spawned (pid=12345)
+```
+
+(Output captured against a host with `$DISPLAY` set; the example is not
+exercised by the test suite because CI has no X server.)
 
 ### `<host> cmd <argv>...`
 
@@ -140,15 +223,24 @@ MyIngress.ipv4_lpm
 
 ### `<switch> table dump <table>`
 
-Print every entry in the named table. Match values are decoded via
-`P4InfoIndex.decode_match` into width-aware human strings (IPv4 for
-32-bit fields, MAC for 48-bit, decimal otherwise).
+Print every entry in the named table. IPv4 (32-bit) and IPv6 (128-bit)
+match values are rendered in human form (`10.0.0.1/24`, `fd00::/64`);
+MAC (48-bit) values use the canonical colon form; other widths render
+as decimal integers. Action parameters decode width-aware too: a 9-bit
+`port` shows as `'2'`, not `b'\x02'`.
 
 ```
 p4net> s1 table dump MyIngress.ipv4_lpm
 #0
   table:    MyIngress.ipv4_lpm
   match:    {'hdr.ipv4.dstAddr': '10.0.0.1/32'}
+  action:   MyIngress.set_egress_port
+  params:   {'port': '1'}
+
+p4net> s1 table dump MyIngress.ipv6_lpm
+#0
+  table:    MyIngress.ipv6_lpm
+  match:    {'hdr.ipv6.dstAddr': 'fd00::1/128'}
   action:   MyIngress.set_egress_port
   params:   {'port': '1'}
 ```
@@ -208,6 +300,32 @@ ok
 ### `<switch> mcast del <id>`
 
 Delete a multicast group.
+
+### `<switch> packet send <hex_payload> [metadata: <k>=<v>[,<k>=<v>...]]`
+
+Send a `PacketOut` over the StreamChannel. `<hex_payload>` is an
+even-length hex string parsed via `bytes.fromhex`. The optional
+`metadata:` section names P4Info-defined `packet_out` controller fields;
+missing fields are auto-zero-padded.
+
+```
+p4net> s1 packet send ffffffffffff000000000001880b48656c6c6f \
+         metadata: egress_port=1
+ok
+```
+
+### `<switch> packet listen [count=N] [timeout=T]`
+
+Block until `count` packets arrive or `timeout` seconds elapse,
+whichever first. Defaults: `count=1`, `timeout=10.0`. Renders one line
+per packet: `[ingress_port=N] <hex>...` with the hex payload truncated
+at 64 characters.
+
+```
+p4net> s1 packet listen count=2 timeout=3
+[ingress_port=1] ffffffffffff000000000001...
+[ingress_port=1] 3333000000160000000000018611...
+```
 
 ## Keyboard shortcuts
 
