@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI `<host> ping6 <target>` for explicit IPv6 ping.
 - CLI `hosts` output now shows IPv6 addresses when present.
 - `dual_stack` and `asymmetric_link` examples.
+- IPv6 codec helper `decode_ipv6` plus 128-bit-field support in
+  `P4InfoIndex.decode_match` so `<switch> table dump` renders IPv6 LPM
+  matches as `fd00::1/128` instead of raw bytes.
+- `Network.xterm(host)` and CLI `<host> xterm` for spawning an interactive
+  terminal in a host's namespace (requires `$DISPLAY`).
+- `Network.pingall6()` and CLI `pingall6` for an IPv6 connectivity matrix
+  over hosts with `primary_ip6` set.
+- `Topology.to_graphviz()` and `Topology.render_graphviz(path, format=...)`
+  with CLI command `topology graph [path] [layout=LR|TB|BT|RL] [format=png|svg|pdf|dot]`.
+- `ipv6_lpm` example demonstrating IPv6 LPM forwarding via runtime table
+  programming.
 
 ## [0.1.0] - 2026-05-10
 
