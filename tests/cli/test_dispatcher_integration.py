@@ -190,10 +190,12 @@ def test_switch_table_add_then_dump(network: Network) -> None:
     )
     assert out_add == "ok"
     out_dump = d.dispatch(f"{s1} table dump MyIngress.ipv4_lpm")
-    assert "10.0.0.5" in out_dump or b"\n".decode() in out_dump
-    # The decoder returns canonical bytes; 10.0.0.5 = 0x0a000005, prefix=32
-    # → b"\n\x00\x00\x05" after canonicalize is b"\n\x00\x00\x05".
+    # decode_match renders match values in human-readable form: dotted-quad / CIDR.
+    assert "10.0.0.5/32" in out_dump
+    assert "10.0.0.2/32" in out_dump
     assert "set_egress_port" in out_dump
+    # Action params decoded width-aware: port is 9-bit -> decimal.
+    assert "'port': '2'" in out_dump
 
 
 # ---------------------------------------------------------------------------

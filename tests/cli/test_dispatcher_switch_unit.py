@@ -118,7 +118,32 @@ def test_switch_table_dump_renders_entry(network: MagicMock) -> None:
     out = d.dispatch("s1 table dump MyIngress.ipv4_lpm")
     assert "MyIngress.ipv4_lpm" in out
     assert "MyIngress.set_egress_port" in out
-    assert "port" in out
+    # Match value rendered as human IPv4/CIDR, not raw bytes.
+    assert "10.0.0.0/24" in out
+    assert "b'\\n" not in out
+    # Action params decoded as decimals (port is a 9-bit field).
+    assert "'port': '2'" in out
+
+
+def test_switch_table_dump_decode_failure_falls_back(network: MagicMock) -> None:
+    """If decode_match raises (e.g. corrupt entry), render the raw dict."""
+    network.switches["s1"].client.list_table_entries = MagicMock(
+        return_value=[
+            {
+                "table": "MyIngress.ipv4_lpm",
+                # Wrong shape for LPM (bytes instead of (bytes, plen)) -> raises.
+                "match": {"hdr.ipv4.dstAddr": b"\x0a\x00\x00\x00"},
+                "action": "NoAction",
+                "params": {},
+                "priority": None,
+            }
+        ]
+    )
+    d = CommandDispatcher(network)
+    out = d.dispatch("s1 table dump MyIngress.ipv4_lpm")
+    # Raw fallback path keeps the dump from failing.
+    assert "MyIngress.ipv4_lpm" in out
+    assert "NoAction" in out
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ shell wraps it, and unit tests target it directly with a mock Network.
 
 from __future__ import annotations
 
+import logging
 import shlex
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -16,6 +17,8 @@ from p4net.cli.formatting import bold, render_pingall_matrix
 
 if TYPE_CHECKING:
     from p4net.network import Network
+
+_log = logging.getLogger(__name__)
 
 # A switch verb handler takes (switch_name, remaining tokens) and returns
 # the formatted output string.
@@ -398,16 +401,23 @@ class CommandDispatcher:
         entries = switch.client.list_table_entries(table)  # type: ignore[attr-defined]
         if not entries:
             return f"(table {table!r} is empty)"
+        index = switch.client.index  # type: ignore[attr-defined]
         lines: list[str] = []
         for i, entry in enumerate(entries):
             lines.append(f"#{i}")
             lines.append(f"  table:    {entry['table']}")
-            match = entry.get("match", {})
-            lines.append(f"  match:    {dict(match)}")
-            lines.append(f"  action:   {entry.get('action')}")
+            raw_match = entry.get("match", {})
+            try:
+                rendered_match: object = index.decode_match(table, raw_match)
+            except Exception as exc:
+                _log.debug("decode_match failed for %s: %s; falling back to raw bytes", table, exc)
+                rendered_match = dict(raw_match)
+            lines.append(f"  match:    {rendered_match}")
+            action_name = entry.get("action")
+            lines.append(f"  action:   {action_name}")
             params = entry.get("params") or {}
             if params:
-                lines.append(f"  params:   {dict(params)}")
+                lines.append(f"  params:   {_render_action_params(index, action_name, params)}")
             if entry.get("priority") is not None:
                 lines.append(f"  priority: {entry['priority']}")
         return "\n".join(lines)
@@ -594,6 +604,38 @@ class CommandDispatcher:
         if rc != 0:
             parts.append(f"[exit {rc}]")
         return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Action-param rendering (used by `<switch> table dump`)
+# ---------------------------------------------------------------------------
+
+
+def _render_action_params(
+    index: object,
+    action_name: object,
+    params: dict[str, bytes],
+) -> dict[str, str]:
+    """Decode raw action-param bytes into width-aware human strings.
+
+    Falls back to ``repr(bytes)`` for any param whose width can't be looked up.
+    """
+    from p4net.control.codec import format_exact
+
+    if not isinstance(action_name, str):
+        return {k: repr(v) for k, v in params.items()}
+    try:
+        for action_msg in index.raw.actions:  # type: ignore[attr-defined]
+            if action_msg.preamble.name == action_name:
+                bw_by_name = {p.name: int(p.bitwidth) for p in action_msg.params}
+                out: dict[str, str] = {}
+                for k, v in params.items():
+                    bw = bw_by_name.get(k)
+                    out[k] = format_exact(v, bw) if bw else repr(v)
+                return out
+    except Exception as exc:
+        _log.debug("decode action params failed for %s: %s", action_name, exc)
+    return {k: repr(v) for k, v in params.items()}
 
 
 # ---------------------------------------------------------------------------
