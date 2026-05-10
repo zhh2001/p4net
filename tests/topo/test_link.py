@@ -113,3 +113,79 @@ def test_link_a_must_be_linkendpoint() -> None:
         Link(a="h1", b=LinkEndpoint(node="s1"))  # type: ignore[arg-type]
     with pytest.raises(TopologyError, match="must be a LinkEndpoint"):
         Link(a=LinkEndpoint(node="h1"), b="s1")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Asymmetric impairment + IPv6 endpoint (phase 12)
+# ---------------------------------------------------------------------------
+
+
+def test_link_endpoint_ip6_accepted() -> None:
+    ep = LinkEndpoint(node="h1", ip6="fd00::1/64")
+    assert ep.ip6 == "fd00::1/64"
+
+
+@pytest.mark.parametrize(
+    "bad_ip6",
+    ["10.0.0.1/24", "fd00::g/64", "fd00::1/129", "not::v6"],
+)
+def test_link_endpoint_invalid_ip6(bad_ip6: str) -> None:
+    with pytest.raises(TopologyError):
+        LinkEndpoint(node="h1", ip6=bad_ip6)
+
+
+def test_link_asymmetric_per_direction_fields() -> None:
+    link = Link(
+        a=LinkEndpoint(node="h1"),
+        b=LinkEndpoint(node="s1"),
+        delay_a_to_b="100ms",
+        loss_pct_b_to_a=5.0,
+    )
+    assert link.delay_a_to_b == "100ms"
+    assert link.loss_pct_b_to_a == 5.0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "param"),
+    [
+        ({"bandwidth": "10mbit", "bandwidth_a_to_b": "5mbit"}, "bandwidth"),
+        ({"delay": "10ms", "delay_b_to_a": "20ms"}, "delay"),
+        ({"jitter": "1ms", "delay": "10ms", "jitter_a_to_b": "2ms"}, "jitter"),
+        ({"loss_pct": 1.0, "loss_pct_a_to_b": 2.0}, "loss_pct"),
+    ],
+)
+def test_link_symmetric_and_asymmetric_collide(kwargs: dict, param: str) -> None:
+    with pytest.raises(TopologyError, match=f"both {param}"):
+        Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"), **kwargs)
+
+
+def test_link_jitter_a_to_b_requires_delay() -> None:
+    with pytest.raises(TopologyError, match="jitter_a_to_b requires"):
+        Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"), jitter_a_to_b="1ms")
+
+
+def test_link_jitter_a_to_b_satisfied_by_symmetric_delay() -> None:
+    link = Link(
+        a=LinkEndpoint(node="h1"),
+        b=LinkEndpoint(node="s1"),
+        delay="10ms",
+        jitter_a_to_b="1ms",
+    )
+    assert link.jitter_a_to_b == "1ms"
+
+
+def test_link_jitter_b_to_a_requires_delay() -> None:
+    with pytest.raises(TopologyError, match="jitter_b_to_a requires"):
+        Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"), jitter_b_to_a="1ms")
+
+
+@pytest.mark.parametrize("bad_loss", [-0.1, 100.5, 200.0])
+def test_link_loss_pct_a_to_b_range(bad_loss: float) -> None:
+    with pytest.raises(TopologyError, match="loss_pct_a_to_b"):
+        Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"), loss_pct_a_to_b=bad_loss)
+
+
+@pytest.mark.parametrize("bad_loss", [-0.1, 100.5, 200.0])
+def test_link_loss_pct_b_to_a_range(bad_loss: float) -> None:
+    with pytest.raises(TopologyError, match="loss_pct_b_to_a"):
+        Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"), loss_pct_b_to_a=bad_loss)

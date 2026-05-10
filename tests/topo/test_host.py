@@ -89,3 +89,33 @@ def test_default_route_requires_ip() -> None:
 def test_invalid_default_route(bad_route: str) -> None:
     with pytest.raises(TopologyError):
         Host(name="h1", ip="10.0.0.1/24", default_route=bad_route)
+
+
+# ---------------------------------------------------------------------------
+# IPv6 (phase 12)
+# ---------------------------------------------------------------------------
+
+
+def test_host_ip6_accepted() -> None:
+    h = Host(name="h1", ip6="fd00::1/64")
+    assert h.ip6 == "fd00::1/64"
+
+
+@pytest.mark.parametrize(
+    "bad_ip6",
+    ["10.0.0.1/24", "fd00::g/64", "fd00::1/129", "not::v6", ""],
+)
+def test_invalid_host_ip6(bad_ip6: str) -> None:
+    with pytest.raises(TopologyError):
+        Host(name="h1", ip6=bad_ip6)
+
+
+def test_default_route6_requires_ip6() -> None:
+    with pytest.raises(TopologyError, match="requires ip6"):
+        Host(name="h1", default_route6="fd00::ff")
+
+
+@pytest.mark.parametrize("bad_route6", ["not::v6", "fd00::1/64", "10.0.0.1"])
+def test_invalid_default_route6(bad_route6: str) -> None:
+    with pytest.raises(TopologyError):
+        Host(name="h1", ip6="fd00::1/64", default_route6=bad_route6)

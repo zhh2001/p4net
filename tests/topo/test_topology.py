@@ -403,6 +403,17 @@ def test_validate_ip_no_collision_different_subnets() -> None:
     t.validate()  # different subnets → fine
 
 
+def test_validate_ipv6_collision_within_subnet() -> None:
+    t = Topology()
+    t.add_host("h1", ip6="fd00::1/64")
+    t.add_host("h2", ip6="fd00::1/64")
+    t.add_switch("s1", Path("p.p4"))
+    t.add_link("h1", "s1")
+    t.add_link("h2", "s1")
+    with pytest.raises(TopologyError, match="IPv6 collision"):
+        t.validate()
+
+
 def test_validate_collects_all_errors() -> None:
     """A topology with three distinct problems must surface all three."""
     t = Topology()
@@ -470,14 +481,30 @@ def test_topology_rejects_non_v1model_arch() -> None:
 
 def _build_sample() -> Topology:
     t = Topology()
-    t.add_host("h1", ip="10.0.0.1/24", mac="aa:bb:cc:dd:ee:01", default_route="10.0.0.254")
+    t.add_host(
+        "h1",
+        ip="10.0.0.1/24",
+        mac="aa:bb:cc:dd:ee:01",
+        default_route="10.0.0.254",
+        ip6="fd00::1/64",
+        default_route6="fd00::ff",
+    )
     t.add_host("h2", ip="10.0.0.2/24")
     t.add_switch("s1", Path("examples/basic.p4"), cpu_port=255)
     t.add_switch("s2", Path("examples/basic.p4"), pcap_enabled=False, log_level="debug")
     # Host endpoint MAC override + switch endpoint MAC override (round-trip coverage).
     t.add_link("h1", "s1", mac_a="aa:bb:cc:dd:ee:11", mac_b="aa:bb:cc:dd:ee:12")
-    t.add_link("h2", "s2", bandwidth="10mbit", delay="5ms", jitter="1ms", loss_pct=0.5, mtu=1450)
-    t.add_link("s1", "s2", mac_b="aa:bb:cc:dd:ee:22")
+    t.add_link(
+        "h2",
+        "s2",
+        bandwidth="10mbit",
+        delay="5ms",
+        jitter="1ms",
+        loss_pct=0.5,
+        mtu=1450,
+    )
+    # Asymmetric impairment for round-trip coverage.
+    t.add_link("s1", "s2", mac_b="aa:bb:cc:dd:ee:22", delay_a_to_b="20ms", loss_pct_b_to_a=2.5)
     return t
 
 

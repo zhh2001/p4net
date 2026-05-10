@@ -35,6 +35,8 @@ def _host_to_dict(host: Host) -> dict[str, Any]:
         "ip": host.ip,
         "mac": host.mac,
         "default_route": host.default_route,
+        "ip6": host.ip6,
+        "default_route6": host.default_route6,
     }
 
 
@@ -59,6 +61,7 @@ def _endpoint_to_dict(ep: LinkEndpoint) -> dict[str, Any]:
         "iface_name": ep.iface_name,
         "ip": ep.ip,
         "mac": ep.mac,
+        "ip6": ep.ip6,
     }
 
 
@@ -71,6 +74,14 @@ def _link_to_dict(link: Link) -> dict[str, Any]:
         "jitter": link.jitter,
         "loss_pct": link.loss_pct,
         "mtu": link.mtu,
+        "bandwidth_a_to_b": link.bandwidth_a_to_b,
+        "bandwidth_b_to_a": link.bandwidth_b_to_a,
+        "delay_a_to_b": link.delay_a_to_b,
+        "delay_b_to_a": link.delay_b_to_a,
+        "jitter_a_to_b": link.jitter_a_to_b,
+        "jitter_b_to_a": link.jitter_b_to_a,
+        "loss_pct_a_to_b": link.loss_pct_a_to_b,
+        "loss_pct_b_to_a": link.loss_pct_b_to_a,
     }
 
 
@@ -108,9 +119,18 @@ class Topology:
         ip: str | None = None,
         mac: str | None = None,
         default_route: str | None = None,
+        ip6: str | None = None,
+        default_route6: str | None = None,
     ) -> Host:
         self._reject_existing_name(name)
-        host = Host(name=name, ip=ip, mac=mac, default_route=default_route)
+        host = Host(
+            name=name,
+            ip=ip,
+            mac=mac,
+            default_route=default_route,
+            ip6=ip6,
+            default_route6=default_route6,
+        )
         self._hosts[name] = host
         return host
 
@@ -160,11 +180,21 @@ class Topology:
         ip_b: str | None = None,
         mac_a: str | None = None,
         mac_b: str | None = None,
+        ip6_a: str | None = None,
+        ip6_b: str | None = None,
         bandwidth: str | None = None,
         delay: str | None = None,
         jitter: str | None = None,
         loss_pct: float | None = None,
         mtu: int | None = None,
+        bandwidth_a_to_b: str | None = None,
+        bandwidth_b_to_a: str | None = None,
+        delay_a_to_b: str | None = None,
+        delay_b_to_a: str | None = None,
+        jitter_a_to_b: str | None = None,
+        jitter_b_to_a: str | None = None,
+        loss_pct_a_to_b: float | None = None,
+        loss_pct_b_to_a: float | None = None,
     ) -> Link:
         node_a = self._resolve(a)
         node_b = self._resolve(b)
@@ -188,11 +218,31 @@ class Topology:
             raise TopologyError(
                 "P4 switch data ports do not carry IP addresses; remove ip_b from the add_link call"
             )
+        if ip6_a is not None and isinstance(node_a, P4Switch):
+            raise TopologyError(
+                "P4 switch data ports do not carry IP addresses; "
+                "remove ip6_a from the add_link call"
+            )
+        if ip6_b is not None and isinstance(node_b, P4Switch):
+            raise TopologyError(
+                "P4 switch data ports do not carry IP addresses; "
+                "remove ip6_b from the add_link call"
+            )
         ep_a = LinkEndpoint(
-            node=node_a.name, port=port_a_val, iface_name=iface_a, ip=ip_a, mac=mac_a
+            node=node_a.name,
+            port=port_a_val,
+            iface_name=iface_a,
+            ip=ip_a,
+            mac=mac_a,
+            ip6=ip6_a,
         )
         ep_b = LinkEndpoint(
-            node=node_b.name, port=port_b_val, iface_name=iface_b, ip=ip_b, mac=mac_b
+            node=node_b.name,
+            port=port_b_val,
+            iface_name=iface_b,
+            ip=ip_b,
+            mac=mac_b,
+            ip6=ip6_b,
         )
         link = Link(
             a=ep_a,
@@ -202,6 +252,14 @@ class Topology:
             jitter=jitter,
             loss_pct=loss_pct,
             mtu=mtu,
+            bandwidth_a_to_b=bandwidth_a_to_b,
+            bandwidth_b_to_a=bandwidth_b_to_a,
+            delay_a_to_b=delay_a_to_b,
+            delay_b_to_a=delay_b_to_a,
+            jitter_a_to_b=jitter_a_to_b,
+            jitter_b_to_a=jitter_b_to_a,
+            loss_pct_a_to_b=loss_pct_a_to_b,
+            loss_pct_b_to_a=loss_pct_b_to_a,
         )
         self._links.append(link)
         return link
@@ -312,6 +370,38 @@ class Topology:
                         f"IP collision on {network}: address {addr} used by hosts {sorted(nodes)}"
                     )
 
+        # 7. Same as 6, but for IPv6.
+        per_network6: dict[ipaddress.IPv6Network, dict[ipaddress.IPv6Address, set[str]]] = {}
+        for host in self._hosts.values():
+            if host.ip6 is None:
+                continue
+            try:
+                iface6 = ipaddress.IPv6Interface(host.ip6)
+            except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+                continue
+            per_network6.setdefault(iface6.network, {}).setdefault(iface6.ip, set()).add(host.name)
+        for link in self._links:
+            for ep in (link.a, link.b):
+                if ep.ip6 is None:
+                    continue
+                if ep.node not in self._hosts:
+                    continue
+                try:
+                    iface6 = ipaddress.IPv6Interface(ep.ip6)
+                except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+                    errors.append(f"link endpoint {ep.node!r}: invalid ip6 {ep.ip6!r}")
+                    continue
+                per_network6.setdefault(iface6.network, {}).setdefault(iface6.ip, set()).add(
+                    ep.node
+                )
+        for network6, addrs6 in per_network6.items():
+            for addr6, nodes6 in addrs6.items():
+                if len(nodes6) > 1:
+                    errors.append(
+                        f"IPv6 collision on {network6}: address {addr6} used by hosts "
+                        f"{sorted(nodes6)}"
+                    )
+
         if errors:
             raise TopologyError(
                 "topology validation failed with the following problems:\n  - "
@@ -334,6 +424,8 @@ class Topology:
                 ip=host_data.get("ip"),
                 mac=host_data.get("mac"),
                 default_route=host_data.get("default_route"),
+                ip6=host_data.get("ip6"),
+                default_route6=host_data.get("default_route6"),
             )
         for name, sw_data in data.get("switches", {}).items():
             topo._switches[name] = P4Switch(
@@ -354,6 +446,7 @@ class Topology:
                 iface_name=link_data["a"].get("iface_name"),
                 ip=link_data["a"].get("ip"),
                 mac=link_data["a"].get("mac"),
+                ip6=link_data["a"].get("ip6"),
             )
             ep_b = LinkEndpoint(
                 node=link_data["b"]["node"],
@@ -361,6 +454,7 @@ class Topology:
                 iface_name=link_data["b"].get("iface_name"),
                 ip=link_data["b"].get("ip"),
                 mac=link_data["b"].get("mac"),
+                ip6=link_data["b"].get("ip6"),
             )
             topo._links.append(
                 Link(
@@ -371,6 +465,14 @@ class Topology:
                     jitter=link_data.get("jitter"),
                     loss_pct=link_data.get("loss_pct"),
                     mtu=link_data.get("mtu"),
+                    bandwidth_a_to_b=link_data.get("bandwidth_a_to_b"),
+                    bandwidth_b_to_a=link_data.get("bandwidth_b_to_a"),
+                    delay_a_to_b=link_data.get("delay_a_to_b"),
+                    delay_b_to_a=link_data.get("delay_b_to_a"),
+                    jitter_a_to_b=link_data.get("jitter_a_to_b"),
+                    jitter_b_to_a=link_data.get("jitter_b_to_a"),
+                    loss_pct_a_to_b=link_data.get("loss_pct_a_to_b"),
+                    loss_pct_b_to_a=link_data.get("loss_pct_b_to_a"),
                 )
             )
         return topo
