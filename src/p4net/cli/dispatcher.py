@@ -39,6 +39,10 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "Ping every pair of hosts; print a result matrix.",
         "pingall [count] [timeout]",
     ),
+    "pingall6": (
+        "IPv6 ping every pair of v6-equipped hosts; print a result matrix.",
+        "pingall6 [count] [timeout]",
+    ),
     "<host> ping": (
         "Ping a target from a host.",
         "<host> ping <target> [count] [timeout]",
@@ -54,6 +58,10 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
     "<host> ifconfig": (
         "Show host interfaces (ip -br addr).",
         "<host> ifconfig",
+    ),
+    "<host> xterm": (
+        "Spawn an interactive xterm in a host's namespace (requires $DISPLAY).",
+        "<host> xterm",
     ),
     "<switch> log": (
         "Print the absolute path of the switch's BMv2 log file.",
@@ -125,12 +133,14 @@ class CommandDispatcher:
             "hosts": self._cmd_hosts,
             "switches": self._cmd_switches,
             "pingall": self._cmd_pingall,
+            "pingall6": self._cmd_pingall6,
         }
         self._host_handlers = {
             "ping": self._cmd_host_ping,
             "ping6": self._cmd_host_ping6,
             "cmd": self._cmd_host_cmd,
             "ifconfig": self._cmd_host_ifconfig,
+            "xterm": self._cmd_host_xterm,
         }
         self._switch_handlers: dict[str, SwitchHandler] = {
             "log": self._cmd_switch_log,
@@ -277,6 +287,18 @@ class CommandDispatcher:
         hosts = list(self._network.hosts.keys())
         return render_pingall_matrix(hosts, result, color=self._color)
 
+    def _cmd_pingall6(self, tokens: list[str]) -> str:
+        count, timeout = self._parse_count_timeout(tokens, label="pingall6")
+        eligible = [
+            name
+            for name, host in self._network.hosts.items()
+            if getattr(host, "primary_ip6", None)
+        ]
+        if not eligible:
+            return "(no IPv6-equipped hosts in topology)"
+        result = self._network.pingall6(count=count, timeout=timeout)
+        return render_pingall_matrix(eligible, result, color=self._color)
+
     # ------------------------------------------------------------------
     # Internal: host commands
     # ------------------------------------------------------------------
@@ -343,6 +365,15 @@ class CommandDispatcher:
         host = self._network.host(host_name)
         result = host.exec(["ip", "-br", "addr"], check=False, capture_output=True)
         return result.stdout.decode("utf-8", errors="replace").rstrip("\n")
+
+    def _cmd_host_xterm(self, host_name: str, tokens: list[str]) -> str:
+        if tokens:
+            raise CLIUsageError(f"{host_name} xterm: takes no arguments")
+        try:
+            proc = self._network.xterm(host_name)
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
+        return f"xterm spawned (pid={proc.pid})"
 
     # ------------------------------------------------------------------
     # Internal: switch dispatcher (extended in commit 3)

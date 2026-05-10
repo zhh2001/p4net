@@ -756,3 +756,122 @@ def test_symmetric_bandwidth_with_asymmetric_delay_a_to_b(
         assert ifaces["s1-eth1"]["delay"] is None
     finally:
         net.stop()
+
+
+# ---------------------------------------------------------------------------
+# xterm + pingall6 (phase 13)
+# ---------------------------------------------------------------------------
+
+
+def test_xterm_runs_xterm_in_host_namespace(
+    patched: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        h1 = net.host("h1")
+        fake_proc = MagicMock(name="NSProcess")
+        fake_proc.pid = 999
+        fake_proc.poll = MagicMock(return_value=None)
+        h1.namespace.popen = MagicMock(return_value=fake_proc)  # type: ignore[method-assign]
+        proc = net.xterm("h1")
+        assert proc is fake_proc
+        argv = h1.namespace.popen.call_args.args[0]
+        assert argv[:5] == ["xterm", "-T", "p4net: h1", "-e", "bash"]
+    finally:
+        net.stop()
+
+
+def test_xterm_honours_title_and_shell(
+    patched: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        h1 = net.host("h1")
+        fake_proc = MagicMock(name="NSProcess")
+        fake_proc.pid = 1
+        fake_proc.poll = MagicMock(return_value=None)
+        h1.namespace.popen = MagicMock(return_value=fake_proc)  # type: ignore[method-assign]
+        net.xterm("h1", title="custom", shell="zsh")
+        argv = h1.namespace.popen.call_args.args[0]
+        assert argv[:5] == ["xterm", "-T", "custom", "-e", "zsh"]
+    finally:
+        net.stop()
+
+
+def test_xterm_raises_when_display_unset(
+    patched: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DISPLAY", raising=False)
+    from p4net.network import NetworkError
+
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        with pytest.raises(NetworkError, match="DISPLAY is unset"):
+            net.xterm("h1")
+    finally:
+        net.stop()
+
+
+def test_xterm_terminated_on_stop(
+    patched: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    h1 = net.host("h1")
+    fake_proc = MagicMock(name="NSProcess")
+    fake_proc.pid = 1
+    fake_proc.poll = MagicMock(return_value=None)
+    fake_proc.wait = MagicMock(return_value=0)
+    h1.namespace.popen = MagicMock(return_value=fake_proc)  # type: ignore[method-assign]
+    net.xterm("h1")
+    net.stop()
+    fake_proc.terminate.assert_called()
+
+
+def test_pingall6_skips_v4_only_hosts(patched: dict[str, Any], tmp_path: Path) -> None:
+    topo = Topology()
+    topo.add_host("h1", ip="10.0.0.1/24", ip6="fd00::1/64")
+    topo.add_host("h2", ip="10.0.0.2/24", ip6="fd00::2/64")
+    topo.add_host("h3", ip="10.0.0.3/24")  # no ip6
+    topo.add_switch("s1", p4_src=Path("p.p4"))
+    topo.add_link("h1", "s1")
+    topo.add_link("h2", "s1")
+    topo.add_link("h3", "s1")
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        # Reset every host's namespace.exec so we only count pingall6's calls.
+        for h_name in ("h1", "h2", "h3"):
+            h = net.host(h_name)
+            h.namespace.exec = MagicMock(  # type: ignore[method-assign]
+                return_value=MagicMock(returncode=0)
+            )
+        result = net.pingall6()
+        # Two ordered pairs over {h1, h2}: (h1,h2) and (h2,h1). h3 absent.
+        assert set(result.keys()) == {("h1", "h2"), ("h2", "h1")}
+        # Verify a real call: h1 used force_ipv6=True via the `-6` argv flag.
+        argv = net.host("h1").namespace.exec.call_args.args[0]
+        assert "-6" in argv
+        # h3 received no pingall6-driven exec.
+        net.host("h3").namespace.exec.assert_not_called()
+    finally:
+        net.stop()
+
+
+def test_pingall6_empty_when_no_v6_hosts(patched: dict[str, Any], tmp_path: Path) -> None:
+    topo = Topology()
+    topo.add_host("h1", ip="10.0.0.1/24")
+    topo.add_switch("s1", p4_src=Path("p.p4"))
+    topo.add_link("h1", "s1")
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        assert net.pingall6() == {}
+    finally:
+        net.stop()

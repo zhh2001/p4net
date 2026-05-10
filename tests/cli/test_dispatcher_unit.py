@@ -483,3 +483,64 @@ def test_status_handles_log_dir_unavailable() -> None:
     d = CommandDispatcher(n)
     out = d.dispatch("status")
     assert "not allocated" in out
+
+
+# ---------------------------------------------------------------------------
+# pingall6 + <host> xterm (phase 13)
+# ---------------------------------------------------------------------------
+
+
+def test_pingall6_renders_matrix() -> None:
+    h1 = _make_host(
+        "h1",
+        "10.0.0.1",
+        {"h1-eth0": "10.0.0.1/24"},
+        primary_ip6="fd00::1",
+        ifaces6={"h1-eth0": "fd00::1/64"},
+    )
+    h2 = _make_host(
+        "h2",
+        "10.0.0.2",
+        {"h2-eth0": "10.0.0.2/24"},
+        primary_ip6="fd00::2",
+        ifaces6={"h2-eth0": "fd00::2/64"},
+    )
+    net = _make_network(hosts={"h1": h1, "h2": h2})
+    net.pingall6 = MagicMock(return_value={("h1", "h2"): True, ("h2", "h1"): True})
+    d = CommandDispatcher(net)
+    out = d.dispatch("pingall6 2 1.0")
+    net.pingall6.assert_called_once_with(count=2, timeout=1.0)
+    assert "h1" in out
+    assert "h2" in out
+    assert "2/2 succeeded" in out
+
+
+def test_pingall6_empty_returns_placeholder() -> None:
+    h1 = _make_host("h1", "10.0.0.1", {"h1-eth0": "10.0.0.1/24"})
+    net = _make_network(hosts={"h1": h1})
+    d = CommandDispatcher(net)
+    out = d.dispatch("pingall6")
+    assert out == "(no IPv6-equipped hosts in topology)"
+
+
+def test_host_xterm_renders_pid(two_host_network: MagicMock) -> None:
+    fake_proc = MagicMock()
+    fake_proc.pid = 4242
+    two_host_network.xterm = MagicMock(return_value=fake_proc)
+    d = CommandDispatcher(two_host_network)
+    out = d.dispatch("h1 xterm")
+    two_host_network.xterm.assert_called_once_with("h1")
+    assert out == "xterm spawned (pid=4242)"
+
+
+def test_host_xterm_renders_error_on_exception(two_host_network: MagicMock) -> None:
+    two_host_network.xterm = MagicMock(side_effect=RuntimeError("DISPLAY missing"))
+    d = CommandDispatcher(two_host_network)
+    out = d.dispatch("h1 xterm")
+    assert out.startswith("error: RuntimeError:")
+
+
+def test_host_xterm_rejects_arguments(two_host_network: MagicMock) -> None:
+    d = CommandDispatcher(two_host_network)
+    with pytest.raises(CLIUsageError, match="takes no arguments"):
+        d.dispatch("h1 xterm extra")

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -29,12 +30,14 @@ from p4net.network._cleanup import (
 )
 from p4net.network.exceptions import (
     NetworkAlreadyRunningError,
+    NetworkError,
     NodeNotFoundError,
 )
 from p4net.network.nodes import RunningHost, RunningSwitch
 from p4net.runtime import (
     BMv2Switch,
     NetworkNamespace,
+    NSProcess,
     VethPair,
     apply_netem,
     disable_ipv6,
@@ -77,6 +80,7 @@ class Network:
         self._running_switches: dict[str, RunningSwitch] = {}
         self._host_iface_ip: dict[str, dict[str, str | None]] = {}
         self._host_iface_ip6: dict[str, dict[str, str | None]] = {}
+        self._spawned_processes: list[NSProcess] = []
 
     # Read-only views ----------------------------------------------------
 
@@ -170,6 +174,60 @@ class Network:
                     continue
                 result[(src_name, dst_name)] = src_host.ping(dst_host, count=count, timeout=timeout)
         return result
+
+    def pingall6(
+        self,
+        *,
+        count: int = 1,
+        timeout: float = 2.0,
+    ) -> dict[tuple[str, str], bool]:
+        """IPv6 equivalent of pingall over hosts that have ``primary_ip6`` set.
+
+        Hosts without a primary IPv6 are skipped silently.
+        """
+        eligible = {name: rh for name, rh in self._running_hosts.items() if rh.primary_ip6}
+        result: dict[tuple[str, str], bool] = {}
+        for src_name, src_host in eligible.items():
+            for dst_name, dst_host in eligible.items():
+                if src_name == dst_name:
+                    continue
+                target_ip6 = dst_host.primary_ip6
+                assert target_ip6 is not None  # guarded by `eligible` filter
+                result[(src_name, dst_name)] = src_host.ping(
+                    target_ip6,
+                    count=count,
+                    timeout=timeout,
+                    force_ipv6=True,
+                )
+        return result
+
+    # ----- xterm helper -------------------------------------------------
+
+    def xterm(
+        self,
+        host: str | RunningHost,
+        *,
+        title: str | None = None,
+        shell: str = "bash",
+    ) -> NSProcess:
+        """Spawn an ``xterm`` running ``shell`` inside ``host``'s namespace.
+
+        Returns the :class:`NSProcess`; the orchestrator tracks it and
+        terminates it on :meth:`stop`. Raises :class:`NetworkError` if
+        ``$DISPLAY`` is unset (no X server reachable from the current
+        process). This method is intended for interactive use; the test
+        suite does not exercise it because CI has no X server.
+        """
+        target = host if isinstance(host, RunningHost) else self.host(host)
+        if not os.environ.get("DISPLAY"):
+            raise NetworkError(
+                "cannot spawn xterm: $DISPLAY is unset (no X server reachable). "
+                "Set DISPLAY (e.g. ':0') and ensure xhost permits this process."
+            )
+        argv = ["xterm", "-T", title or f"p4net: {target.name}", "-e", shell]
+        proc = target.popen(argv)
+        self._spawned_processes.append(proc)
+        return proc
 
     # ----- Internal start/stop ------------------------------------------
 
@@ -426,6 +484,19 @@ class Network:
         return result
 
     def _do_stop(self) -> None:
+        # 0. user-spawned processes (xterm, etc.) — reap before namespaces vanish.
+        for proc in list(self._spawned_processes):
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2.0)
+                    except Exception:
+                        proc.kill()
+            except Exception as exc:
+                logger.warning("spawned process reap (pid=%s): %r", getattr(proc, "pid", "?"), exc)
+        self._spawned_processes.clear()
+
         # 1. P4Runtime clients
         for sw_name, client in list(self._clients.items()):
             try:
