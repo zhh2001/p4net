@@ -96,6 +96,14 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "Delete a multicast group.",
         "<switch> mcast del <id>",
     ),
+    "<switch> packet send": (
+        "Inject a PacketOut into the switch.",
+        "<switch> packet send <hex_payload> [metadata: <k>=<v>[,<k>=<v>...]]",
+    ),
+    "<switch> packet listen": (
+        "Block until count PacketIns arrive (or timeout).",
+        "<switch> packet listen [count=<int>] [timeout=<float>]",
+    ),
 }
 
 
@@ -124,6 +132,7 @@ class CommandDispatcher:
             "table": self._cmd_switch_table,
             "counter": self._cmd_switch_counter,
             "mcast": self._cmd_switch_mcast,
+            "packet": self._cmd_switch_packet,
         }
         # Help registry can be extended by subclasses or commit 3 monkey-patch.
         self._help_topics: dict[str, tuple[str, str]] = dict(_TOPIC_HELP)
@@ -573,6 +582,95 @@ class CommandDispatcher:
         raise CLIUsageError(
             f"{switch_name} mcast: unknown sub-verb {sub!r} (expected one of: list, add, del)"
         )
+
+    def _cmd_switch_packet(self, switch_name: str, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError(f"{switch_name} packet: missing sub-verb (send/listen)")
+        sub, rest = tokens[0], tokens[1:]
+        sw = self._network.switch(switch_name)
+        if sub == "send":
+            return self._cmd_switch_packet_send(switch_name, sw, rest)
+        if sub == "listen":
+            return self._cmd_switch_packet_listen(switch_name, sw, rest)
+        raise CLIUsageError(
+            f"{switch_name} packet: unknown sub-verb {sub!r} (expected one of: send, listen)"
+        )
+
+    def _cmd_switch_packet_send(self, switch_name: str, switch: object, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError(
+                f"{switch_name} packet send: missing hex payload "
+                "(usage: packet send <hex_payload> [metadata: <k>=<v>[,<k>=<v>...]])"
+            )
+        hex_payload = tokens[0]
+        try:
+            payload = bytes.fromhex(hex_payload)
+        except ValueError as exc:
+            raise CLIUsageError(
+                f"{switch_name} packet send: invalid hex payload {hex_payload!r}: {exc}"
+            ) from exc
+        sections = _parse_sections(tokens[1:], allowed={"metadata"})
+        metadata = _parse_kv_pairs(sections["metadata"]) if "metadata" in sections else {}
+        try:
+            switch.client.send_packet_out(payload, metadata=metadata)  # type: ignore[attr-defined]
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
+        return "ok"
+
+    def _cmd_switch_packet_listen(self, switch_name: str, switch: object, tokens: list[str]) -> str:
+        kv = _parse_kv_pairs(tokens)
+        for k in kv:
+            if k not in ("count", "timeout"):
+                raise CLIUsageError(
+                    f"{switch_name} packet listen: unknown option {k!r} "
+                    "(expected count=<int> and/or timeout=<float>)"
+                )
+        try:
+            count = int(kv.get("count", "1"))
+        except ValueError as exc:
+            raise CLIUsageError(f"{switch_name} packet listen: count must be int") from exc
+        try:
+            timeout = float(kv.get("timeout", "10.0"))
+        except ValueError as exc:
+            raise CLIUsageError(f"{switch_name} packet listen: timeout must be float") from exc
+        if count <= 0:
+            raise CLIUsageError(f"{switch_name} packet listen: count must be positive")
+
+        import threading
+
+        captured: list[tuple[bytes, dict[str, int]]] = []
+        done = threading.Event()
+        lock = threading.Lock()
+
+        def handler(payload: bytes, metadata: dict[str, int]) -> None:
+            with lock:
+                if len(captured) < count:
+                    captured.append((payload, metadata))
+                    if len(captured) >= count:
+                        done.set()
+
+        deregister = switch.client.on_packet_in(handler)  # type: ignore[attr-defined]
+        try:
+            done.wait(timeout=timeout)
+        finally:
+            deregister()
+
+        with lock:
+            packets = list(captured)
+
+        if not packets:
+            return f"(no packets within {timeout}s)"
+        lines: list[str] = []
+        for payload, metadata in packets:
+            hex_str = payload.hex()
+            if len(hex_str) > 64:
+                hex_str = hex_str[:64] + "..."
+            meta_str = " ".join(f"[{k}={v}]" for k, v in sorted(metadata.items()))
+            if meta_str:
+                lines.append(f"{meta_str} {hex_str}")
+            else:
+                lines.append(hex_str)
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Public helpers used by the completer

@@ -425,8 +425,131 @@ def test_help_lists_switch_commands(network: MagicMock) -> None:
         "<switch> table add",
         "<switch> counter",
         "<switch> mcast list",
+        "<switch> packet send",
+        "<switch> packet listen",
     ):
         assert topic in out
+
+
+# ---------------------------------------------------------------------------
+# packet send / listen
+# ---------------------------------------------------------------------------
+
+
+def test_packet_send_with_metadata(network: MagicMock) -> None:
+    sw = network.switches["s1"]
+    sw.client.send_packet_out = MagicMock(return_value=None)
+    d = CommandDispatcher(network)
+    out = d.dispatch("s1 packet send deadbeef metadata: egress_port=1")
+    assert out == "ok"
+    args, kwargs = sw.client.send_packet_out.call_args
+    assert args[0] == b"\xde\xad\xbe\xef"
+    assert kwargs["metadata"] == {"egress_port": "1"}
+
+
+def test_packet_send_without_metadata(network: MagicMock) -> None:
+    sw = network.switches["s1"]
+    sw.client.send_packet_out = MagicMock(return_value=None)
+    d = CommandDispatcher(network)
+    out = d.dispatch("s1 packet send deadbeef")
+    assert out == "ok"
+    args, kwargs = sw.client.send_packet_out.call_args
+    assert args[0] == b"\xde\xad\xbe\xef"
+    assert kwargs["metadata"] == {}
+
+
+def test_packet_send_invalid_hex_raises(network: MagicMock) -> None:
+    d = CommandDispatcher(network)
+    with pytest.raises(CLIUsageError, match="invalid hex payload"):
+        d.dispatch("s1 packet send xyz123")
+
+
+def test_packet_send_odd_length_hex_raises(network: MagicMock) -> None:
+    d = CommandDispatcher(network)
+    with pytest.raises(CLIUsageError, match="invalid hex payload"):
+        d.dispatch("s1 packet send abc")
+
+
+def test_packet_send_missing_payload_raises(network: MagicMock) -> None:
+    d = CommandDispatcher(network)
+    with pytest.raises(CLIUsageError, match="missing hex payload"):
+        d.dispatch("s1 packet send")
+
+
+def test_packet_send_renders_client_error(network: MagicMock) -> None:
+    sw = network.switches["s1"]
+    sw.client.send_packet_out = MagicMock(side_effect=RuntimeError("nope"))
+    d = CommandDispatcher(network)
+    out = d.dispatch("s1 packet send deadbeef")
+    assert out.startswith("error: RuntimeError:")
+
+
+def test_packet_listen_returns_packets(network: MagicMock) -> None:
+    sw = network.switches["s1"]
+    deregister = MagicMock()
+    captured_handler: list = []
+
+    def fake_on_packet_in(handler):
+        captured_handler.append(handler)
+        # Synchronously deliver a single packet so listen returns immediately.
+        handler(b"\xde\xad\xbe\xef", {"ingress_port": 1})
+        return deregister
+
+    sw.client.on_packet_in = MagicMock(side_effect=fake_on_packet_in)
+    d = CommandDispatcher(network)
+    out = d.dispatch("s1 packet listen count=1 timeout=0.1")
+    assert "[ingress_port=1]" in out
+    assert "deadbeef" in out
+    deregister.assert_called_once()
+
+
+def test_packet_listen_no_packets_within_timeout(network: MagicMock) -> None:
+    sw = network.switches["s1"]
+    deregister = MagicMock()
+    sw.client.on_packet_in = MagicMock(return_value=deregister)
+    d = CommandDispatcher(network)
+    out = d.dispatch("s1 packet listen count=1 timeout=0.05")
+    assert out == "(no packets within 0.05s)"
+    deregister.assert_called_once()
+
+
+def test_packet_listen_truncates_long_hex(network: MagicMock) -> None:
+    sw = network.switches["s1"]
+    long_payload = bytes(range(64))  # 128 hex chars
+
+    def fake_on_packet_in(handler):
+        handler(long_payload, {"ingress_port": 7})
+        return MagicMock()
+
+    sw.client.on_packet_in = MagicMock(side_effect=fake_on_packet_in)
+    d = CommandDispatcher(network)
+    out = d.dispatch("s1 packet listen count=1 timeout=0.1")
+    assert "..." in out
+    assert "[ingress_port=7]" in out
+
+
+def test_packet_listen_unknown_option_raises(network: MagicMock) -> None:
+    d = CommandDispatcher(network)
+    with pytest.raises(CLIUsageError, match="unknown option"):
+        d.dispatch("s1 packet listen frobnicate=42")
+
+
+def test_packet_listen_zero_count_raises(network: MagicMock) -> None:
+    d = CommandDispatcher(network)
+    with pytest.raises(CLIUsageError, match="positive"):
+        d.dispatch("s1 packet listen count=0")
+
+
+def test_packet_unknown_subverb(network: MagicMock) -> None:
+    d = CommandDispatcher(network)
+    with pytest.raises(CLIUsageError, match="unknown sub-verb"):
+        d.dispatch("s1 packet bogus")
+
+
+def test_packet_missing_subverb(network: MagicMock) -> None:
+    d = CommandDispatcher(network)
+    with pytest.raises(CLIUsageError, match="missing sub-verb"):
+        d.dispatch("s1 packet")
 
 
 _KEEP_ALIVE: type = Any  # keep `Any` import live; used implicitly above

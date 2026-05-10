@@ -53,8 +53,8 @@ def test_completer_switch_subverbs() -> None:
     s1 = completer.options["s1"]
     assert s1 is not None
     sub_keys = set(s1.options.keys())
-    # commit-3 verbs surface here.
-    assert sub_keys == {"log", "table", "counter", "mcast"}
+    # commit-3 verbs surface here; phase-11 added "packet".
+    assert sub_keys == {"log", "table", "counter", "mcast", "packet"}
 
 
 def test_shell_constructor_resolves_history_path(tmp_path: Path) -> None:
