@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-10
+
+### Stability commitment
+
+This release marks the public API as stable per
+[API Stability](https://zhh2001.github.io/p4net/api-stability/).
+APIs marked **stable** will not be broken in 1.x. APIs marked
+**provisional** or **experimental** may evolve. See the linked
+page for per-symbol classification.
+
+PSA architecture support, live topology mutation, async P4Runtime
+client, and distributed simulation are explicitly out of scope for
+the 1.x line and planned for 2.0+.
+
+### Fixed
+
+- `<switch> table dump` now correctly disambiguates action-parameter
+  widths across multi-switch topologies that share an action name
+  (closes phase-13 OQ #1).
+- `Network.stop()` skips `terminate()` for already-exited spawned
+  processes (e.g. xterms closed by the user) instead of issuing a
+  no-op syscall (closes phase-13 OQ #2).
+- Phase-13 integration test now writes captured output to
+  `tmp_path` rather than a hardcoded `/tmp/` path (closes
+  phase-13 OQ #4).
+- Documentation CLI reference shows the dispatcher's actual
+  `OK`/`FAIL` casing for ping success/failure.
+
+### Changed
+
+- CI matrix expanded to include Ubuntu 22.04 alongside Ubuntu 24.04,
+  plus a wheel-install smoke job to verify `pip install` correctness
+  on every PR.
+- GitHub Actions versions updated to current major releases
+  (`checkout@v6`, `setup-python@v6`, `upload-pages-artifact@v5`,
+  `deploy-pages@v5`).
+- Documentation site uses Unicode-aware slugify, so Chinese (and
+  other CJK) headings now produce stable cross-page anchors
+  (closes phase-16 OQ #1).
+
+### Added
+
+- `docs/api-stability.md`: per-symbol stability classification and
+  deprecation policy. Chinese translation in `api-stability.zh.md`.
+- `docs/performance.md`: topology start/stop time and memory
+  baseline data for 1–8 switch topologies, plus the measurement
+  script for reproducibility. Chinese translation in
+  `performance.zh.md`.
+- `SECURITY.md` expanded with explicit privilege model, capability
+  alternative to sudo, trust-boundary documentation, and
+  vulnerability disclosure flow with response window.
+
 ## [0.2.0] - 2026-05-10
 
 ### Added
