@@ -10,38 +10,12 @@ import os
 # so that test collection itself does not crash.
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
-import re
 import shutil
 import subprocess
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Stale-namespace / stale-veth cleanup fixture
-# ---------------------------------------------------------------------------
-#
-# Patterns we own and may purge between sessions:
-#   - phase-1 runtime integration: `nsXXXXXXXX`, `nsA_XXXXXXXX`, `nsB_XXXXXXXX`
-#     (8-hex suffix), and veth ifaces `vA_XXXXXXXX`..`vD_XXXXXXXX`.
-#   - phase-6 orchestrator integration: hosts `h<6hex>[abc]?` and switches
-#     `s<6hex>[abc]?`, plus their auto-generated ifaces `<name>-eth<port>`.
-#
-# We deliberately do NOT match generic short names like `h1`, `s1`, or
-# `switch0`, so user-managed namespaces survive a test run unscathed.
-
-_TEST_NS_PATTERN = re.compile(
-    r"^("
-    r"ns([A-Z]_)?[0-9a-f]{8}"
-    r"|[hs][0-9a-f]{6}[abc]?"
-    r")$"
-)
-
-_TEST_IFACE_PATTERN = re.compile(
-    r"^("
-    r"v[A-D]_[0-9a-f]{8}"
-    r"|[hs][0-9a-f]{6}[abc]?-eth[0-9]+"
-    r")$"
-)
+from tests._artifact_patterns import TEST_IFACE_PATTERN, TEST_NS_PATTERN
 
 
 def _list_namespaces() -> list[str]:
@@ -76,10 +50,10 @@ def _list_interfaces() -> list[str]:
 
 def _purge_stale_test_artifacts() -> None:
     for name in _list_namespaces():
-        if _TEST_NS_PATTERN.match(name):
+        if TEST_NS_PATTERN.match(name):
             subprocess.run(["ip", "netns", "delete", name], capture_output=True, check=False)
     for iface in _list_interfaces():
-        if _TEST_IFACE_PATTERN.match(iface):
+        if TEST_IFACE_PATTERN.match(iface):
             subprocess.run(["ip", "link", "delete", iface], capture_output=True, check=False)
 
 
