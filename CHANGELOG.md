@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Python 3.13` listed in package classifiers.
+- P4Runtime CPU-port packet I/O: `P4RuntimeClient.send_packet_out`,
+  `on_packet_in`, `expect_packet_in`. (#feature/v0.2-packet-io)
+- CLI commands `<switch> packet send` and `<switch> packet listen`.
+- `examples/cpu_punt/` demonstrating CPU-punt and controller packet injection.
+- `P4InfoIndex.packet_in_metadata_schema`,
+  `packet_out_metadata_schema`, `encode_packet_out_metadata`,
+  `decode_packet_in_metadata`.
+
 ## [0.1.0] - 2026-05-10
 
 ### Added
