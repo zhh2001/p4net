@@ -131,18 +131,26 @@ class P4RuntimeClient:
 
     @property
     def target(self) -> str:
+        """gRPC target string (``host:port``) this client is bound to."""
         return self._target
 
     @property
     def device_id(self) -> int:
+        """P4Runtime device ID this client identifies as."""
         return self._device_id
 
     @property
     def election_id(self) -> tuple[int, int]:
+        """Mastership election ID as a ``(high, low)`` tuple."""
         return (self._election_id_high, self._election_id_low)
 
     @property
     def index(self) -> P4InfoIndex:
+        """The :class:`P4InfoIndex` for the currently-pushed pipeline.
+
+        Raises:
+            P4RuntimeError: if no pipeline has been set yet.
+        """
         if self._index is None:
             raise P4RuntimeError(
                 "no pipeline is set; call set_pipeline_config or get_pipeline_config first"
@@ -150,6 +158,7 @@ class P4RuntimeClient:
         return self._index
 
     def is_connected(self) -> bool:
+        """``True`` while the gRPC channel is open and arbitration succeeded."""
         return self._connected and not self._closed
 
     # Lifecycle ----------------------------------------------------------
@@ -359,6 +368,23 @@ class P4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
+        """Insert a new entry into ``table``.
+
+        Args:
+            table: Fully qualified table name (e.g. ``MyIngress.ipv4_lpm``).
+            match: ``{field_name: value}`` for the match key. Values may be
+                IPv4/IPv6/MAC strings, decimal/hex integers, or raw bytes.
+                LPM fields take ``"<addr>/<plen>"``; ternary fields take
+                ``("<value>", "<mask>")``.
+            action: Fully qualified action name.
+            params: Action parameters keyed by P4 param name.
+            priority: Required for tables with ternary or range keys.
+            timeout: Per-call gRPC deadline in seconds.
+
+        Raises:
+            DuplicateEntryError: if an entry with the same key already exists.
+            EncodingError: if any field can't be encoded.
+        """
         self._write_entry(
             table,
             match,
@@ -379,6 +405,9 @@ class P4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
+        """Modify an existing entry in ``table``. Same arguments as
+        :meth:`insert_table_entry`. Raises :class:`EntryNotFoundError`
+        if no matching entry exists."""
         self._write_entry(
             table,
             match,
@@ -397,6 +426,11 @@ class P4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
+        """Delete an entry from ``table`` by match key.
+
+        Raises:
+            EntryNotFoundError: if no matching entry exists.
+        """
         self._write_entry(
             table,
             match,
@@ -675,6 +709,7 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> None:
+        """Replace the replica list of an existing multicast group."""
         self._mcast_write(group_id, ports, update_type="MODIFY", timeout=timeout)
 
     def delete_multicast_group(
@@ -683,6 +718,7 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> None:
+        """Delete a multicast group."""
         self._mcast_write(group_id, ports=(), update_type="DELETE", timeout=timeout)
 
     def _mcast_write(

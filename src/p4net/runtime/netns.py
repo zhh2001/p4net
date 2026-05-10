@@ -58,19 +58,31 @@ class NetworkNamespace:
 
     @property
     def name(self) -> str:
+        """The kernel-visible namespace name."""
         return self._name
 
     @property
     def exists(self) -> bool:
+        """``True`` while the namespace is present in ``ip netns list``."""
         return self._name in _netns.listnetns()
 
     def create(self) -> None:
+        """Create the namespace.
+
+        Raises:
+            NamespaceError: if a namespace with the same name already exists.
+        """
         if self.exists:
             raise NamespaceError(f"namespace {self._name!r} already exists")
         _netns.create(self._name)
         logger.debug("created network namespace %r", self._name)
 
     def destroy(self) -> None:
+        """Remove the namespace.
+
+        Raises:
+            NamespaceError: if the namespace does not exist.
+        """
         if not self.exists:
             raise NamespaceError(f"namespace {self._name!r} does not exist")
         _netns.remove(self._name)
@@ -169,19 +181,24 @@ class NSProcess:
 
     @property
     def pid(self) -> int:
+        """OS process ID of the wrapped child."""
         return int(self._popen.pid)
 
     def poll(self) -> int | None:
+        """Non-blocking liveness check; returns the exit code or ``None``."""
         rc = self._popen.poll()
         return None if rc is None else int(rc)
 
     def wait(self, timeout: float | None = None) -> int:
+        """Block until the child exits and return its exit code."""
         return int(self._popen.wait(timeout=timeout))
 
     def terminate(self) -> None:
+        """Send ``SIGTERM`` to the child."""
         self._popen.terminate()
 
     def kill(self) -> None:
+        """Send ``SIGKILL`` to the child."""
         self._popen.kill()
 
     def close(self) -> None:

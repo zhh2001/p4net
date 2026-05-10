@@ -35,6 +35,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CompileResult:
+    """Output of one :meth:`P4Compiler.compile` call.
+
+    Attributes:
+        source: The P4 source file that was compiled.
+        arch: The target architecture (e.g. ``"v1model"``).
+        bmv2_json: Path to the BMv2 JSON loaded by ``simple_switch_grpc``.
+        p4info: Path to the P4Info text-protobuf describing the
+            compiled program.
+        compiler_version: The version string reported by ``p4c
+            --version`` at compile time.
+        source_hash: SHA-256 hex digest used as the cache key.
+        cache_hit: ``True`` if the result was served from cache (no
+            ``p4c`` invocation), ``False`` if it was freshly compiled.
+    """
+
     source: Path
     arch: str
     bmv2_json: Path
@@ -82,10 +97,12 @@ class P4Compiler:
 
     @property
     def cache_dir(self) -> Path:
+        """Root of the content-addressed compile cache."""
         return self._cache_dir
 
     @property
     def p4c_binary(self) -> str:
+        """Name or path of the ``p4c`` binary this compiler invokes."""
         return self._p4c_binary
 
     @property

@@ -96,22 +96,27 @@ class BMv2Switch:
 
     @property
     def name(self) -> str:
+        """The switch name (used as the basename of the log file)."""
         return self._name
 
     @property
     def pid(self) -> int | None:
+        """OS process ID, or ``None`` if the switch has not been started."""
         return None if self._proc is None else self._proc.pid
 
     @property
     def grpc_address(self) -> str:
+        """``host:port`` string the P4Runtime gRPC server binds to."""
         return f"{self._grpc_bind_addr}:{self._grpc_port}"
 
     @property
     def log_file(self) -> Path:
+        """Path to the BMv2 log file inside ``log_dir``."""
         return self._log_dir / f"{self._name}.log"
 
     @property
     def device_id(self) -> int:
+        """P4Runtime device ID this switch reports as."""
         return self._device_id
 
     # Argv construction --------------------------------------------------
@@ -255,11 +260,13 @@ class BMv2Switch:
         self._cleanup_log()
 
     def is_running(self) -> bool:
+        """``True`` while the BMv2 child process is still alive."""
         if self._proc is None:
             return False
         return self._proc.poll() is None
 
     def returncode(self) -> int | None:
+        """Process exit code, or ``None`` if it has not exited yet."""
         if self._proc is None:
             return None
         return self._proc.poll()

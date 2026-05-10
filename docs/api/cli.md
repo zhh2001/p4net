@@ -1,7 +1,11 @@
 ---
-description: API reference for p4net.cli — placeholder, expanded in commit 3 with mkdocstrings.
+description: API reference for p4net.cli — Interactive shell, command dispatcher, completers, and console-script entry point.
 ---
 
 # `p4net.cli`
 
-API reference forthcoming.
+::: p4net.cli
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+      members: true

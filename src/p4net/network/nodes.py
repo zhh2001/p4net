@@ -42,22 +42,27 @@ class RunningHost:
 
     @property
     def name(self) -> str:
+        """The host's name as declared in the topology."""
         return self._host.name
 
     @property
     def descriptor(self) -> Host:
+        """The :class:`Host` topology descriptor that produced this runtime."""
         return self._host
 
     @property
     def namespace(self) -> NetworkNamespace:
+        """The Linux network namespace this host runs in."""
         return self._namespace
 
     @property
     def interfaces(self) -> Mapping[str, str | None]:
+        """Map of interface name → IPv4 CIDR (or ``None``) for this host."""
         return self._interfaces
 
     @property
     def interfaces6(self) -> Mapping[str, str | None]:
+        """Map of interface name → IPv6 CIDR (or ``None``) for this host."""
         return self._interfaces6
 
     @property
@@ -85,6 +90,18 @@ class RunningHost:
         capture_output: bool = False,
         env: Mapping[str, str] | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
+        """Run ``argv`` synchronously inside the host's namespace.
+
+        Args:
+            argv: Command and arguments to execute.
+            timeout: Per-call timeout in seconds.
+            check: Raise :class:`subprocess.CalledProcessError` on rc != 0.
+            capture_output: Capture stdout/stderr instead of inheriting.
+            env: Optional environment variable overrides.
+
+        Returns:
+            The completed :class:`subprocess.CompletedProcess`.
+        """
         return self._namespace.exec(
             argv,
             timeout=timeout,
@@ -102,6 +119,10 @@ class RunningHost:
         stderr: int | IO[bytes] | None = None,
         stdin: int | IO[bytes] | None = None,
     ) -> NSProcess:
+        """Spawn a long-running process inside the host's namespace.
+
+        Returns an :class:`NSProcess` whose lifecycle the caller manages.
+        """
         return self._namespace.popen(argv, env=env, stdout=stdout, stderr=stderr, stdin=stdin)
 
     def ping(
@@ -172,26 +193,32 @@ class RunningSwitch:
 
     @property
     def name(self) -> str:
+        """The switch's name as declared in the topology."""
         return self._switch.name
 
     @property
     def descriptor(self) -> P4Switch:
+        """The :class:`P4Switch` topology descriptor that produced this runtime."""
         return self._switch
 
     @property
     def bmv2(self) -> BMv2Switch:
+        """The wrapped BMv2 process (PID, gRPC address, log file)."""
         return self._bmv2
 
     @property
     def client(self) -> P4RuntimeClient:
+        """The P4Runtime gRPC client connected to this switch."""
         return self._client
 
     @property
     def compile_result(self) -> CompileResult:
+        """The compiler output (BMv2 JSON + P4Info paths) used by this switch."""
         return self._compile_result
 
     @property
     def log_file(self) -> Path:
+        """Path to the BMv2 log file."""
         return self._bmv2.log_file
 
     def __repr__(self) -> str:

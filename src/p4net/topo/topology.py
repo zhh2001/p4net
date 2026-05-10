@@ -95,17 +95,28 @@ class Topology:
 
     @property
     def hosts(self) -> Mapping[str, Host]:
+        """Map of host name → :class:`Host`."""
         return self._hosts
 
     @property
     def switches(self) -> Mapping[str, P4Switch]:
+        """Map of switch name → :class:`P4Switch`."""
         return self._switches
 
     @property
     def links(self) -> Sequence[Link]:
+        """Tuple of every :class:`Link` in declaration order."""
         return tuple(self._links)
 
     def node(self, name: str) -> NodeKind:
+        """Look up a node by name.
+
+        Returns:
+            The :class:`Host` or :class:`P4Switch` named ``name``.
+
+        Raises:
+            TopologyError: if no node with that name exists.
+        """
         if name in self._hosts:
             return self._hosts[name]
         if name in self._switches:
@@ -122,6 +133,19 @@ class Topology:
         ip6: str | None = None,
         default_route6: str | None = None,
     ) -> Host:
+        """Append a :class:`Host` to the topology.
+
+        Args:
+            name: Host name; must be unique across hosts and switches.
+            ip: IPv4 CIDR (e.g. ``"10.0.0.1/24"``).
+            mac: MAC address (e.g. ``"00:00:00:00:00:01"``).
+            default_route: IPv4 default-route gateway address.
+            ip6: IPv6 CIDR (e.g. ``"fd00::1/64"``).
+            default_route6: IPv6 default-route gateway address.
+
+        Returns:
+            The newly created :class:`Host`.
+        """
         self._reject_existing_name(name)
         host = Host(
             name=name,
@@ -147,6 +171,22 @@ class Topology:
         log_level: str = "info",
         pcap_enabled: bool = True,
     ) -> P4Switch:
+        """Append a :class:`P4Switch` to the topology.
+
+        Args:
+            name: Switch name; must be unique across hosts and switches.
+            p4_src: Path to the P4 source file the switch should run.
+            arch: P4 architecture name; only ``"v1model"`` is supported.
+            device_id: P4Runtime device ID. Auto-assigned starting at 0.
+            grpc_port: gRPC bind port. Auto-assigned starting at 50051.
+            thrift_port: Thrift bind port. Auto-assigned starting at 9090.
+            cpu_port: CPU port number for controller punt (optional).
+            log_level: BMv2 log level passed via ``--log-level``.
+            pcap_enabled: Per-port pcap capture toggle.
+
+        Returns:
+            The newly created :class:`P4Switch`.
+        """
         self._reject_existing_name(name)
         idx = len(self._switches)
         if device_id is None:
@@ -196,6 +236,44 @@ class Topology:
         loss_pct_a_to_b: float | None = None,
         loss_pct_b_to_a: float | None = None,
     ) -> Link:
+        """Append a :class:`Link` between two nodes.
+
+        Endpoint sides ``a`` and ``b`` are anchored by argument order;
+        per-direction impairment fields like ``delay_a_to_b`` shape only
+        the direction from the ``a``-side veth toward the ``b`` side.
+
+        Args:
+            a: First endpoint (host or switch name, or a node object).
+            b: Second endpoint.
+            port_a: Port number on the ``a`` side. Auto-assigned if omitted.
+            port_b: Port number on the ``b`` side. Auto-assigned if omitted.
+            ip_a: IPv4 CIDR override for the ``a``-side interface.
+            ip_b: IPv4 CIDR override for the ``b``-side interface.
+            mac_a: MAC override for the ``a``-side interface.
+            mac_b: MAC override for the ``b``-side interface.
+            ip6_a: IPv6 CIDR override for the ``a``-side interface.
+            ip6_b: IPv6 CIDR override for the ``b``-side interface.
+            bandwidth: Symmetric link-rate cap (e.g. ``"10mbit"``).
+            delay: Symmetric one-way delay (e.g. ``"50ms"``).
+            jitter: Symmetric jitter; requires ``delay`` to be set.
+            loss_pct: Symmetric per-packet loss in [0.0, 100.0].
+            mtu: Link MTU (clamped to [68, 65535]).
+            bandwidth_a_to_b: Per-direction bandwidth, ``a`` → ``b``.
+            bandwidth_b_to_a: Per-direction bandwidth, ``b`` → ``a``.
+            delay_a_to_b: Per-direction delay, ``a`` → ``b``.
+            delay_b_to_a: Per-direction delay, ``b`` → ``a``.
+            jitter_a_to_b: Per-direction jitter, ``a`` → ``b``.
+            jitter_b_to_a: Per-direction jitter, ``b`` → ``a``.
+            loss_pct_a_to_b: Per-direction loss, ``a`` → ``b``.
+            loss_pct_b_to_a: Per-direction loss, ``b`` → ``a``.
+
+        Returns:
+            The newly created :class:`Link`.
+
+        Raises:
+            TopologyError: on invalid parameter combinations or
+                unresolved endpoints.
+        """
         node_a = self._resolve(a)
         node_b = self._resolve(b)
         port_a_val = self._auto_port(node_a, port_a)
@@ -485,6 +563,7 @@ class Topology:
             ) from exc
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serialisable snapshot of the topology."""
         return {
             "hosts": {name: _host_to_dict(host) for name, host in self._hosts.items()},
             "switches": {name: _switch_to_dict(sw) for name, sw in self._switches.items()},
@@ -493,6 +572,7 @@ class Topology:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Topology:
+        """Reconstruct a :class:`Topology` from a :meth:`to_dict` payload."""
         topo = cls()
         for name, host_data in data.get("hosts", {}).items():
             topo._hosts[name] = Host(

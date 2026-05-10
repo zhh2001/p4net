@@ -1,7 +1,11 @@
 ---
-description: API reference for p4net.runtime — placeholder, expanded in commit 3 with mkdocstrings.
+description: API reference for p4net.runtime — Linux network namespace, veth pair, traffic-control, and BMv2 process primitives.
 ---
 
 # `p4net.runtime`
 
-API reference forthcoming.
+::: p4net.runtime
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+      members: true

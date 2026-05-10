@@ -98,6 +98,13 @@ def _wait_for_signal() -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point for the ``p4net`` console script.
+
+    Parses CLI arguments, loads the topology Python file, brings the
+    network up, runs the optional ``setup(net)`` hook, then either
+    drops into the interactive shell (default) or blocks on
+    ``signal.pause()`` (``--no-shell``). Returns a process exit code.
+    """
     parser = _build_parser()
     ns = parser.parse_args(argv)
     try:

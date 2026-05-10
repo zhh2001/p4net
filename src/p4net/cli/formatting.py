@@ -6,10 +6,12 @@ _ESC = "\x1b["
 
 
 def bold(text: str, *, color: bool) -> str:
+    """Wrap ``text`` in ANSI bold escapes when ``color`` is ``True``."""
     return f"{_ESC}1m{text}{_ESC}0m" if color else text
 
 
 def red(text: str, *, color: bool) -> str:
+    """Wrap ``text`` in ANSI red-foreground escapes when ``color`` is ``True``."""
     return f"{_ESC}31m{text}{_ESC}0m" if color else text
 
 

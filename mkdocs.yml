@@ -21,6 +21,13 @@ nav:
     - Troubleshooting: troubleshooting.md
   - Reference:
     - CLI Reference: cli.md
+    - API:
+      - p4net.runtime: api/runtime.md
+      - p4net.topo: api/topo.md
+      - p4net.compiler: api/compiler.md
+      - p4net.control: api/control.md
+      - p4net.network: api/network.md
+      - p4net.cli: api/cli.md
     - Glossary: glossary.md
   - Examples:
     - Overview: examples/index.md

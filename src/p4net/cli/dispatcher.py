@@ -189,18 +189,22 @@ class CommandDispatcher:
 
     @property
     def command_names(self) -> list[str]:
+        """Names of every top-level command this dispatcher knows about."""
         return list(self._top_level_handlers.keys())
 
     @property
     def host_names(self) -> list[str]:
+        """Names of the hosts in the underlying :class:`Network`."""
         return list(self._network.hosts.keys())
 
     @property
     def switch_names(self) -> list[str]:
+        """Names of the switches in the underlying :class:`Network`."""
         return list(self._network.switches.keys())
 
     @property
     def color(self) -> bool:
+        """``True`` if ANSI colour escapes should be emitted in output."""
         return self._color
 
     # ------------------------------------------------------------------

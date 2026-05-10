@@ -86,33 +86,52 @@ class Network:
 
     @property
     def is_running(self) -> bool:
+        """``True`` once :meth:`start` has succeeded and before :meth:`stop`."""
         return self._running
 
     @property
     def topology(self) -> Topology:
+        """The :class:`Topology` description backing this network."""
         return self._topology
 
     @property
     def hosts(self) -> Mapping[str, RunningHost]:
+        """Map of host name → :class:`RunningHost`. Empty until :meth:`start`."""
         return self._running_hosts
 
     @property
     def switches(self) -> Mapping[str, RunningSwitch]:
+        """Map of switch name → :class:`RunningSwitch`. Empty until :meth:`start`."""
         return self._running_switches
 
     @property
     def log_dir(self) -> Path:
+        """Directory where BMv2 log files are written.
+
+        Raises:
+            RuntimeError: if accessed before :meth:`start`.
+        """
         if self._log_dir is None:
             raise RuntimeError("log_dir is not yet allocated; call start() first")
         return self._log_dir
 
     def host(self, name: str) -> RunningHost:
+        """Return the :class:`RunningHost` named ``name``.
+
+        Raises:
+            NodeNotFoundError: if no such host is in this network.
+        """
         rh = self._running_hosts.get(name)
         if rh is None:
             raise NodeNotFoundError(f"no running host named {name!r}")
         return rh
 
     def switch(self, name: str) -> RunningSwitch:
+        """Return the :class:`RunningSwitch` named ``name``.
+
+        Raises:
+            NodeNotFoundError: if no such switch is in this network.
+        """
         rs = self._running_switches.get(name)
         if rs is None:
             raise NodeNotFoundError(f"no running switch named {name!r}")
@@ -121,6 +140,17 @@ class Network:
     # Lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
+        """Bring the topology up end-to-end.
+
+        Validates the topology (unless ``unsafe=True``), compiles each P4
+        source, creates host namespaces and veth pairs, configures
+        addresses and impairment, launches BMv2 processes, opens
+        P4Runtime clients, and pushes pipeline configs. On failure,
+        rolls back via :meth:`_do_stop` before re-raising.
+
+        Raises:
+            NetworkAlreadyRunningError: if already running.
+        """
         if self._running:
             raise NetworkAlreadyRunningError("Network is already running")
         try:
@@ -131,6 +161,7 @@ class Network:
             raise
 
     def stop(self) -> None:
+        """Tear the network down. Idempotent — safe to call from any state."""
         self._do_stop()
 
     # Ping helpers -------------------------------------------------------

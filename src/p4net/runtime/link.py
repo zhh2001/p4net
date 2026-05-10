@@ -64,17 +64,21 @@ class VethPair:
 
     @property
     def name_a(self) -> str:
+        """Interface name on the ``a`` side of the pair."""
         return self._names["a"]
 
     @property
     def name_b(self) -> str:
+        """Interface name on the ``b`` side of the pair."""
         return self._names["b"]
 
     def name_of(self, side: Side) -> str:
+        """Return the interface name on ``side`` (``"a"`` or ``"b"``)."""
         _validate_side(side)
         return self._names[side]
 
     def namespace_of(self, side: Side) -> NetworkNamespace | None:
+        """Return the namespace ``side`` currently lives in (``None`` for root)."""
         _validate_side(side)
         return self._ns[side]
 
@@ -95,6 +99,12 @@ class VethPair:
         return int(results[0])
 
     def create(self) -> None:
+        """Create the kernel veth pair via netlink. Both ends start in root netns.
+
+        Raises:
+            LinkError: if either interface already exists or the pair has
+                already been created.
+        """
         if self._created:
             raise LinkError("veth pair already created")
         with IPRoute() as ipr:
@@ -112,6 +122,7 @@ class VethPair:
         logger.debug("created veth pair %r <-> %r", self._names["a"], self._names["b"])
 
     def destroy(self) -> None:
+        """Delete the veth pair (both ends, regardless of namespace)."""
         if not self._created:
             raise LinkError("veth pair has not been created (or already destroyed)")
         # Deleting either side deletes both ends. We delete from side 'a'.
@@ -128,6 +139,7 @@ class VethPair:
         logger.debug("destroyed veth pair %r <-> %r", self._names["a"], self._names["b"])
 
     def move_to_namespace(self, side: Side, ns: NetworkNamespace | None) -> None:
+        """Move ``side`` of the pair into ``ns`` (or back to root if ``None``)."""
         _validate_side(side)
         ifname = self._names[side]
         with self._netlink_for(side) as ipr:
@@ -146,9 +158,11 @@ class VethPair:
         logger.debug("moved %r to namespace %r", ifname, ns.name if ns is not None else "<root>")
 
     def set_up(self, side: Side) -> None:
+        """Bring ``side`` of the pair administratively up."""
         self._set_state(side, "up")
 
     def set_down(self, side: Side) -> None:
+        """Bring ``side`` of the pair administratively down."""
         self._set_state(side, "down")
 
     def _set_state(self, side: Side, state: str) -> None:
@@ -160,6 +174,7 @@ class VethPair:
         logger.debug("set %r %s", ifname, state)
 
     def set_address(self, side: Side, cidr: str) -> None:
+        """Assign an IPv4 CIDR (e.g. ``"10.0.0.1/24"``) to ``side``."""
         _validate_side(side)
         try:
             iface_addr = ipaddress.IPv4Interface(cidr)
@@ -210,6 +225,7 @@ class VethPair:
         logger.debug("assigned %s to %r", cidr, ifname)
 
     def set_mtu(self, side: Side, mtu: int) -> None:
+        """Set the MTU on ``side`` (clamped to ``[68, 65535]``)."""
         _validate_side(side)
         if not isinstance(mtu, int) or isinstance(mtu, bool):
             raise ValueError(f"MTU must be an int, got {type(mtu).__name__}")
@@ -222,6 +238,7 @@ class VethPair:
         logger.debug("set MTU of %r to %d", ifname, mtu)
 
     def set_mac(self, side: Side, mac: str) -> None:
+        """Override the MAC on ``side`` (canonical ``XX:XX:XX:XX:XX:XX``)."""
         _validate_side(side)
         if not isinstance(mac, str) or not _MAC_RE.match(mac):
             raise ValueError(f"invalid MAC address: {mac!r}")

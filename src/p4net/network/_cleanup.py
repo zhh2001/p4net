@@ -34,11 +34,13 @@ _LOCK = threading.Lock()
 
 
 def register(net: Network) -> None:
+    """Add ``net`` to the cleanup registry so atexit / signal handlers stop it."""
     with _LOCK:
         _ACTIVE.add(net)
 
 
 def unregister(net: Network) -> None:
+    """Remove ``net`` from the cleanup registry. Idempotent."""
     with _LOCK:
         _ACTIVE.discard(net)
 

@@ -1,7 +1,11 @@
 ---
-description: API reference for p4net.network — placeholder, expanded in commit 3 with mkdocstrings.
+description: API reference for p4net.network — Network orchestrator with full lifecycle and ping helpers.
 ---
 
 # `p4net.network`
 
-API reference forthcoming.
+::: p4net.network
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+      members: true

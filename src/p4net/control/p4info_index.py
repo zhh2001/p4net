@@ -74,49 +74,58 @@ class P4InfoIndex:
 
     @property
     def raw(self) -> Any:
+        """The underlying ``p4.config.v1.P4Info`` protobuf message."""
         return self._p4info
 
     @property
     def table_names(self) -> list[str]:
+        """Names of every table declared in the P4Info."""
         return list(self._tables_by_name)
 
     @property
     def action_names(self) -> list[str]:
+        """Names of every action declared in the P4Info."""
         return list(self._actions_by_name)
 
     # Lookup -------------------------------------------------------------
 
     def table_id(self, name: str) -> int:
+        """Return the numeric table ID for ``name``. Raises :class:`NoSuchTableError`."""
         t = self._tables_by_name.get(name)
         if t is None:
             raise NoSuchTableError(f"no table named {name!r}")
         return int(t.preamble.id)
 
     def action_id(self, name: str) -> int:
+        """Return the numeric action ID for ``name``. Raises :class:`NoSuchActionError`."""
         a = self._actions_by_name.get(name)
         if a is None:
             raise NoSuchActionError(f"no action named {name!r}")
         return int(a.preamble.id)
 
     def counter_id(self, name: str) -> int:
+        """Return the numeric counter ID for ``name``. Raises :class:`P4RuntimeError`."""
         c = self._counters_by_name.get(name)
         if c is None:
             raise P4RuntimeError(f"no counter named {name!r}")
         return int(c.preamble.id)
 
     def table_name(self, table_id: int) -> str:
+        """Inverse of :meth:`table_id`."""
         for t in self._tables_by_name.values():
             if t.preamble.id == table_id:
                 return str(t.preamble.name)
         raise NoSuchTableError(f"no table with id {table_id}")
 
     def action_name(self, action_id: int) -> str:
+        """Inverse of :meth:`action_id`."""
         for a in self._actions_by_name.values():
             if a.preamble.id == action_id:
                 return str(a.preamble.name)
         raise NoSuchActionError(f"no action with id {action_id}")
 
     def counter_name(self, counter_id: int) -> str:
+        """Inverse of :meth:`counter_id`."""
         for c in self._counters_by_name.values():
             if c.preamble.id == counter_id:
                 return str(c.preamble.name)
