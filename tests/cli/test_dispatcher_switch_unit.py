@@ -172,18 +172,14 @@ def test_table_add_without_match_raises(network: MagicMock) -> None:
 def test_table_add_unknown_section_raises(network: MagicMock) -> None:
     d = CommandDispatcher(network)
     with pytest.raises(CLIUsageError, match="unknown section marker"):
-        d.dispatch(
-            "s1 table add MyIngress.ipv4_lpm match: a=1 action: NoAction nope: bad"
-        )
+        d.dispatch("s1 table add MyIngress.ipv4_lpm match: a=1 action: NoAction nope: bad")
 
 
 def test_table_add_renders_client_error(network: MagicMock) -> None:
     sw = network.switches["s1"]
     sw.client.insert_table_entry = MagicMock(side_effect=RuntimeError("boom"))
     d = CommandDispatcher(network)
-    out = d.dispatch(
-        "s1 table add MyIngress.ipv4_lpm match: a=1 action: NoAction"
-    )
+    out = d.dispatch("s1 table add MyIngress.ipv4_lpm match: a=1 action: NoAction")
     assert "error:" in out
     assert "boom" in out
 
@@ -213,9 +209,7 @@ def test_table_del(network: MagicMock) -> None:
     sw = network.switches["s1"]
     sw.client.delete_table_entry = MagicMock(return_value=None)
     d = CommandDispatcher(network)
-    out = d.dispatch(
-        "s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.0/24"
-    )
+    out = d.dispatch("s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.0/24")
     assert out == "ok"
     args, _ = sw.client.delete_table_entry.call_args
     assert args[0] == "MyIngress.ipv4_lpm"
@@ -260,9 +254,7 @@ def test_counter_no_index_renders_table(network: MagicMock) -> None:
     from p4net.control import CounterData
 
     sw = network.switches["s1"]
-    sw.client.read_counter = MagicMock(
-        return_value={0: CounterData(1, 64), 5: CounterData(2, 128)}
-    )
+    sw.client.read_counter = MagicMock(return_value={0: CounterData(1, 64), 5: CounterData(2, 128)})
     d = CommandDispatcher(network)
     out = d.dispatch("s1 counter MyIngress.ingress_pkts")
     assert "index" in out
@@ -345,9 +337,7 @@ def test_mcast_del(network: MagicMock) -> None:
 
 def test_mcast_list(network: MagicMock) -> None:
     sw = network.switches["s1"]
-    sw.client.list_multicast_groups = MagicMock(
-        return_value={1: [1, 2, 3], 2: [4]}
-    )
+    sw.client.list_multicast_groups = MagicMock(return_value={1: [1, 2, 3], 2: [4]})
     d = CommandDispatcher(network)
     out = d.dispatch("s1 mcast list")
     assert "1: [1, 2, 3]" in out

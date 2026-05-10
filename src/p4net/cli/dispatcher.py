@@ -615,8 +615,7 @@ def _parse_sections(tokens: list[str], *, allowed: set[str]) -> dict[str, list[s
             name = tok[:-1]
             if name not in allowed:
                 raise CLIUsageError(
-                    f"unknown section marker {tok!r} "
-                    f"(expected one of: {sorted(allowed)})"
+                    f"unknown section marker {tok!r} (expected one of: {sorted(allowed)})"
                 )
             if name in sections:
                 raise CLIUsageError(f"section {name!r}: appears twice in command")

@@ -38,6 +38,9 @@ dev = [
   "pre-commit>=3",
 ]
 
+[project.scripts]
+p4net = "p4net.cli.main:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/p4net"]
 

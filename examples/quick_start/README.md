@@ -21,9 +21,25 @@ pip install -e '.[dev]'
 
 ## Run
 
+Two equivalent invocations — pick whichever fits your workflow.
+
+### As a self-contained script
+
 ```
 sudo python examples/quick_start/quick_start.py
 ```
+
+### Via the `p4net` console script
+
+```
+sudo p4net examples/quick_start/quick_start.py
+```
+
+The console script imports the file as a Python module, looks up the
+module-level `topology: Topology`, brings up the network, runs
+`setup(net)` (here: pre-seed static ARP), and drops you into the
+interactive shell. Add `--no-shell` to skip the shell and just hold the
+network up until SIGINT.
 
 Expected output (host names, switch name, then the ping matrix):
 

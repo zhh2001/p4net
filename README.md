@@ -52,7 +52,16 @@ static-ARP setup, lives in `examples/quick_start/`. Run it with:
 sudo python examples/quick_start/quick_start.py
 ```
 
-once `p4c` and `simple_switch_grpc` are installed.
+or, equivalently, with the `p4net` console script installed by
+`pip install -e .`:
+
+```
+sudo p4net examples/quick_start/quick_start.py
+```
+
+The console script loads any `.py` file that defines a module-level
+`topology: Topology` (and optionally `setup(net)`), brings up the
+network, and drops you into an interactive shell.
 
 ## License
 
