@@ -155,9 +155,9 @@ IPv6 时，使用 `<host> ping6`。
 
 ```
 p4net> h1 ping h2
-ok
+OK
 p4net> h1 ping 8.8.8.8 1 0.5
-fail
+FAIL
 ```
 
 ### `<host> ping6 <target> [count] [timeout]`
