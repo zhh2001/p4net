@@ -2,7 +2,7 @@
 
 A P4Runtime-native SDN simulation framework for BMv2.
 
-Status: Pre-alpha — under active development. APIs are unstable.
+Status: 0.1.0 — first public release. APIs are stable enough for lab use; expect refinement before 1.0.
 
 ## Features
 
@@ -24,7 +24,17 @@ Status: Pre-alpha — under active development. APIs are unstable.
 
 ## Installation
 
-Not yet published. Clone and `pip install -e '.[dev]'`.
+From a fresh checkout:
+
+```
+git clone https://github.com/zhh2001/p4net
+cd p4net
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e '.[dev]'
+```
+
+PyPI distribution may follow a future release.
 
 ## Quick Start
 
@@ -61,7 +71,23 @@ sudo p4net examples/quick_start/quick_start.py
 
 The console script loads any `.py` file that defines a module-level
 `topology: Topology` (and optionally `setup(net)`), brings up the
-network, and drops you into an interactive shell.
+network, and drops you into an interactive shell. If `sudo` strips your
+venv from `PATH`, run the binary explicitly: `sudo env "PATH=$PATH" p4net ...`.
+
+## Examples
+
+- [`examples/quick_start/`](examples/quick_start/) — minimal two-host
+  network using a hardcoded port-swap pipeline.
+- [`examples/l3_forwarding/`](examples/l3_forwarding/) — two hosts with
+  runtime-programmed `ipv4_lpm` forwarding and pre-seeded static ARP.
+
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — module layout and
+  design decisions.
+- [`docs/tutorial.md`](docs/tutorial.md) — walkthrough from a single
+  host up to a programmed two-host network.
+- [`docs/cli.md`](docs/cli.md) — CLI reference for the `p4net` shell.
 
 ## License
 

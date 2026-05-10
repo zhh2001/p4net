@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "p4net"
-version = "0.0.0"
+version = "0.1.0"
 description = "A P4Runtime-native SDN simulation framework for BMv2."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,7 +18,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Operating System :: POSIX :: Linux",
   "Topic :: System :: Networking",
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
 ]
 dependencies = [
   "pyroute2>=0.7.12",
@@ -37,6 +37,12 @@ dev = [
   "mypy>=1.10",
   "pre-commit>=3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zhh2001/p4net"
+Repository = "https://github.com/zhh2001/p4net"
+Issues = "https://github.com/zhh2001/p4net/issues"
+Changelog = "https://github.com/zhh2001/p4net/blob/main/CHANGELOG.md"
 
 [project.scripts]
 p4net = "p4net.cli.main:main"
