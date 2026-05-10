@@ -12,7 +12,7 @@ import contextlib
 import logging
 import queue
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -123,6 +123,9 @@ class P4RuntimeClient:
         self._connected = False
         self._closed = False
         self._index: P4InfoIndex | None = None
+        # Controller packet I/O. Handlers run on the stream-consumer thread.
+        self._packet_in_handlers: list[Callable[[bytes, dict[str, int]], None]] = []
+        self._packet_in_lock = threading.Lock()
 
     # Properties ---------------------------------------------------------
 
@@ -258,7 +261,9 @@ class P4RuntimeClient:
                 if resp.HasField("arbitration"):
                     self._arbitration = resp.arbitration
                     self._stream_event.set()
-                # Future: handle packet/digest/etc.
+                elif resp.HasField("packet"):
+                    self._dispatch_packet_in(resp.packet)
+                # Future: digest / idle-notification / etc.
         except grpc.RpcError as exc:
             if not self._closed:
                 self._stream_error = exc
@@ -267,6 +272,23 @@ class P4RuntimeClient:
             if not self._closed:
                 self._stream_error = exc
                 self._stream_event.set()
+
+    def _dispatch_packet_in(self, packet: Any) -> None:
+        """Decode a PacketIn and fan out to registered handlers."""
+        payload = bytes(packet.payload)
+        metadata: dict[str, int] = {}
+        if self._index is not None:
+            try:
+                metadata = self._index.decode_packet_in_metadata(packet.metadata)
+            except Exception as exc:
+                logger.debug("decode_packet_in_metadata raised: %r", exc)
+        with self._packet_in_lock:
+            handlers = list(self._packet_in_handlers)
+        for h in handlers:
+            try:
+                h(payload, metadata)
+            except Exception as exc:
+                logger.warning("packet_in handler %r raised: %r", h, exc)
 
     # Pipeline -----------------------------------------------------------
 
@@ -722,6 +744,84 @@ class P4RuntimeClient:
             return groups
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc) from exc
+
+    # Controller packet I/O ---------------------------------------------
+
+    def send_packet_out(
+        self,
+        payload: bytes,
+        metadata: Mapping[str, object] | None = None,
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        """Send a PacketOut over the StreamChannel.
+
+        ``payload`` is the full packet to inject — controller headers are
+        rebuilt from ``metadata`` per the loaded P4Info. PacketOut is
+        fire-and-forget in P4Runtime; this method does not wait for a switch
+        response. ``timeout`` is reserved for future flow-control limits and
+        currently only bounds the queue put.
+        """
+        self._require_connected()
+        idx = self._index
+        encoded = idx.encode_packet_out_metadata(metadata or {}) if idx is not None else []
+        if metadata and idx is None:
+            raise EncodingError(
+                "no pipeline is set; cannot encode packet_out metadata "
+                "(call set_pipeline_config or get_pipeline_config first)"
+            )
+        if not isinstance(payload, (bytes, bytearray)):
+            raise EncodingError(f"payload must be bytes-like, got {type(payload).__name__}")
+        req = p4runtime_pb2.StreamMessageRequest()
+        req.packet.payload = bytes(payload)
+        for pm in encoded:
+            req.packet.metadata.add().CopyFrom(pm)
+        out = self._outgoing
+        if out is None:
+            raise ConnectionError("client is not connected; outgoing queue is closed")
+        out.put(req, timeout=timeout)
+
+    def on_packet_in(
+        self,
+        handler: Callable[[bytes, dict[str, int]], None],
+    ) -> Callable[[], None]:
+        """Register a PacketIn handler. Returns a deregister function.
+
+        Handlers run on the StreamChannel consumer thread. Multiple handlers
+        are invoked in registration order; an exception from one is logged
+        and does not prevent later handlers from running. The returned
+        deregister function tolerates double-unregister silently.
+        """
+        with self._packet_in_lock:
+            self._packet_in_handlers.append(handler)
+
+        def deregister() -> None:
+            with self._packet_in_lock, contextlib.suppress(ValueError):
+                self._packet_in_handlers.remove(handler)
+
+        return deregister
+
+    def expect_packet_in(
+        self,
+        *,
+        timeout: float = 5.0,
+    ) -> tuple[bytes, dict[str, int]]:
+        """Block until the next PacketIn arrives. Raises ``P4RuntimeError`` on timeout."""
+        self._require_connected()
+        q: queue.Queue[tuple[bytes, dict[str, int]]] = queue.Queue(maxsize=1)
+
+        def _push(payload: bytes, meta: dict[str, int]) -> None:
+            with contextlib.suppress(queue.Full):
+                q.put_nowait((payload, meta))
+
+        deregister = self.on_packet_in(_push)
+        try:
+            try:
+                return q.get(timeout=timeout)
+            except queue.Empty as exc:
+                raise P4RuntimeError(f"no PacketIn within {timeout}s on {self._target!r}") from exc
+        finally:
+            deregister()
 
     # Internals ----------------------------------------------------------
 
