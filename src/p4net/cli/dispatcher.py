@@ -43,6 +43,10 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "Ping a target from a host.",
         "<host> ping <target> [count] [timeout]",
     ),
+    "<host> ping6": (
+        "Ping a target from a host using IPv6 explicitly.",
+        "<host> ping6 <target> [count] [timeout]",
+    ),
     "<host> cmd": (
         "Run a command inside a host's namespace.",
         "<host> cmd <argv ...>",
@@ -124,6 +128,7 @@ class CommandDispatcher:
         }
         self._host_handlers = {
             "ping": self._cmd_host_ping,
+            "ping6": self._cmd_host_ping6,
             "cmd": self._cmd_host_cmd,
             "ifconfig": self._cmd_host_ifconfig,
         }
@@ -220,20 +225,29 @@ class CommandDispatcher:
         hosts = self._network.hosts
         if not hosts:
             return "(no hosts)"
-        rows: list[tuple[str, str, str]] = []
+        rows: list[tuple[str, str, str, str]] = []
         for name, host in hosts.items():
-            ip = host.primary_ip or "-"
+            cidr4 = next((c for c in host.interfaces.values() if c), None) or "-"
+            cidr6 = (
+                next(
+                    (c for c in getattr(host, "interfaces6", {}).values() if c),
+                    None,
+                )
+                or "-"
+            )
             ifaces = ", ".join(host.interfaces) if host.interfaces else "-"
-            rows.append((name, ip, ifaces))
+            rows.append((name, cidr4, cidr6, ifaces))
         name_w = max(4, max(len(r[0]) for r in rows))
         ip_w = max(10, max(len(r[1]) for r in rows))
+        ip6_w = max(10, max(len(r[2]) for r in rows))
         header = bold(
-            f"{'name'.ljust(name_w)}  {'primary_ip'.ljust(ip_w)}  interfaces",
+            f"{'name'.ljust(name_w)}  {'primary_ip'.ljust(ip_w)}  "
+            f"{'primary_ip6'.ljust(ip6_w)}  interfaces",
             color=self._color,
         )
         lines = [header]
-        for name, ip, ifaces in rows:
-            lines.append(f"{name.ljust(name_w)}  {ip.ljust(ip_w)}  {ifaces}")
+        for name, ip, ip6, ifaces in rows:
+            lines.append(f"{name.ljust(name_w)}  {ip.ljust(ip_w)}  {ip6.ljust(ip6_w)}  {ifaces}")
         return "\n".join(lines)
 
     def _cmd_switches(self, tokens: list[str]) -> str:
@@ -296,6 +310,24 @@ class CommandDispatcher:
             ok = host.ping(target_host, count=count, timeout=timeout)
         else:
             ok = host.ping(target, count=count, timeout=timeout)
+        return "OK" if ok else "FAIL"
+
+    def _cmd_host_ping6(self, host_name: str, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError(f"{host_name} ping6: missing target")
+        target = tokens[0]
+        count, timeout = self._parse_count_timeout(tokens[1:], label=f"{host_name} ping6")
+        host = self._network.host(host_name)
+        # Same lookup rule as ping, but force the IPv6 path. If the target is
+        # a host name we resolve its primary_ip6.
+        target_host = self._network.hosts.get(target)
+        if target_host is not None:
+            ip6 = getattr(target_host, "primary_ip6", None)
+            if ip6 is None:
+                raise CLIUsageError(f"target {target!r}: no primary IPv6 configured")
+            ok = host.ping(ip6, count=count, timeout=timeout, force_ipv6=True)
+        else:
+            ok = host.ping(target, count=count, timeout=timeout, force_ipv6=True)
         return "OK" if ok else "FAIL"
 
     def _cmd_host_cmd(self, host_name: str, tokens: list[str]) -> str:

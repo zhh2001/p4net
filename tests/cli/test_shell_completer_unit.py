@@ -43,7 +43,7 @@ def test_completer_host_subverbs() -> None:
     h1 = completer.options["h1"]
     assert h1 is not None
     sub_keys = set(h1.options.keys())
-    assert sub_keys == {"ping", "cmd", "ifconfig"}
+    assert sub_keys == {"ping", "ping6", "cmd", "ifconfig"}
 
 
 def test_completer_switch_subverbs() -> None:

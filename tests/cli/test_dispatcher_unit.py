@@ -14,10 +14,19 @@ from p4net.cli.exceptions import CLIExit, CLIUsageError
 from p4net.network import Network
 
 
-def _make_host(name: str, primary_ip: str | None, ifaces: dict[str, str | None]) -> MagicMock:
+def _make_host(
+    name: str,
+    primary_ip: str | None,
+    ifaces: dict[str, str | None],
+    *,
+    primary_ip6: str | None = None,
+    ifaces6: dict[str, str | None] | None = None,
+) -> MagicMock:
     h = MagicMock(name=f"RunningHost-{name}")
     h.primary_ip = primary_ip
+    h.primary_ip6 = primary_ip6
     h.interfaces = ifaces
+    h.interfaces6 = ifaces6 or {}
     return h
 
 
@@ -160,12 +169,42 @@ def test_hosts_lists_each_host(two_host_network: MagicMock) -> None:
     assert "10.0.0.2" in out
     assert "h1-eth0" in out
     assert "h2-eth0" in out
+    # IPv6 column rendered with '-' for v4-only hosts.
+    assert "primary_ip6" in out
 
 
 def test_hosts_handles_no_hosts() -> None:
     d = CommandDispatcher(_make_network(hosts={}, switches={}))
     out = d.dispatch("hosts")
     assert "no hosts" in out
+
+
+def test_hosts_renders_dual_stack_and_v6_only() -> None:
+    h1 = _make_host(
+        "h1",
+        "10.0.0.1",
+        {"h1-eth0": "10.0.0.1/24"},
+        primary_ip6="fd00::1",
+        ifaces6={"h1-eth0": "fd00::1/64"},
+    )
+    h2 = _make_host(
+        "h2",
+        None,
+        {"h2-eth0": None},
+        primary_ip6="fd00::2",
+        ifaces6={"h2-eth0": "fd00::2/64"},
+    )
+    h3 = _make_host("h3", "10.0.0.3", {"h3-eth0": "10.0.0.3/24"})
+    d = CommandDispatcher(_make_network(hosts={"h1": h1, "h2": h2, "h3": h3}))
+    out = d.dispatch("hosts")
+    assert "fd00::1/64" in out
+    assert "fd00::2/64" in out
+    # h2 is v6-only; its v4 column shows '-'.
+    h2_line = next(line for line in out.splitlines() if line.startswith("h2 "))
+    assert " - " in h2_line
+    # h3 has no v6; its v6 column shows '-'.
+    h3_line = next(line for line in out.splitlines() if line.startswith("h3 "))
+    assert " - " in h3_line
 
 
 def test_switches_lists_each_switch(two_host_network: MagicMock) -> None:
@@ -260,6 +299,62 @@ def test_host_ping_target_without_primary_ip() -> None:
     d = CommandDispatcher(_make_network(hosts={"h1": h1, "h2": h2}))
     with pytest.raises(CLIUsageError, match="no primary IP"):
         d.dispatch("h1 ping h2")
+
+
+def test_host_ping6_with_literal_target() -> None:
+    h1 = _make_host(
+        "h1",
+        "10.0.0.1",
+        {"h1-eth0": "10.0.0.1/24"},
+        primary_ip6="fd00::1",
+        ifaces6={"h1-eth0": "fd00::1/64"},
+    )
+    h1.ping.return_value = True
+    d = CommandDispatcher(_make_network(hosts={"h1": h1}))
+    out = d.dispatch("h1 ping6 fd00::ff")
+    assert out == "OK"
+    args, kwargs = h1.ping.call_args
+    assert args[0] == "fd00::ff"
+    assert kwargs == {"count": 1, "timeout": 2.0, "force_ipv6": True}
+
+
+def test_host_ping6_resolves_host_to_ip6() -> None:
+    h1 = _make_host(
+        "h1",
+        "10.0.0.1",
+        {"h1-eth0": "10.0.0.1/24"},
+        primary_ip6="fd00::1",
+        ifaces6={"h1-eth0": "fd00::1/64"},
+    )
+    h2 = _make_host(
+        "h2",
+        "10.0.0.2",
+        {"h2-eth0": "10.0.0.2/24"},
+        primary_ip6="fd00::2",
+        ifaces6={"h2-eth0": "fd00::2/64"},
+    )
+    h1.ping.return_value = True
+    d = CommandDispatcher(_make_network(hosts={"h1": h1, "h2": h2}))
+    out = d.dispatch("h1 ping6 h2")
+    assert out == "OK"
+    args, kwargs = h1.ping.call_args
+    assert args[0] == "fd00::2"
+    assert kwargs["force_ipv6"] is True
+
+
+def test_host_ping6_missing_target() -> None:
+    h1 = _make_host("h1", "10.0.0.1", {"h1-eth0": "10.0.0.1/24"})
+    d = CommandDispatcher(_make_network(hosts={"h1": h1}))
+    with pytest.raises(CLIUsageError, match="missing target"):
+        d.dispatch("h1 ping6")
+
+
+def test_host_ping6_host_without_ip6() -> None:
+    h1 = _make_host("h1", "10.0.0.1", {"h1-eth0": "10.0.0.1/24"})
+    h2 = _make_host("h2", "10.0.0.2", {"h2-eth0": "10.0.0.2/24"})
+    d = CommandDispatcher(_make_network(hosts={"h1": h1, "h2": h2}))
+    with pytest.raises(CLIUsageError, match="no primary IPv6"):
+        d.dispatch("h1 ping6 h2")
 
 
 def test_host_cmd_renders_stdout(two_host_network: MagicMock) -> None:
