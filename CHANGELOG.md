@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `P4InfoIndex.packet_in_metadata_schema`,
   `packet_out_metadata_schema`, `encode_packet_out_metadata`,
   `decode_packet_in_metadata`.
+- IPv6 address support on host interfaces with `Host.ip6` and `Link` `ip6_a`/`ip6_b`.
+- IPv6 default routes via `Host.default_route6`.
+- Per-interface IPv6 sysctl gating: disabled by default unless `ip6` is set.
+- Asymmetric link impairment via per-direction `bandwidth_a_to_b`/`b_to_a`,
+  `delay_a_to_b`/`b_to_a`, `jitter_a_to_b`/`b_to_a`, `loss_pct_a_to_b`/`b_to_a`.
+- `RunningHost.ping` auto-selects IPv4 vs IPv6 based on target.
+- CLI `<host> ping6 <target>` for explicit IPv6 ping.
+- CLI `hosts` output now shows IPv6 addresses when present.
+- `dual_stack` and `asymmetric_link` examples.
 
 ## [0.1.0] - 2026-05-10
 
