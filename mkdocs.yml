@@ -9,6 +9,33 @@ edit_uri: edit/main/docs/
 docs_dir: docs
 site_dir: site
 
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+  - Concepts:
+    - Architecture: architecture.md
+  - Guides:
+    - Tutorial: tutorial.md
+    - Troubleshooting: troubleshooting.md
+  - Reference:
+    - CLI Reference: cli.md
+    - Glossary: glossary.md
+  - Examples:
+    - Overview: examples/index.md
+    - Quick Start (port swap): examples/quick-start.md
+    - L3 forwarding: examples/l3-forwarding.md
+    - CPU punt: examples/cpu-punt.md
+    - Dual stack: examples/dual-stack.md
+    - Asymmetric link: examples/asymmetric-link.md
+    - IPv6 LPM: examples/ipv6-lpm.md
+  - Development:
+    - Contributing: dev/contributing.md
+    - Releasing: dev/releasing.md
+    - Roadmap: roadmap.md
+    - Changelog: changelog.md
+
 theme:
   name: material
   language: en
