@@ -69,6 +69,11 @@ def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
     # apply_netem
     apply_netem = mocker.patch("p4net.network.orchestrator.apply_netem")
 
+    # IPv6 sysctl helpers (no-op so the orchestrator's per-iface IPv6 gate
+    # doesn't try to run real sysctl through a mocked NetworkNamespace).
+    enable_ipv6_mock = mocker.patch("p4net.network.orchestrator.enable_ipv6")
+    disable_ipv6_mock = mocker.patch("p4net.network.orchestrator.disable_ipv6")
+
     # P4Compiler
     compiler_factory = mocker.patch("p4net.network.orchestrator.P4Compiler")
     compiler = MagicMock(name="P4Compiler")
@@ -115,6 +120,8 @@ def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
         "veth_factory": veth_factory,
         "veths": veth_instances,
         "apply_netem": apply_netem,
+        "enable_ipv6": enable_ipv6_mock,
+        "disable_ipv6": disable_ipv6_mock,
         "compiler": compiler,
         "bmv2_factory": bmv2_factory,
         "bmv2s": bmv2_instances,
@@ -529,7 +536,7 @@ def test_ping_resolves_host_names(patched: dict[str, Any], tmp_path: Path) -> No
         ok = net.ping("h1", "h2", count=2, timeout=1.0)
         assert ok is True
         argv = h1.namespace.exec.call_args.args[0]
-        assert argv[:5] == ["ping", "-c", "2", "-W", "1"]
+        assert argv[:6] == ["ping", "-4", "-c", "2", "-W", "1"]
         assert argv[-1] == h2.primary_ip
     finally:
         net.stop()
@@ -601,5 +608,151 @@ def test_pingall_skips_hosts_without_primary_ip(patched: dict[str, Any], tmp_pat
         result = net.pingall()
         # h2 has no primary_ip, so no pings involving h2 should be issued.
         assert result == {}
+    finally:
+        net.stop()
+
+
+# ---------------------------------------------------------------------------
+# IPv6 + asymmetric netem (phase 12)
+# ---------------------------------------------------------------------------
+
+
+def _make_v4_only_topology() -> Topology:
+    t = Topology()
+    t.add_host("h1", ip="10.0.0.1/24")
+    t.add_switch("s1", p4_src=Path("p.p4"))
+    t.add_link("h1", "s1", port_b=1)
+    return t
+
+
+def _make_v6_only_topology() -> Topology:
+    t = Topology()
+    t.add_host("h1", ip6="fd00::1/64")
+    t.add_switch("s1", p4_src=Path("p.p4"))
+    t.add_link("h1", "s1", port_b=1)
+    return t
+
+
+def _make_dual_stack_topology() -> Topology:
+    t = Topology()
+    t.add_host("h1", ip="10.0.0.1/24", ip6="fd00::1/64")
+    t.add_switch("s1", p4_src=Path("p.p4"))
+    t.add_link("h1", "s1", port_b=1)
+    return t
+
+
+def test_ipv4_only_host_disables_ipv6_on_host_iface(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_v4_only_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        host_calls = [c for c in patched["disable_ipv6"].call_args_list if c.args[0] is not None]
+        # The h1-side iface gets disable_ipv6 invoked.
+        assert any(c.args[1] == "h1-eth0" for c in host_calls)
+        # enable_ipv6 NOT called on the host iface.
+        for c in patched["enable_ipv6"].call_args_list:
+            assert c.args[1] != "h1-eth0"
+    finally:
+        net.stop()
+
+
+def test_ipv6_only_host_enables_ipv6_on_host_iface(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_v6_only_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        # enable_ipv6 called for h1-eth0 inside h1's namespace.
+        assert any(
+            c.args[1] == "h1-eth0" and c.args[0] is not None
+            for c in patched["enable_ipv6"].call_args_list
+        )
+        # IP6 was assigned via the host-side `ip -6 addr add` path.
+        h1_ns = net._namespaces["h1"]  # type: ignore[attr-defined]
+        argvs = [c.args[0] for c in h1_ns.exec.call_args_list]
+        assert any(argv[:3] == ["ip", "-6", "addr"] and "fd00::1/64" in argv for argv in argvs)
+    finally:
+        net.stop()
+
+
+def test_dual_stack_host_runs_both_paths(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_dual_stack_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        # enable_ipv6 was called for the host iface.
+        assert any(
+            c.args[1] == "h1-eth0" and c.args[0] is not None
+            for c in patched["enable_ipv6"].call_args_list
+        )
+        h1_ns = net._namespaces["h1"]  # type: ignore[attr-defined]
+        argvs = [c.args[0] for c in h1_ns.exec.call_args_list]
+        # IPv4 and IPv6 both assigned.
+        assert any(argv[:3] == ["ip", "addr", "add"] and "10.0.0.1/24" in argv for argv in argvs)
+        assert any(argv[:3] == ["ip", "-6", "addr"] and "fd00::1/64" in argv for argv in argvs)
+    finally:
+        net.stop()
+
+
+def test_switch_iface_disables_ipv6(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_v4_only_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        # disable_ipv6 called with ns=None for the switch-side iface (s1-eth1).
+        root_calls = [c for c in patched["disable_ipv6"].call_args_list if c.args[0] is None]
+        assert any(c.args[1] == "s1-eth1" for c in root_calls)
+    finally:
+        net.stop()
+
+
+def test_default_route6_is_added(patched: dict[str, Any], tmp_path: Path) -> None:
+    t = Topology()
+    t.add_host("h1", ip6="fd00::2/64", default_route6="fd00::1")
+    t.add_switch("s1", p4_src=Path("p.p4"))
+    t.add_link("h1", "s1", port_b=1)
+    net = Network(t, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        h1_ns = net._namespaces["h1"]  # type: ignore[attr-defined]
+        argvs = [c.args[0] for c in h1_ns.exec.call_args_list]
+        assert ["ip", "-6", "route", "add", "default", "via", "fd00::1"] in argvs
+    finally:
+        net.stop()
+
+
+def test_asymmetric_loss_only_a_to_b(patched: dict[str, Any], tmp_path: Path) -> None:
+    t = Topology()
+    t.add_host("h1", ip="10.0.0.1/24")
+    t.add_switch("s1", p4_src=Path("p.p4"))
+    t.add_link("h1", "s1", port_b=1, loss_pct_a_to_b=100.0)
+    net = Network(t, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        # apply_netem called once: on the a-side (h1-eth0) with loss_pct=100.0.
+        calls = patched["apply_netem"].call_args_list
+        assert len(calls) == 1
+        # ns positional arg is the host's namespace; iface is h1-eth0.
+        assert calls[0].args[1] == "h1-eth0"
+        assert calls[0].kwargs["loss_pct"] == 100.0
+    finally:
+        net.stop()
+
+
+def test_symmetric_bandwidth_with_asymmetric_delay_a_to_b(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    t = Topology()
+    t.add_host("h1", ip="10.0.0.1/24")
+    t.add_switch("s1", p4_src=Path("p.p4"))
+    t.add_link("h1", "s1", port_b=1, bandwidth="10mbit", delay_a_to_b="5ms")
+    net = Network(t, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        calls = patched["apply_netem"].call_args_list
+        # Two calls: a-side (h1-eth0) with rate+delay, b-side (s1-eth1) with rate only.
+        assert len(calls) == 2
+        ifaces = {c.args[1]: c.kwargs for c in calls}
+        assert ifaces["h1-eth0"]["rate"] == "10mbit"
+        assert ifaces["h1-eth0"]["delay"] == "5ms"
+        assert ifaces["s1-eth1"]["rate"] == "10mbit"
+        assert ifaces["s1-eth1"]["delay"] is None
     finally:
         net.stop()

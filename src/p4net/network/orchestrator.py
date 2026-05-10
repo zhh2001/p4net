@@ -37,6 +37,8 @@ from p4net.runtime import (
     NetworkNamespace,
     VethPair,
     apply_netem,
+    disable_ipv6,
+    enable_ipv6,
 )
 from p4net.topo import Host, Link, Topology
 
@@ -74,6 +76,7 @@ class Network:
         self._running_hosts: dict[str, RunningHost] = {}
         self._running_switches: dict[str, RunningSwitch] = {}
         self._host_iface_ip: dict[str, dict[str, str | None]] = {}
+        self._host_iface_ip6: dict[str, dict[str, str | None]] = {}
 
     # Read-only views ----------------------------------------------------
 
@@ -208,6 +211,7 @@ class Network:
         first_link_seen: set[str] = set()
         for h_name in self._topology.hosts:
             self._host_iface_ip[h_name] = {}
+            self._host_iface_ip6[h_name] = {}
         for link in self._topology.links:
             self._wire_link(link, first_link_seen)
 
@@ -216,6 +220,10 @@ class Network:
             if host.default_route:
                 self._namespaces[h_name].exec(
                     ["ip", "route", "add", "default", "via", host.default_route]
+                )
+            if host.default_route6:
+                self._namespaces[h_name].exec(
+                    ["ip", "-6", "route", "add", "default", "via", host.default_route6]
                 )
 
         # 9. BMv2 switches
@@ -261,6 +269,7 @@ class Network:
                 host,
                 self._namespaces[h_name],
                 self._host_iface_ip[h_name],
+                self._host_iface_ip6[h_name],
             )
         for sw_name, sw in self._topology.switches.items():
             self._running_switches[sw_name] = RunningSwitch(
@@ -295,26 +304,44 @@ class Network:
             node = self._topology.node(ep.node)
             assert ep.iface_name is not None
             ip_to_use: str | None = None
+            ip6_to_use: str | None = None
             mac_to_use: str | None = None
             if isinstance(node, Host):
                 if ep.ip is not None:
                     ip_to_use = ep.ip
                 elif node.ip is not None and node.name not in first_link_seen:
                     ip_to_use = node.ip
+                if ep.ip6 is not None:
+                    ip6_to_use = ep.ip6
+                elif node.ip6 is not None and node.name not in first_link_seen:
+                    ip6_to_use = node.ip6
                 if ep.mac is not None:
                     mac_to_use = ep.mac
                 elif node.mac is not None and node.name not in first_link_seen:
                     mac_to_use = node.mac
                 first_link_seen.add(node.name)
                 self._host_iface_ip[node.name][ep.iface_name] = ip_to_use
+                self._host_iface_ip6[node.name][ep.iface_name] = ip6_to_use
+                # Gate IPv6 BEFORE bringing the iface up so the kernel does not
+                # auto-configure a link-local address we don't want.
+                ns = self._namespaces[node.name]
+                if ip6_to_use is not None:
+                    enable_ipv6(ns, ep.iface_name)
+                else:
+                    disable_ipv6(ns, ep.iface_name)
                 self._configure_host_iface(
-                    self._namespaces[node.name],
+                    ns,
                     ep.iface_name,
                     ip=ip_to_use,
+                    ip6=ip6_to_use,
                     mac=mac_to_use,
                     mtu=link.mtu,
                 )
             else:
+                # Switch endpoint lives in the root namespace. Suppress its
+                # IPv6 link-local so MLD chatter doesn't leak into PCAPs or
+                # the CPU-punt stream.
+                disable_ipv6(None, ep.iface_name)
                 if ep.mac is not None:
                     mac_to_use = ep.mac
                 if mac_to_use is not None:
@@ -323,20 +350,52 @@ class Network:
                     veth.set_mtu(side, link.mtu)  # type: ignore[arg-type]
                 veth.set_up(side)  # type: ignore[arg-type]
 
-        # Apply netem impairment on both sides (symmetric shaping).
-        if any(x is not None for x in (link.bandwidth, link.delay, link.jitter, link.loss_pct)):
-            for ep in (link.a, link.b):
-                node = self._topology.node(ep.node)
-                ns = self._namespaces[node.name] if isinstance(node, Host) else None
-                assert ep.iface_name is not None
-                apply_netem(
-                    ns,
-                    ep.iface_name,
-                    rate=link.bandwidth,
-                    delay=link.delay,
-                    jitter=link.jitter,
-                    loss_pct=link.loss_pct,
-                )
+        # Apply per-direction netem. The veth side at endpoint a shapes the
+        # a→b direction (egress at a == arrives at b); same for b→a at b.
+        a_rate, a_delay, a_jitter, a_loss = self._direction_params(link, "a_to_b")
+        if any(v is not None for v in (a_rate, a_delay, a_jitter, a_loss)):
+            node_a = self._topology.node(link.a.node)
+            ns_a = self._namespaces[node_a.name] if isinstance(node_a, Host) else None
+            assert link.a.iface_name is not None
+            apply_netem(
+                ns_a,
+                link.a.iface_name,
+                rate=a_rate,
+                delay=a_delay,
+                jitter=a_jitter,
+                loss_pct=a_loss,
+            )
+        b_rate, b_delay, b_jitter, b_loss = self._direction_params(link, "b_to_a")
+        if any(v is not None for v in (b_rate, b_delay, b_jitter, b_loss)):
+            node_b = self._topology.node(link.b.node)
+            ns_b = self._namespaces[node_b.name] if isinstance(node_b, Host) else None
+            assert link.b.iface_name is not None
+            apply_netem(
+                ns_b,
+                link.b.iface_name,
+                rate=b_rate,
+                delay=b_delay,
+                jitter=b_jitter,
+                loss_pct=b_loss,
+            )
+
+    @staticmethod
+    def _direction_params(
+        link: Link,
+        direction: str,
+    ) -> tuple[str | None, str | None, str | None, float | None]:
+        """Return ``(rate, delay, jitter, loss_pct)`` netem args for one direction.
+
+        Each element falls back to the symmetric value if the matching
+        ``*_a_to_b`` / ``*_b_to_a`` field is unset.
+        """
+        suffix = "_a_to_b" if direction == "a_to_b" else "_b_to_a"
+        rate: str | None = getattr(link, "bandwidth" + suffix) or link.bandwidth
+        delay: str | None = getattr(link, "delay" + suffix) or link.delay
+        jitter: str | None = getattr(link, "jitter" + suffix) or link.jitter
+        asym_loss: float | None = getattr(link, "loss_pct" + suffix)
+        loss: float | None = asym_loss if asym_loss is not None else link.loss_pct
+        return rate, delay, jitter, loss
 
     @staticmethod
     def _configure_host_iface(
@@ -344,6 +403,7 @@ class Network:
         iface: str,
         *,
         ip: str | None,
+        ip6: str | None,
         mac: str | None,
         mtu: int | None,
     ) -> None:
@@ -353,6 +413,8 @@ class Network:
             ns.exec(["ip", "link", "set", iface, "mtu", str(mtu)])
         if ip is not None:
             ns.exec(["ip", "addr", "add", ip, "dev", iface])
+        if ip6 is not None:
+            ns.exec(["ip", "-6", "addr", "add", ip6, "dev", iface])
         ns.exec(["ip", "link", "set", iface, "up"])
 
     def _port_to_iface_for(self, switch_name: str) -> dict[int, str]:
@@ -408,6 +470,7 @@ class Network:
         self._running_switches.clear()
         self._compile_results.clear()
         self._host_iface_ip.clear()
+        self._host_iface_ip6.clear()
         self._running = False
 
     # Context manager ----------------------------------------------------

@@ -71,8 +71,9 @@ def test_running_host_ping_string_returns_true_on_zero_rc() -> None:
     )
     assert rh.ping("10.0.0.2", count=1, timeout=2.0) is True
     argv = rh.namespace.exec.call_args.args[0]
-    # `-w` (overall deadline) is appended so ping doesn't hang under heavy loss.
-    assert argv[:5] == ["ping", "-c", "1", "-W", "2"]
+    # `-4` selects IPv4 explicitly. `-w` (overall deadline) is appended so
+    # ping doesn't hang under heavy loss.
+    assert argv[:6] == ["ping", "-4", "-c", "1", "-W", "2"]
     assert "-w" in argv
     assert argv[-1] == "10.0.0.2"
 

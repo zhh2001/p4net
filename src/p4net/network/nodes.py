@@ -33,10 +33,12 @@ class RunningHost:
         host: Host,
         namespace: NetworkNamespace,
         interfaces: Mapping[str, str | None],
+        interfaces6: Mapping[str, str | None] | None = None,
     ) -> None:
         self._host = host
         self._namespace = namespace
         self._interfaces: dict[str, str | None] = dict(interfaces)
+        self._interfaces6: dict[str, str | None] = dict(interfaces6 or {})
 
     @property
     def name(self) -> str:
@@ -55,9 +57,21 @@ class RunningHost:
         return self._interfaces
 
     @property
+    def interfaces6(self) -> Mapping[str, str | None]:
+        return self._interfaces6
+
+    @property
     def primary_ip(self) -> str | None:
-        """Address of the first configured interface (without /mask), or None."""
+        """Address of the first configured IPv4 interface (without /mask), or None."""
         for cidr in self._interfaces.values():
+            if cidr:
+                return _strip_mask(cidr)
+        return None
+
+    @property
+    def primary_ip6(self) -> str | None:
+        """Address of the first configured IPv6 interface (without /mask), or None."""
+        for cidr in self._interfaces6.values():
             if cidr:
                 return _strip_mask(cidr)
         return None
@@ -96,14 +110,25 @@ class RunningHost:
         *,
         count: int = 1,
         timeout: float = 2.0,
+        force_ipv6: bool = False,
     ) -> bool:
-        """Run `ping -c <count> -W <int(timeout)>` and return whether it succeeded."""
+        """Run ``ping`` and return whether at least one reply arrived.
+
+        Auto-selects IPv4 vs IPv6 based on the target string (``:`` → IPv6),
+        or pass ``force_ipv6=True`` to force the IPv6 path. When ``dst`` is a
+        :class:`RunningHost`, the IPv4 primary is preferred (least surprise
+        for existing callers); pass ``force_ipv6=True`` plus a string target
+        if you need IPv6 explicitly.
+        """
         if isinstance(dst, RunningHost):
-            target = dst.primary_ip
+            target = dst.primary_ip if not force_ipv6 else dst.primary_ip6
+            if target is None and not force_ipv6:
+                target = dst.primary_ip6  # v4-less host falls through to v6
             if target is None:
                 raise NetworkError(f"cannot ping host {dst.name!r}: no primary IP configured")
         else:
             target = dst
+        is_v6 = force_ipv6 or ":" in target
         # `-W` is a per-reply timeout. `-w` enforces an overall deadline so
         # the command terminates even when every echo request goes unanswered
         # (e.g. under 100%-loss netem); without it iputils-ping can hang
@@ -112,6 +137,7 @@ class RunningHost:
         result = self._namespace.exec(
             [
                 "ping",
+                "-6" if is_v6 else "-4",
                 "-c",
                 str(int(count)),
                 "-W",
