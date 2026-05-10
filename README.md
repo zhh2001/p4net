@@ -93,6 +93,7 @@ venv from `PATH`, run the binary explicitly: `sudo env "PATH=$PATH" p4net ...`.
 - [`docs/tutorial.md`](docs/tutorial.md) — walkthrough from a single
   host up to a programmed two-host network.
 - [`docs/cli.md`](docs/cli.md) — CLI reference for the `p4net` shell.
+- [Roadmap](docs/roadmap.md)
 
 ## License
 
