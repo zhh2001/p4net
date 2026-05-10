@@ -50,7 +50,7 @@ Coverage targets (from the same combined run):
 - `p4net.network` ≥ 85%
 - `p4net.cli` ≥ 85%
 
-Compliance grep must be clean (no AI/LLM/tool attribution anywhere).
+Compliance grep must be clean (no third-party authorship attribution anywhere).
 
 ## Version bump
 

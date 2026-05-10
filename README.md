@@ -1,6 +1,7 @@
 # p4net
 
 [![CI](https://github.com/zhh2001/p4net/actions/workflows/ci.yml/badge.svg)](https://github.com/zhh2001/p4net/actions/workflows/ci.yml)
+[![Documentation](https://img.shields.io/badge/docs-zhh2001.github.io%2Fp4net-blue)](https://zhh2001.github.io/p4net/)
 [![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](#)
@@ -101,13 +102,16 @@ venv from `PATH`, run the binary explicitly: `sudo env "PATH=$PATH" p4net ...`.
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md) — module layout and
-  design decisions.
-- [`docs/tutorial.md`](docs/tutorial.md) — walkthrough from a single
-  host up to a programmed two-host network.
-- [`docs/cli.md`](docs/cli.md) — CLI reference for the `p4net` shell.
-- [`docs/releasing.md`](docs/releasing.md) — release runbook.
-- [`docs/roadmap.md`](docs/roadmap.md) — released milestones and what's next.
+**Full documentation: <https://zhh2001.github.io/p4net/>**
+
+The English site is the authoritative reference; a Chinese translation
+layer is being added incrementally. Pages on the site cover
+installation, a tutorial, an architecture overview, the CLI reference,
+the auto-generated API reference, troubleshooting, a glossary, and
+per-example walk-throughs.
+
+The source for these pages lives under [`docs/`](docs/) and is built
+with MkDocs Material.
 
 ## License
 
