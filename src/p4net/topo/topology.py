@@ -408,6 +408,82 @@ class Topology:
                 + "\n  - ".join(errors)
             )
 
+    def to_graphviz(self, *, layout: str = "LR") -> str:
+        """Render the topology as a Graphviz DOT graph string.
+
+        Hosts are ellipses labelled with name and primary IP(s); switches are
+        boxes labelled with name and gRPC port. Edges are drawn with
+        ``arrowhead=none`` to keep the rendering version-stable across
+        graphviz releases. ``layout`` controls ``rankdir`` and must be one
+        of ``"LR"``, ``"RL"``, ``"TB"``, ``"BT"``.
+        """
+        if layout not in {"LR", "RL", "TB", "BT"}:
+            raise TopologyError(f"layout {layout!r} must be one of 'LR', 'RL', 'TB', 'BT'")
+        lines: list[str] = ["digraph p4net {"]
+        lines.append(f"  rankdir={layout};")
+        lines.append('  node [fontname="monospace"];')
+        for host in self._hosts.values():
+            label_parts = [host.name]
+            if host.ip is not None:
+                label_parts.append(host.ip)
+            if host.ip6 is not None:
+                label_parts.append(host.ip6)
+            label = "\\n".join(label_parts)
+            lines.append(f'  "{host.name}" [shape=ellipse, label="{label}"];')
+        for sw in self._switches.values():
+            label_parts = [sw.name]
+            if sw.grpc_port is not None:
+                label_parts.append(f"grpc :{sw.grpc_port}")
+            label = "\\n".join(label_parts)
+            lines.append(f'  "{sw.name}" [shape=box, label="{label}"];')
+        for link in self._links:
+            lines.append(f'  "{link.a.node}" -> "{link.b.node}" [arrowhead=none];')
+        lines.append("}")
+        return "\n".join(lines) + "\n"
+
+    def render_graphviz(
+        self,
+        output_path: Path,
+        *,
+        layout: str = "LR",
+        format: str = "png",
+    ) -> None:
+        """Render via the system ``dot`` binary to ``output_path``.
+
+        ``format`` is forwarded to ``dot -T<format>`` (png, svg, pdf, dot).
+        For ``format="dot"`` the source is written verbatim and ``dot`` is
+        not invoked, so this path works without graphviz installed.
+        Raises :class:`TopologyError` if ``dot`` is missing or the render
+        fails.
+        """
+        import shutil
+        import subprocess
+
+        source = self.to_graphviz(layout=layout)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if format == "dot":
+            output_path.write_text(source)
+            return
+        dot_bin = shutil.which("dot")
+        if dot_bin is None:
+            raise TopologyError(
+                "graphviz `dot` binary not found on PATH; "
+                "install graphviz or use format='dot' to write the source file directly"
+            )
+        try:
+            subprocess.run(
+                [dot_bin, f"-T{format}", "-o", str(output_path)],
+                input=source.encode("utf-8"),
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or b"").decode("utf-8", errors="replace")
+            raise TopologyError(
+                f"`dot -T{format}` failed (rc={exc.returncode}): {stderr.strip()}"
+            ) from exc
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "hosts": {name: _host_to_dict(host) for name, host in self._hosts.items()},

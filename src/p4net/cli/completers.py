@@ -15,12 +15,14 @@ def build_network_completer(dispatcher: CommandDispatcher) -> NestedCompleter:
     nested: dict[str, dict[str, None] | None] = {}
     for cmd in dispatcher.command_names:
         nested[cmd] = None
-    # Host commands: <host> [ping|ping6|cmd|ifconfig]
+    # `topology` has one sub-verb so far: `graph`.
+    if "topology" in nested:
+        nested["topology"] = {"graph": None}
+    # Host commands: <host> [ping|ping6|cmd|ifconfig|xterm]
     host_subs = _host_subcommands_for(dispatcher)
     for name in dispatcher.host_names:
         nested[name] = dict.fromkeys(host_subs, None)
-    # Switch commands. The full set lands in commit 3; here we wire enough
-    # so the completer at least offers the verbs it knows about now.
+    # Switch commands.
     for name in dispatcher.switch_names:
         nested[name] = dict.fromkeys(_switch_subcommands_for(dispatcher), None)
     return NestedCompleter.from_nested_dict(nested)

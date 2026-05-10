@@ -43,6 +43,10 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "IPv6 ping every pair of v6-equipped hosts; print a result matrix.",
         "pingall6 [count] [timeout]",
     ),
+    "topology graph": (
+        "Render the topology as a Graphviz DOT graph (or to PNG/SVG/PDF).",
+        "topology graph [path] [layout=LR|TB|BT|RL] [format=png|svg|pdf|dot]",
+    ),
     "<host> ping": (
         "Ping a target from a host.",
         "<host> ping <target> [count] [timeout]",
@@ -134,6 +138,7 @@ class CommandDispatcher:
             "switches": self._cmd_switches,
             "pingall": self._cmd_pingall,
             "pingall6": self._cmd_pingall6,
+            "topology": self._cmd_topology,
         }
         self._host_handlers = {
             "ping": self._cmd_host_ping,
@@ -290,14 +295,50 @@ class CommandDispatcher:
     def _cmd_pingall6(self, tokens: list[str]) -> str:
         count, timeout = self._parse_count_timeout(tokens, label="pingall6")
         eligible = [
-            name
-            for name, host in self._network.hosts.items()
-            if getattr(host, "primary_ip6", None)
+            name for name, host in self._network.hosts.items() if getattr(host, "primary_ip6", None)
         ]
         if not eligible:
             return "(no IPv6-equipped hosts in topology)"
         result = self._network.pingall6(count=count, timeout=timeout)
         return render_pingall_matrix(eligible, result, color=self._color)
+
+    def _cmd_topology(self, tokens: list[str]) -> str:
+        if not tokens:
+            raise CLIUsageError("topology: missing sub-verb (try 'topology graph')")
+        sub, rest = tokens[0], tokens[1:]
+        if sub == "graph":
+            return self._cmd_topology_graph(rest)
+        raise CLIUsageError(f"topology: unknown sub-verb {sub!r} (expected 'graph')")
+
+    def _cmd_topology_graph(self, tokens: list[str]) -> str:
+        from pathlib import Path as _Path
+
+        # Parse: optional positional path + k=v options.
+        path: _Path | None = None
+        kvs: dict[str, str] = {}
+        for tok in tokens:
+            if "=" in tok:
+                k, _, v = tok.partition("=")
+                kvs[k] = v
+            elif path is None:
+                path = _Path(tok)
+            else:
+                raise CLIUsageError(f"topology graph: unexpected token {tok!r} after path {path!s}")
+        for k in kvs:
+            if k not in ("layout", "format"):
+                raise CLIUsageError(
+                    f"topology graph: unknown option {k!r} (expected layout=, format=)"
+                )
+        layout = kvs.get("layout", "LR")
+        fmt = kvs.get("format", "png")
+        topo = self._network.topology
+        if path is None:
+            return topo.to_graphviz(layout=layout)
+        try:
+            topo.render_graphviz(path, layout=layout, format=fmt)
+        except Exception as exc:
+            return f"error: {type(exc).__name__}: {exc}"
+        return str(path.resolve())
 
     # ------------------------------------------------------------------
     # Internal: host commands

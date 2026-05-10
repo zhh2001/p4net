@@ -544,3 +544,75 @@ def test_host_xterm_rejects_arguments(two_host_network: MagicMock) -> None:
     d = CommandDispatcher(two_host_network)
     with pytest.raises(CLIUsageError, match="takes no arguments"):
         d.dispatch("h1 xterm extra")
+
+
+# ---------------------------------------------------------------------------
+# topology graph (phase 13)
+# ---------------------------------------------------------------------------
+
+
+def test_topology_graph_no_path_prints_dot(two_host_network: MagicMock) -> None:
+    fake_topo = MagicMock()
+    fake_topo.to_graphviz = MagicMock(return_value="digraph p4net {\n}\n")
+    two_host_network.topology = fake_topo
+    d = CommandDispatcher(two_host_network)
+    out = d.dispatch("topology graph")
+    fake_topo.to_graphviz.assert_called_once_with(layout="LR")
+    assert out.startswith("digraph p4net")
+
+
+def test_topology_graph_format_dot_writes_file(two_host_network: MagicMock, tmp_path: Path) -> None:
+    fake_topo = MagicMock()
+    two_host_network.topology = fake_topo
+    out_path = tmp_path / "g.dot"
+    d = CommandDispatcher(two_host_network)
+    out = d.dispatch(f"topology graph {out_path} format=dot")
+    fake_topo.render_graphviz.assert_called_once_with(out_path, layout="LR", format="dot")
+    assert out == str(out_path.resolve())
+
+
+def test_topology_graph_default_format_is_png(two_host_network: MagicMock, tmp_path: Path) -> None:
+    fake_topo = MagicMock()
+    two_host_network.topology = fake_topo
+    out_path = tmp_path / "g.png"
+    d = CommandDispatcher(two_host_network)
+    d.dispatch(f"topology graph {out_path}")
+    fake_topo.render_graphviz.assert_called_once_with(out_path, layout="LR", format="png")
+
+
+def test_topology_graph_layout_kwarg(two_host_network: MagicMock) -> None:
+    fake_topo = MagicMock()
+    fake_topo.to_graphviz = MagicMock(return_value="digraph p4net {\n}\n")
+    two_host_network.topology = fake_topo
+    d = CommandDispatcher(two_host_network)
+    d.dispatch("topology graph layout=TB")
+    fake_topo.to_graphviz.assert_called_once_with(layout="TB")
+
+
+def test_topology_graph_unknown_option(two_host_network: MagicMock) -> None:
+    d = CommandDispatcher(two_host_network)
+    with pytest.raises(CLIUsageError, match="unknown option"):
+        d.dispatch("topology graph nope=42")
+
+
+def test_topology_graph_render_failure_renders_error(
+    two_host_network: MagicMock, tmp_path: Path
+) -> None:
+    fake_topo = MagicMock()
+    fake_topo.render_graphviz = MagicMock(side_effect=RuntimeError("dot died"))
+    two_host_network.topology = fake_topo
+    d = CommandDispatcher(two_host_network)
+    out = d.dispatch(f"topology graph {tmp_path / 'g.png'}")
+    assert out.startswith("error: RuntimeError:")
+
+
+def test_topology_unknown_subverb(two_host_network: MagicMock) -> None:
+    d = CommandDispatcher(two_host_network)
+    with pytest.raises(CLIUsageError, match="unknown sub-verb"):
+        d.dispatch("topology bogus")
+
+
+def test_topology_missing_subverb(two_host_network: MagicMock) -> None:
+    d = CommandDispatcher(two_host_network)
+    with pytest.raises(CLIUsageError, match="missing sub-verb"):
+        d.dispatch("topology")

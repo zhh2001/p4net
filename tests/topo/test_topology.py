@@ -558,3 +558,102 @@ def test_links_property_returns_immutable_view() -> None:
     # Mutating the snapshot must not affect the topology.
     assert isinstance(snapshot, tuple)
     assert len(snapshot) == 1
+
+
+# ---------------------------------------------------------------------------
+# Graphviz (phase 13)
+# ---------------------------------------------------------------------------
+
+
+def test_to_graphviz_contains_every_node_and_edge() -> None:
+    t = Topology()
+    t.add_host("h1", ip="10.0.0.1/24", ip6="fd00::1/64")
+    t.add_host("h2", ip="10.0.0.2/24")
+    t.add_switch("s1", Path("p.p4"), grpc_port=50051)
+    t.add_link("h1", "s1", port_b=1)
+    t.add_link("h2", "s1", port_b=2)
+    out = t.to_graphviz()
+    assert out.startswith("digraph p4net")
+    assert "rankdir=LR" in out
+    assert '"h1"' in out
+    assert '"h2"' in out
+    assert '"s1"' in out
+    assert "10.0.0.1/24" in out
+    assert "fd00::1/64" in out
+    assert "grpc :50051" in out
+    assert '"h1" -> "s1" [arrowhead=none]' in out
+    assert '"h2" -> "s1" [arrowhead=none]' in out
+
+
+def test_to_graphviz_layout_TB() -> None:
+    t = Topology()
+    t.add_host("h1")
+    out = t.to_graphviz(layout="TB")
+    assert "rankdir=TB" in out
+
+
+def test_to_graphviz_rejects_bad_layout() -> None:
+    t = Topology()
+    with pytest.raises(TopologyError, match="layout"):
+        t.to_graphviz(layout="diagonal")
+
+
+def test_render_graphviz_format_dot_writes_source(tmp_path: Path) -> None:
+    t = Topology()
+    t.add_host("h1")
+    t.add_switch("s1", Path("p.p4"))
+    t.add_link("h1", "s1")
+    out_path = tmp_path / "topo.dot"
+    t.render_graphviz(out_path, format="dot")
+    text = out_path.read_text()
+    assert text.startswith("digraph p4net")
+
+
+def test_render_graphviz_invokes_dot(tmp_path: Path, mocker) -> None:
+    import shutil
+    import subprocess
+
+    mocker.patch("shutil.which", return_value="/usr/bin/dot")
+    fake_run = mocker.patch(
+        "subprocess.run", return_value=subprocess.CompletedProcess([], returncode=0)
+    )
+    t = Topology()
+    t.add_host("h1")
+    t.add_switch("s1", Path("p.p4"))
+    t.add_link("h1", "s1")
+    out_path = tmp_path / "topo.png"
+    t.render_graphviz(out_path, format="png")
+    args = fake_run.call_args.args[0]
+    assert args[0] == "/usr/bin/dot"
+    assert args[1] == "-Tpng"
+    assert args[2] == "-o"
+    assert args[3] == str(out_path)
+    # The DOT source is piped on stdin.
+    kwargs = fake_run.call_args.kwargs
+    assert kwargs["input"].startswith(b"digraph p4net")
+    # Imported but referenced only via mocker.patch above.
+    assert shutil.which is not None
+
+
+def test_render_graphviz_missing_dot_raises(tmp_path: Path, mocker) -> None:
+    mocker.patch("shutil.which", return_value=None)
+    t = Topology()
+    t.add_host("h1")
+    with pytest.raises(TopologyError, match=r"dot.*not found"):
+        t.render_graphviz(tmp_path / "topo.png", format="png")
+
+
+def test_render_graphviz_subprocess_failure_wrapped(tmp_path: Path, mocker) -> None:
+    import subprocess
+
+    mocker.patch("shutil.which", return_value="/usr/bin/dot")
+    mocker.patch(
+        "subprocess.run",
+        side_effect=subprocess.CalledProcessError(
+            returncode=1, cmd=["dot"], output=b"", stderr=b"layout error"
+        ),
+    )
+    t = Topology()
+    t.add_host("h1")
+    with pytest.raises(TopologyError, match="layout error"):
+        t.render_graphviz(tmp_path / "topo.png", format="png")
