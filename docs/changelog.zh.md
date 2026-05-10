@@ -1,14 +1,12 @@
 ---
-description: p4net 文档 — 变更日志（中文翻译进行中，当前为占位页）。
+description: p4net 各个发版的版本历史，最新版本在最前。
 ---
 
 # 变更日志
 
-> 该页面的中文翻译尚未完成。
->
-> 请参阅 [English version](changelog.md) 获取完整内容。
+变更日志维护于仓库根目录的 `CHANGELOG.md`，格式遵循
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，版本号
+遵循[语义化版本](https://semver.org/spec/v2.0.0.html)。下方内容
+直接引用其英文原文，最新版本在最前。
 
-## 关于翻译
-
-p4net 文档以英文为权威版本。中文翻译正在分批进行，欢迎贡献——
-参见 [贡献指南](dev/contributing.md)。
+--8<-- "CHANGELOG.md"

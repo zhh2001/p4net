@@ -1,14 +1,11 @@
 ---
-description: p4net 文档 — 贡献指南（中文翻译进行中，当前为占位页）。
+description: 如何向 p4net 贡献——bug 上报、Pull Request、代码风格、测试覆盖率要求。
 ---
 
 # 贡献指南
 
-> 该页面的中文翻译尚未完成。
->
-> 请参阅 [English version](contributing.md) 获取完整内容。
+贡献指南维护于仓库根目录的 `CONTRIBUTING.md`，下方内容直接引用
+其英文原文（保证「单一信息来源」、避免文档漂移）。如需中文协助，
+请在 issue 中说明，维护者会在 PR 评审中以中文回应。
 
-## 关于翻译
-
-p4net 文档以英文为权威版本。中文翻译正在分批进行，欢迎贡献——
-参见 [贡献指南](contributing.md)。
+--8<-- "CONTRIBUTING.md"
