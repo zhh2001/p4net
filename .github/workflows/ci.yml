@@ -8,11 +8,12 @@ on:
 
 jobs:
   lint-and-test:
-    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
@@ -36,6 +37,37 @@ jobs:
 
       - name: Pytest
         run: pytest
+
+  wheel-smoke:
+    runs-on: ubuntu-24.04
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install build
+        run: |
+          python -m pip install --upgrade pip
+          pip install build
+
+      - name: Build wheel
+        run: python -m build --wheel
+
+      - name: Install wheel into a clean venv
+        run: |
+          python -m venv /tmp/p4net-smoke
+          /tmp/p4net-smoke/bin/pip install --upgrade pip
+          /tmp/p4net-smoke/bin/pip install dist/p4net-*.whl
+
+      - name: Verify import and console script
+        run: |
+          /tmp/p4net-smoke/bin/python -c "import p4net; assert p4net.__version__"
+          /tmp/p4net-smoke/bin/p4net --help
 
   integration-test:
     runs-on: ubuntu-24.04
