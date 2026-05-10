@@ -7,7 +7,7 @@
 
 A P4Runtime-native SDN simulation framework for BMv2.
 
-Status: 0.1.0 — first public release. APIs are stable enough for lab use; expect refinement before 1.0.
+Status: 0.2.0 — second public release. APIs are stable for lab use; expect refinement before 1.0.
 
 ## Features
 
@@ -18,6 +18,10 @@ Status: 0.1.0 — first public release. APIs are stable enough for lab use; expe
 - Programmable Python topology DSL.
 - Interactive CLI.
 - Per-port packet capture.
+- P4Runtime CPU-port packet I/O (`<switch> packet send` / `listen`).
+- IPv4 and IPv6 host addressing with per-interface sysctl gating.
+- Asymmetric link impairment (per-direction `bandwidth`, `delay`, `jitter`, `loss_pct`).
+- Topology visualization (Graphviz DOT / PNG / SVG).
 - No OpenFlow, no Open vSwitch, no Docker.
 
 ## Requirements
@@ -82,9 +86,18 @@ venv from `PATH`, run the binary explicitly: `sudo env "PATH=$PATH" p4net ...`.
 ## Examples
 
 - [`examples/quick_start/`](examples/quick_start/) — minimal two-host
-  network using a hardcoded port-swap pipeline.
-- [`examples/l3_forwarding/`](examples/l3_forwarding/) — two hosts with
-  runtime-programmed `ipv4_lpm` forwarding and pre-seeded static ARP.
+  network with a hardcoded port-swap pipeline.
+- [`examples/l3_forwarding/`](examples/l3_forwarding/) —
+  runtime-programmed IPv4 LPM with static ARP.
+- [`examples/cpu_punt/`](examples/cpu_punt/) — every dataplane packet
+  punted to the controller; demonstrates `<switch> packet send` /
+  `<switch> packet listen`.
+- [`examples/dual_stack/`](examples/dual_stack/) — two hosts carrying
+  both IPv4 and IPv6.
+- [`examples/asymmetric_link/`](examples/asymmetric_link/) —
+  per-direction `delay` shaping.
+- [`examples/ipv6_lpm/`](examples/ipv6_lpm/) — runtime-programmed IPv6
+  LPM forwarding.
 
 ## Documentation
 
@@ -93,7 +106,8 @@ venv from `PATH`, run the binary explicitly: `sudo env "PATH=$PATH" p4net ...`.
 - [`docs/tutorial.md`](docs/tutorial.md) — walkthrough from a single
   host up to a programmed two-host network.
 - [`docs/cli.md`](docs/cli.md) — CLI reference for the `p4net` shell.
-- [Roadmap](docs/roadmap.md)
+- [`docs/releasing.md`](docs/releasing.md) — release runbook.
+- [`docs/roadmap.md`](docs/roadmap.md) — released milestones and what's next.
 
 ## License
 

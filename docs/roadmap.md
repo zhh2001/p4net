@@ -8,68 +8,16 @@ issues are filed and trade-offs become clearer. PRs for any item are
 welcome — please comment on (or open) the linked issue first so that
 design discussion happens once, in public, before the code lands.
 
-## v0.1.x (patch releases)
+## Released milestones
 
-Pure bug fixes and small clarifications. No API changes.
+- **v0.1.0** (2026-05-10) — initial public release. Topology DSL,
+  P4Runtime control plane, BMv2 orchestration, interactive CLI. See
+  [`CHANGELOG.md`](../CHANGELOG.md).
+- **v0.2.0** (2026-05-10) — controller packet I/O, IPv6 host addressing,
+  asymmetric link impairment, topology visualizer, `xterm` helper. See
+  [`CHANGELOG.md`](../CHANGELOG.md).
 
-- Drive `P4NetShell.run()` from a `prompt_toolkit.input.DummyInput` /
-  `DummyOutput` pair to lift `cli/shell.py` coverage from 43% into the
-  same band as the rest of the package.
-- Clearer error messages on common BMv2 startup failures (port already
-  bound, missing `simple_switch_grpc` on `PATH`, `--no-cli` flag
-  unsupported on the local BMv2 build).
-- Documentation typos and tutorial polish.
-
-## v0.2.0 (next minor release)
-
-### CPU-port packet I/O
-
-Extend `P4RuntimeClient` with `send_packet_out(payload, metadata)` and
-a callback registration `on_packet_in(handler)` driven by the existing
-StreamChannel consumer thread. Add CLI commands `<switch> packet send
-<hex_payload>` and `<switch> packet listen [count]`. Required for any
-P4 program that uses CPU-port punt/inject — controller-based ARP
-responders, learning switches, in-network DHCP, BGP-injection demos.
-The wire format is already specified by P4Runtime; the controller side
-just needs to plumb metadata through the codec.
-
-### IPv6 on host interfaces
-
-Accept IPv6 CIDRs in `Host.ip` and `LinkEndpoint.ip`; add
-`set_address6` to `VethPair`; update the address-application path in
-`Network.start()` to dispatch on family. The CIDR's address family
-auto-selects the right code path so existing IPv4 topologies need no
-changes. Useful for any P4 program that processes IPv6 headers
-(SRv6, ND-based learning, DC underlay emulation).
-
-### Asymmetric link impairment
-
-`Link.bandwidth_a_to_b` / `Link.bandwidth_b_to_a` (and the same split
-for `delay_ms` / `loss_pct`) so traffic in one direction can be shaped
-differently from the reverse direction. Falls back to the symmetric
-`Link.bandwidth` when the per-direction fields are unset, preserving
-v0.1.0 behavior. Useful for emulating WAN links, ADSL/cable
-asymmetries, and one-direction failures during chaos testing.
-
-### `xterm` host shell helper
-
-A `Network.xterm(host)` method, plus a CLI command `<host> xterm`,
-that spawns an `xterm` connected to the host's namespace — same UX
-Mininet users are accustomed to. Requires an X server reachable through
-`$DISPLAY`; fails with a clear error message rather than hanging if
-`$DISPLAY` is unset or the X socket is unreachable. Useful in
-classroom and demo settings where students want a shell-per-host on a
-single display.
-
-### Topology visualizer
-
-A `Topology.to_graphviz()` method emitting DOT, plus a CLI command
-`topology graph [path.png]` that renders to PNG via the `dot` binary
-(if present on `PATH`). Useful for teaching, for diffing topology
-changes in PRs, and for embedding diagrams in papers. Falls back to
-plain DOT text if `dot` isn't installed.
-
-## v0.3.0 (later, exploratory)
+## v0.3.0 candidates
 
 ### PSA architecture support
 
@@ -94,7 +42,29 @@ event-driven controllers (e.g. those subscribing to many switches'
 StreamChannels concurrently). Probably co-exists with the threaded
 client rather than replacing it; same `P4InfoIndex` underneath.
 
-## Deferred indefinitely
+### Symmetric base + per-direction extra link impairment
+
+v0.2 ships either symmetric or asymmetric link parameters (rejecting
+the mix at construction time). A `delay_a_to_b_extra` /
+`delay_b_to_a_extra` pattern would let users layer a per-direction
+adjustment on top of a symmetric base — e.g. a baseline 10 ms link
+with an additional 50 ms only on the uplink — without forcing them to
+spell out both sides explicitly. Same shape for the other three
+parameters (`bandwidth`, `jitter`, `loss_pct`). Carried forward from
+phase-12 OQ #4.
+
+### `<switch> table dump` cross-switch action-param disambiguation
+
+Today `_render_action_params` walks the index of whatever switch the
+dispatcher dispatched against. In a multi-switch topology where two
+switches happen to share an action name with different parameter
+widths, the per-switch lookup is already correct — but earlier
+prototypes had a "first switch wins" path that could leak in via
+direct module-level helpers. Tighten the contract by pinning every
+helper to a specific `P4InfoIndex` rather than the first one in the
+network. Carried forward from phase-13 OQ #1.
+
+## Indefinitely deferred
 
 - **Distributed simulation across multiple machines.** A v1.0
   conversation; out of scope for v0.x. Federating two p4net instances
