@@ -9,6 +9,10 @@ from typing import Any
 from p4net.control.codec import (
     canonicalize,
     encode_value,
+    format_exact,
+    format_lpm,
+    format_range,
+    format_ternary,
     parse_lpm,
     parse_range,
     parse_ternary,
@@ -183,6 +187,74 @@ class P4InfoIndex:
                 raise EncodingError(f"unsupported match type {mt} for field {mf_name!r}")
             result.append(fm)
         return result
+
+    def decode_match(
+        self,
+        table_name: str,
+        match: Mapping[str, object],
+    ) -> dict[str, str]:
+        """Inverse of `encode_match`: render raw match bytes as human strings.
+
+        For each ``(field_name, raw_value)`` pair the field's bitwidth and
+        match type are looked up in the P4Info, then the value is formatted:
+
+        - 32-bit fields → IPv4 dotted-quad (with ``/<plen>`` for LPM,
+          ``&<mask>`` for TERNARY, ``[<lo>,<hi>]`` for RANGE).
+        - 48-bit fields → MAC ``xx:xx:xx:xx:xx:xx`` (with the same combinators).
+        - Other widths → decimal int (with the same combinators).
+
+        Width is taken from P4Info; the bytes may be canonical (shorter than
+        width-rounded) and are zero-extended on the high side before decoding.
+        """
+        table = self._tables_by_name.get(table_name)
+        if table is None:
+            raise NoSuchTableError(f"no table named {table_name!r}")
+        p4info_pb2 = _import_p4info()
+        fields_by_name: dict[str, Any] = {mf.name: mf for mf in table.match_fields}
+        out: dict[str, str] = {}
+        for name, raw in match.items():
+            mf = fields_by_name.get(name)
+            if mf is None:
+                raise NoSuchFieldError(f"field {name!r} not present in table {table_name!r}")
+            bw = int(mf.bitwidth)
+            mt = mf.match_type
+            if mt == p4info_pb2.MatchField.EXACT or mt == p4info_pb2.MatchField.OPTIONAL:
+                if not isinstance(raw, bytes):
+                    raise EncodingError(
+                        f"field {name!r} expected bytes for EXACT/OPTIONAL, "
+                        f"got {type(raw).__name__}"
+                    )
+                out[name] = format_exact(raw, bw)
+            elif mt == p4info_pb2.MatchField.LPM:
+                if not (isinstance(raw, tuple) and len(raw) == 2):
+                    raise EncodingError(
+                        f"field {name!r} expected (bytes, plen) for LPM, got {raw!r}"
+                    )
+                value, plen = raw
+                if not isinstance(value, bytes) or not isinstance(plen, int):
+                    raise EncodingError(f"field {name!r}: bad LPM tuple {raw!r}")
+                out[name] = format_lpm(value, plen, bw)
+            elif mt == p4info_pb2.MatchField.TERNARY:
+                if not (isinstance(raw, tuple) and len(raw) == 2):
+                    raise EncodingError(
+                        f"field {name!r} expected (bytes, bytes) for TERNARY, got {raw!r}"
+                    )
+                v, m = raw
+                if not isinstance(v, bytes) or not isinstance(m, bytes):
+                    raise EncodingError(f"field {name!r}: bad TERNARY tuple {raw!r}")
+                out[name] = format_ternary(v, m, bw)
+            elif mt == p4info_pb2.MatchField.RANGE:
+                if not (isinstance(raw, tuple) and len(raw) == 2):
+                    raise EncodingError(
+                        f"field {name!r} expected (bytes, bytes) for RANGE, got {raw!r}"
+                    )
+                lo, hi = raw
+                if not isinstance(lo, bytes) or not isinstance(hi, bytes):
+                    raise EncodingError(f"field {name!r}: bad RANGE tuple {raw!r}")
+                out[name] = format_range(lo, hi, bw)
+            else:
+                raise EncodingError(f"unsupported match type {mt} for field {name!r}")
+        return out
 
     def encode_action(
         self,

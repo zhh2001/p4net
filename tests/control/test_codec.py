@@ -8,10 +8,16 @@ from p4net.control import (
     EncodingError,
     canonicalize,
     decode_int,
+    decode_ipv4,
+    decode_mac,
     encode_int,
     encode_ipv4,
     encode_mac,
     encode_value,
+    format_exact,
+    format_lpm,
+    format_range,
+    format_ternary,
     parse_lpm,
     parse_range,
     parse_ternary,
@@ -301,3 +307,97 @@ def test_parse_range_rejects_non_tuple() -> None:
 )
 def test_canonicalize(data: bytes, expected: bytes) -> None:
     assert canonicalize(data) == expected
+
+
+# ---------------------------------------------------------------------------
+# decode_ipv4 / decode_mac
+# ---------------------------------------------------------------------------
+
+
+def test_decode_ipv4_full_width() -> None:
+    assert decode_ipv4(b"\x0a\x00\x00\x05") == "10.0.0.5"
+    assert decode_ipv4(b"\xff\xff\xff\xff") == "255.255.255.255"
+    assert decode_ipv4(b"\x00\x00\x00\x00") == "0.0.0.0"
+
+
+def test_decode_ipv4_canonical_input() -> None:
+    # canonical = leading zeros stripped; high-side padding restores the address.
+    # b'\x0a' (canonical of 0.0.0.10) zero-extends to b'\x00\x00\x00\x0a'.
+    assert decode_ipv4(b"\x0a") == "0.0.0.10"
+    assert decode_ipv4(b"\x00") == "0.0.0.0"
+    assert decode_ipv4(b"") == "0.0.0.0"
+
+
+def test_decode_ipv4_round_trip() -> None:
+    for ip in ["0.0.0.0", "10.0.0.5", "192.168.1.1", "255.255.255.255"]:
+        assert decode_ipv4(encode_ipv4(ip)) == ip
+
+
+def test_decode_ipv4_too_wide() -> None:
+    with pytest.raises(EncodingError, match="too wide"):
+        decode_ipv4(b"\x00\x00\x00\x00\x00")
+
+
+def test_decode_ipv4_rejects_non_bytes() -> None:
+    with pytest.raises(EncodingError, match="must be bytes"):
+        decode_ipv4("10.0.0.5")  # type: ignore[arg-type]
+
+
+def test_decode_mac_full_width() -> None:
+    assert decode_mac(b"\xaa\xbb\xcc\xdd\xee\xff") == "aa:bb:cc:dd:ee:ff"
+    assert decode_mac(b"\x00" * 6) == "00:00:00:00:00:00"
+
+
+def test_decode_mac_canonical_input() -> None:
+    # canonical of 00:00:00:00:00:01 is b'\x01'
+    assert decode_mac(b"\x01") == "00:00:00:00:00:01"
+
+
+def test_decode_mac_round_trip() -> None:
+    for mac in ["00:00:00:00:00:00", "aa:bb:cc:dd:ee:ff", "00:00:00:00:00:01"]:
+        assert decode_mac(encode_mac(mac)) == mac
+
+
+# ---------------------------------------------------------------------------
+# format_lpm / format_ternary / format_range / format_exact
+# ---------------------------------------------------------------------------
+
+
+def test_format_lpm_full_width() -> None:
+    assert format_lpm(b"\x0a\x00\x00\x00", 24, 32) == "10.0.0.0/24"
+
+
+def test_format_lpm_canonical_value() -> None:
+    # P4Runtime canonical strips leading zero bytes from the most-significant
+    # side; b"\n" therefore decodes as the integer 10 (IPv4 0.0.0.10), not
+    # 10.0.0.0. format_lpm honours that by high-side zero-extending.
+    assert format_lpm(b"\n", 8, 32) == "0.0.0.10/8"
+
+
+def test_format_lpm_int_field() -> None:
+    # 16-bit field, value 5, prefix 12 -> decimal
+    assert format_lpm(b"\x00\x05", 12, 16) == "5/12"
+
+
+def test_format_ternary_ipv4() -> None:
+    assert format_ternary(b"\x0a\x00\x00\x00", b"\xff\xff\x00\x00", 32) == "10.0.0.0&255.255.0.0"
+
+
+def test_format_ternary_int() -> None:
+    assert format_ternary(b"\xab", b"\xff", 8) == "171&255"
+
+
+def test_format_range_int() -> None:
+    assert format_range(b"\x04\x00", b"\xff\xff", 16) == "[1024,65535]"
+
+
+def test_format_exact_ipv4() -> None:
+    assert format_exact(b"\x0a\x00\x00\x01", 32) == "10.0.0.1"
+
+
+def test_format_exact_mac() -> None:
+    assert format_exact(b"\x00\x00\x00\x00\x00\x01", 48) == "00:00:00:00:00:01"
+
+
+def test_format_exact_int() -> None:
+    assert format_exact(b"\x01\xff", 9) == "511"

@@ -157,3 +157,58 @@ def canonicalize(data: bytes) -> bytes:
 def encode_values(values: Sequence[int | str | bytes], bitwidth: int) -> list[bytes]:
     """Convenience: vectorised encode_value for a sequence."""
     return [encode_value(v, bitwidth) for v in values]
+
+
+def _zero_extend(data: bytes, bitwidth: int) -> bytes:
+    """Pad canonical bytes on the high side to the bitwidth-rounded byte width."""
+    n_bytes = (bitwidth + 7) // 8
+    if len(data) > n_bytes:
+        raise EncodingError(f"byte string of length {len(data)} too wide for bitwidth {bitwidth}")
+    if len(data) == n_bytes:
+        return data
+    return b"\x00" * (n_bytes - len(data)) + data
+
+
+def decode_ipv4(data: bytes) -> str:
+    """Inverse of `encode_ipv4`. Accepts canonical (short) or 4-byte input."""
+    if not isinstance(data, bytes):
+        raise EncodingError(f"data must be bytes, got {type(data).__name__}")
+    padded = _zero_extend(data, 32)
+    return str(ipaddress.IPv4Address(padded))
+
+
+def decode_mac(data: bytes) -> str:
+    """Inverse of `encode_mac`. Accepts canonical (short) or 6-byte input."""
+    if not isinstance(data, bytes):
+        raise EncodingError(f"data must be bytes, got {type(data).__name__}")
+    padded = _zero_extend(data, 48)
+    return ":".join(f"{b:02x}" for b in padded)
+
+
+def _format_value(data: bytes, bitwidth: int) -> str:
+    """Format a single value: IPv4 for 32-bit, MAC for 48-bit, else decimal."""
+    if bitwidth == 32:
+        return decode_ipv4(data)
+    if bitwidth == 48:
+        return decode_mac(data)
+    return str(decode_int(data, bitwidth))
+
+
+def format_lpm(value: bytes, prefix_len: int, bitwidth: int) -> str:
+    """Render an LPM (value, prefix_len) tuple as `<addr>/<plen>`."""
+    return f"{_format_value(value, bitwidth)}/{int(prefix_len)}"
+
+
+def format_ternary(value: bytes, mask: bytes, bitwidth: int) -> str:
+    """Render a TERNARY (value, mask) tuple as `<value>&<mask>`."""
+    return f"{_format_value(value, bitwidth)}&{_format_value(mask, bitwidth)}"
+
+
+def format_range(low: bytes, high: bytes, bitwidth: int) -> str:
+    """Render a RANGE (low, high) tuple as `[<low>,<high>]`."""
+    return f"[{_format_value(low, bitwidth)},{_format_value(high, bitwidth)}]"
+
+
+def format_exact(data: bytes, bitwidth: int) -> str:
+    """Render an exact-match value using the width-aware formatter."""
+    return _format_value(data, bitwidth)

@@ -302,6 +302,124 @@ def test_encode_action_param_overflow(p4info: p4info_pb2.P4Info) -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# decode_match — round-trip from encode_match
+# ---------------------------------------------------------------------------
+
+
+def _decoded_match_for(p4info: p4info_pb2.P4Info, table: str, raw: dict) -> dict:
+    """Encode then decode by walking the FieldMatch protos back into raw form."""
+    idx = P4InfoIndex(p4info)
+    fms = idx.encode_match(table, raw)
+    table_msg = next(t for t in p4info.tables if t.preamble.name == table)
+    fields_by_id = {int(mf.id): mf for mf in table_msg.match_fields}
+    decoded_raw: dict = {}
+    for fm in fms:
+        mf = fields_by_id[fm.field_id]
+        if fm.HasField("exact"):
+            decoded_raw[mf.name] = bytes(fm.exact.value)
+        elif fm.HasField("lpm"):
+            decoded_raw[mf.name] = (bytes(fm.lpm.value), int(fm.lpm.prefix_len))
+        elif fm.HasField("ternary"):
+            decoded_raw[mf.name] = (bytes(fm.ternary.value), bytes(fm.ternary.mask))
+        elif fm.HasField("range"):
+            decoded_raw[mf.name] = (bytes(fm.range.low), bytes(fm.range.high))
+        elif fm.HasField("optional"):
+            decoded_raw[mf.name] = bytes(fm.optional.value)
+    return idx.decode_match(table, decoded_raw)
+
+
+def test_decode_match_lpm_round_trip(p4info: p4info_pb2.P4Info) -> None:
+    out = _decoded_match_for(p4info, "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.0.5/24"})
+    assert out == {"hdr.ipv4.dstAddr": "10.0.0.5/24"}
+
+
+def test_decode_match_exact_ipv4_no_table() -> None:
+    # Construct a small P4Info with an EXACT IPv4 field for a focused test.
+    p = p4info_pb2.P4Info()
+    a = p.actions.add()
+    a.preamble.id = 1
+    a.preamble.name = "NoAction"
+    t = p.tables.add()
+    t.preamble.id = 10
+    t.preamble.name = "t"
+    mf = t.match_fields.add()
+    mf.id = 1
+    mf.name = "ipv4"
+    mf.bitwidth = 32
+    mf.match_type = p4info_pb2.MatchField.EXACT
+    t.action_refs.add().id = 1
+    out = _decoded_match_for(p, "t", {"ipv4": "10.0.0.5"})
+    assert out == {"ipv4": "10.0.0.5"}
+
+
+def test_decode_match_exact_mac(p4info: p4info_pb2.P4Info) -> None:
+    out = _decoded_match_for(
+        p4info,
+        "MyIngress.exact_acl",
+        {
+            "hdr.ethernet.srcAddr": "aa:bb:cc:dd:ee:01",
+            "hdr.ethernet.dstAddr": "aa:bb:cc:dd:ee:02",
+        },
+    )
+    assert out["hdr.ethernet.srcAddr"] == "aa:bb:cc:dd:ee:01"
+    assert out["hdr.ethernet.dstAddr"] == "aa:bb:cc:dd:ee:02"
+
+
+def test_decode_match_exact_int_no_table() -> None:
+    # 16-bit EXACT field
+    p = p4info_pb2.P4Info()
+    a = p.actions.add()
+    a.preamble.id = 1
+    a.preamble.name = "NoAction"
+    t = p.tables.add()
+    t.preamble.id = 11
+    t.preamble.name = "t"
+    mf = t.match_fields.add()
+    mf.id = 1
+    mf.name = "n"
+    mf.bitwidth = 16
+    mf.match_type = p4info_pb2.MatchField.EXACT
+    t.action_refs.add().id = 1
+    out = _decoded_match_for(p, "t", {"n": 42})
+    assert out == {"n": "42"}
+
+
+def test_decode_match_ternary_round_trip(p4info: p4info_pb2.P4Info) -> None:
+    out = _decoded_match_for(
+        p4info,
+        "MyIngress.ternary_acl",
+        {"hdr.ipv4.dstAddr": ("10.0.0.0", "255.255.0.0")},
+    )
+    assert out == {"hdr.ipv4.dstAddr": "10.0.0.0&255.255.0.0"}
+
+
+def test_decode_match_range_round_trip(p4info: p4info_pb2.P4Info) -> None:
+    out = _decoded_match_for(
+        p4info,
+        "MyIngress.range_acl",
+        {"hdr.tcp.srcPort": (1024, 65535)},
+    )
+    assert out == {"hdr.tcp.srcPort": "[1024,65535]"}
+
+
+def test_decode_match_optional_round_trip(p4info: p4info_pb2.P4Info) -> None:
+    out = _decoded_match_for(p4info, "MyIngress.optional_acl", {"hdr.tcp.flags": 0x18})
+    assert out == {"hdr.tcp.flags": "24"}
+
+
+def test_decode_match_unknown_table(p4info: p4info_pb2.P4Info) -> None:
+    idx = P4InfoIndex(p4info)
+    with pytest.raises(NoSuchTableError):
+        idx.decode_match("nope", {})
+
+
+def test_decode_match_unknown_field(p4info: p4info_pb2.P4Info) -> None:
+    idx = P4InfoIndex(p4info)
+    with pytest.raises(NoSuchFieldError):
+        idx.decode_match("MyIngress.ipv4_lpm", {"bogus": (b"\n", 8)})
+
+
 def test_from_bytes_text_protobuf_round_trip(p4info: p4info_pb2.P4Info) -> None:
     from google.protobuf import text_format
 
