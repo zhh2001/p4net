@@ -9,3 +9,4 @@ script (`sudo p4net <file>.py`).
 - `cpu_punt/` — punt all dataplane packets to the controller and demonstrate `<switch> packet send` / `<switch> packet listen`.
 - `dual_stack/` — two hosts carrying both IPv4 and IPv6 over a port-swap pipeline.
 - `asymmetric_link/` — two hosts whose links shape only one direction, demonstrating per-direction `delay_a_to_b` / `delay_b_to_a`.
+- `ipv6_lpm/` — IPv6 LPM forwarding programmed at runtime; demonstrates 128-bit field decoding in `<switch> table dump`.
