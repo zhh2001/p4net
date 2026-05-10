@@ -830,6 +830,11 @@ def _render_action_params(
 ) -> dict[str, str]:
     """Decode raw action-param bytes into width-aware human strings.
 
+    The ``index`` argument MUST be the :class:`P4InfoIndex` of the switch the
+    table-dump invocation is targeting; never a globally-cached or
+    first-found index. This is what allows multi-switch topologies where two
+    switches share an action name to render each switch's params correctly.
+
     Falls back to ``repr(bytes)`` for any param whose width can't be looked up.
     """
     from p4net.control.codec import format_exact

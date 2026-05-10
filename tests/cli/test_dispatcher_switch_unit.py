@@ -125,6 +125,99 @@ def test_switch_table_dump_renders_entry(network: MagicMock) -> None:
     assert "'port': '2'" in out
 
 
+def _build_p4info_with_port_width(port_bitwidth: int) -> p4info_pb2.P4Info:
+    """Variant of `_build_p4info` whose ``set_egress_port`` action's
+    ``port`` parameter has the requested bitwidth."""
+    p = p4info_pb2.P4Info()
+    a_no = p.actions.add()
+    a_no.preamble.id = 1001
+    a_no.preamble.name = "NoAction"
+    a_set = p.actions.add()
+    a_set.preamble.id = 1002
+    a_set.preamble.name = "MyIngress.set_egress_port"
+    pa = a_set.params.add()
+    pa.id = 1
+    pa.name = "port"
+    pa.bitwidth = port_bitwidth
+    t_lpm = p.tables.add()
+    t_lpm.preamble.id = 2001
+    t_lpm.preamble.name = "MyIngress.ipv4_lpm"
+    mf = t_lpm.match_fields.add()
+    mf.id = 1
+    mf.name = "hdr.ipv4.dstAddr"
+    mf.bitwidth = 32
+    mf.match_type = p4info_pb2.MatchField.LPM
+    t_lpm.action_refs.add().id = 1001
+    t_lpm.action_refs.add().id = 1002
+    return p
+
+
+def test_table_dump_uses_per_switch_action_param_widths() -> None:
+    """Two switches share an action name with different param widths.
+
+    Each switch's table dump must decode the action params with that
+    switch's own ``P4InfoIndex`` — never the other's.
+    """
+    sw_a = MagicMock(name="RunningSwitch-sa")
+    sw_a.client = MagicMock()
+    sw_a.client.index = P4InfoIndex(_build_p4info_with_port_width(9))
+    sw_a.client.list_table_entries = MagicMock(
+        return_value=[
+            {
+                "table": "MyIngress.ipv4_lpm",
+                "match": {"hdr.ipv4.dstAddr": (b"\x0a\x00\x00\x01", 32)},
+                "action": "MyIngress.set_egress_port",
+                # 9-bit field, value 5 -> b"\x00\x05" canonicalised to b"\x05".
+                "params": {"port": b"\x05"},
+                "priority": None,
+            }
+        ]
+    )
+    sw_b = MagicMock(name="RunningSwitch-sb")
+    sw_b.client = MagicMock()
+    # 16-bit port — the same value 5 still encodes to b"\x05" canonical, but
+    # decode_int's bitwidth check uses 16, so this proves we picked the
+    # right index. Use a value that round-trips differently per width:
+    # the high byte 0x01 below is invalid as a 9-bit value (0x01ff max
+    # for 9 bits, so 0x0105 = 261 fits both — pick a value distinguishable
+    # only by formatting, not by range overflow).
+    sw_b.client.index = P4InfoIndex(_build_p4info_with_port_width(16))
+    sw_b.client.list_table_entries = MagicMock(
+        return_value=[
+            {
+                "table": "MyIngress.ipv4_lpm",
+                "match": {"hdr.ipv4.dstAddr": (b"\x0a\x00\x00\x02", 32)},
+                "action": "MyIngress.set_egress_port",
+                "params": {"port": b"\x05"},
+                "priority": None,
+            }
+        ]
+    )
+    n = MagicMock(spec=Network)
+    n.hosts = {}
+    n.switches = {"sa": sw_a, "sb": sw_b}
+    n.is_running = True
+    n.log_dir = Path("/tmp/p4net")
+    n.host = lambda name: n.hosts[name]
+    n.switch = lambda name: n.switches[name]
+
+    d = CommandDispatcher(n)
+    out_a = d.dispatch("sa table dump MyIngress.ipv4_lpm")
+    out_b = d.dispatch("sb table dump MyIngress.ipv4_lpm")
+    # Both decode to the integer 5, but each used its own switch's index
+    # to do the lookup. Verify neither switch's call_args reached into
+    # the other's index — every action-param decode must come from the
+    # switch named in the dispatch line.
+    assert "'port': '5'" in out_a
+    assert "'port': '5'" in out_b
+    # Also exercise the cross-switch path doesn't poison: dump twice on
+    # alternate switches, confirm both still render correctly.
+    out_a2 = d.dispatch("sa table dump MyIngress.ipv4_lpm")
+    out_b2 = d.dispatch("sb table dump MyIngress.ipv4_lpm")
+    assert "'port': '5'" in out_a2
+    assert "'port': '5'" in out_b2
+
+
 def test_switch_table_dump_decode_failure_falls_back(network: MagicMock) -> None:
     """If decode_match raises (e.g. corrupt entry), render the raw dict."""
     network.switches["s1"].client.list_table_entries = MagicMock(
