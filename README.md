@@ -1,5 +1,10 @@
 # p4net
 
+[![CI](https://github.com/zhh2001/p4net/actions/workflows/ci.yml/badge.svg)](https://github.com/zhh2001/p4net/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-alpha-orange.svg)](#)
+
 A P4Runtime-native SDN simulation framework for BMv2.
 
 Status: 0.1.0 — first public release. APIs are stable enough for lab use; expect refinement before 1.0.
