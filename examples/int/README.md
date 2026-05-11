@@ -153,10 +153,20 @@ listener.
   without any P4 recompile.
 - Add a second switch, write its `switch_id` register to `2`, and chain
   h1 → s1 → s2 → h2. Extend the listener (or the P4 pipeline) to
-  recognize stacked shims.
+  recognize stacked shims. (Already done in
+  [`examples/int_multi_hop/`](../int_multi_hop/) — see the cross-link
+  below.)
 - Pipe the listener's output to a file and post-process offline to
   compute per-flow latency from `ingress_timestamp_us` deltas across
   consecutive packets.
 - Add a per-link `loss_pct` or `delay` to the h1↔s1 link and watch
   the timestamps reflect the delay (subject to `clock_realtime`
   granularity inside BMv2).
+
+## Next steps
+
+For a more realistic deployment pattern with metadata accumulating
+across multiple switches, see
+[`examples/int_multi_hop/`](../int_multi_hop/) — two switches in
+series, both running the same P4 program, each writing its own
+`switch_id` register to a distinct value.
