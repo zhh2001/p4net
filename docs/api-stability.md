@@ -59,7 +59,7 @@ The user-facing topology DSL. Mostly stable.
 | --- | --- | --- |
 | `Host` | Stable | Field names and types are stable. New fields may be added with safe defaults. |
 | `P4Switch` | Stable | Same as `Host`. |
-| `Link` | Stable | Symmetric and asymmetric impairment fields (`bandwidth`, `delay`, `jitter`, `loss_pct` and their `*_a_to_b` / `*_b_to_a` variants) are stable. |
+| `Link` | Stable | Symmetric and asymmetric impairment fields (`bandwidth`, `delay`, `jitter`, `loss_pct` and their `*_a_to_b` / `*_b_to_a` variants) are stable. Per-direction additive fields (`delay_a_to_b_extra`, `delay_b_to_a_extra`, `jitter_a_to_b_extra`, `jitter_b_to_a_extra`, `loss_pct_a_to_b_extra`, `loss_pct_b_to_a_extra`) added in 1.1 are also stable. |
 | `LinkEndpoint` | Stable | |
 | `Topology` | Stable | `add_host`, `add_switch`, `add_link`, `validate`, `to_graphviz`, `render_graphviz`, `to_dict`, `from_dict` are stable. The `to_dict` / `from_dict` round-trip format is part of the public contract. |
 | `TopologyError` | Stable | |

@@ -82,6 +82,12 @@ def _link_to_dict(link: Link) -> dict[str, Any]:
         "jitter_b_to_a": link.jitter_b_to_a,
         "loss_pct_a_to_b": link.loss_pct_a_to_b,
         "loss_pct_b_to_a": link.loss_pct_b_to_a,
+        "delay_a_to_b_extra": link.delay_a_to_b_extra,
+        "delay_b_to_a_extra": link.delay_b_to_a_extra,
+        "jitter_a_to_b_extra": link.jitter_a_to_b_extra,
+        "jitter_b_to_a_extra": link.jitter_b_to_a_extra,
+        "loss_pct_a_to_b_extra": link.loss_pct_a_to_b_extra,
+        "loss_pct_b_to_a_extra": link.loss_pct_b_to_a_extra,
     }
 
 
@@ -235,6 +241,12 @@ class Topology:
         jitter_b_to_a: str | None = None,
         loss_pct_a_to_b: float | None = None,
         loss_pct_b_to_a: float | None = None,
+        delay_a_to_b_extra: str | None = None,
+        delay_b_to_a_extra: str | None = None,
+        jitter_a_to_b_extra: str | None = None,
+        jitter_b_to_a_extra: str | None = None,
+        loss_pct_a_to_b_extra: float | None = None,
+        loss_pct_b_to_a_extra: float | None = None,
     ) -> Link:
         """Append a :class:`Link` between two nodes.
 
@@ -266,6 +278,17 @@ class Topology:
             jitter_b_to_a: Per-direction jitter, ``b`` → ``a``.
             loss_pct_a_to_b: Per-direction loss, ``a`` → ``b``.
             loss_pct_b_to_a: Per-direction loss, ``b`` → ``a``.
+            delay_a_to_b_extra: Additional delay added on top of the symmetric
+                ``delay`` for the ``a`` → ``b`` direction. Requires symmetric
+                ``delay``; mutually exclusive with ``delay_a_to_b``.
+            delay_b_to_a_extra: Same as above, ``b`` → ``a``.
+            jitter_a_to_b_extra: Additional jitter on top of symmetric
+                ``jitter`` for ``a`` → ``b``. Requires symmetric ``jitter``.
+            jitter_b_to_a_extra: Same as above, ``b`` → ``a``.
+            loss_pct_a_to_b_extra: Additional loss percent on top of symmetric
+                ``loss_pct`` for ``a`` → ``b``. Requires symmetric
+                ``loss_pct``; combined value must stay ≤ 100.0.
+            loss_pct_b_to_a_extra: Same as above, ``b`` → ``a``.
 
         Returns:
             The newly created :class:`Link`.
@@ -338,6 +361,12 @@ class Topology:
             jitter_b_to_a=jitter_b_to_a,
             loss_pct_a_to_b=loss_pct_a_to_b,
             loss_pct_b_to_a=loss_pct_b_to_a,
+            delay_a_to_b_extra=delay_a_to_b_extra,
+            delay_b_to_a_extra=delay_b_to_a_extra,
+            jitter_a_to_b_extra=jitter_a_to_b_extra,
+            jitter_b_to_a_extra=jitter_b_to_a_extra,
+            loss_pct_a_to_b_extra=loss_pct_a_to_b_extra,
+            loss_pct_b_to_a_extra=loss_pct_b_to_a_extra,
         )
         self._links.append(link)
         return link
@@ -629,6 +658,12 @@ class Topology:
                     jitter_b_to_a=link_data.get("jitter_b_to_a"),
                     loss_pct_a_to_b=link_data.get("loss_pct_a_to_b"),
                     loss_pct_b_to_a=link_data.get("loss_pct_b_to_a"),
+                    delay_a_to_b_extra=link_data.get("delay_a_to_b_extra"),
+                    delay_b_to_a_extra=link_data.get("delay_b_to_a_extra"),
+                    jitter_a_to_b_extra=link_data.get("jitter_a_to_b_extra"),
+                    jitter_b_to_a_extra=link_data.get("jitter_b_to_a_extra"),
+                    loss_pct_a_to_b_extra=link_data.get("loss_pct_a_to_b_extra"),
+                    loss_pct_b_to_a_extra=link_data.get("loss_pct_b_to_a_extra"),
                 )
             )
         return topo

@@ -52,6 +52,12 @@ class Link:
     ``loss_pct``) apply equally to both veth sides. Per-direction overrides
     (``*_a_to_b`` / ``*_b_to_a``) shape only one direction; mixing a symmetric
     field and a matching asymmetric field for the same parameter is rejected.
+
+    Per-direction additive fields (``*_a_to_b_extra`` / ``*_b_to_a_extra``)
+    layer on top of the symmetric base. They require the symmetric base to be
+    set and are mutually exclusive with the per-direction override on the
+    same dimension. Bandwidth has no ``_extra`` form because additive
+    bandwidth lacks clean physical semantics.
     """
 
     a: LinkEndpoint
@@ -69,6 +75,12 @@ class Link:
     jitter_b_to_a: str | None = None
     loss_pct_a_to_b: float | None = None
     loss_pct_b_to_a: float | None = None
+    delay_a_to_b_extra: str | None = None
+    delay_b_to_a_extra: str | None = None
+    jitter_a_to_b_extra: str | None = None
+    jitter_b_to_a_extra: str | None = None
+    loss_pct_a_to_b_extra: float | None = None
+    loss_pct_b_to_a_extra: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.a, LinkEndpoint):
@@ -101,5 +113,43 @@ class Link:
         ):
             if value is not None and not 0.0 <= value <= 100.0:
                 raise TopologyError(f"link loss_pct_{direction} {value} out of range [0.0, 100.0]")
+        for param, sym, per_dir, extras in (
+            (
+                "delay",
+                self.delay,
+                (self.delay_a_to_b, self.delay_b_to_a),
+                (self.delay_a_to_b_extra, self.delay_b_to_a_extra),
+            ),
+            (
+                "jitter",
+                self.jitter,
+                (self.jitter_a_to_b, self.jitter_b_to_a),
+                (self.jitter_a_to_b_extra, self.jitter_b_to_a_extra),
+            ),
+            (
+                "loss_pct",
+                self.loss_pct,
+                (self.loss_pct_a_to_b, self.loss_pct_b_to_a),
+                (self.loss_pct_a_to_b_extra, self.loss_pct_b_to_a_extra),
+            ),
+        ):
+            for direction, extra, per in zip(("a_to_b", "b_to_a"), extras, per_dir, strict=True):
+                if extra is None:
+                    continue
+                if per is not None:
+                    raise TopologyError(
+                        f"link sets both {param}_{direction} and {param}_{direction}_extra; "
+                        f"pick one"
+                    )
+                if sym is None:
+                    raise TopologyError(
+                        f"link {param}_{direction}_extra requires symmetric {param} to be set"
+                    )
+        for direction, value in (
+            ("a_to_b", self.loss_pct_a_to_b_extra),
+            ("b_to_a", self.loss_pct_b_to_a_extra),
+        ):
+            if value is not None and value < 0.0:
+                raise TopologyError(f"link loss_pct_{direction}_extra {value} must be non-negative")
         if self.mtu is not None and not _MTU_MIN <= self.mtu <= _MTU_MAX:
             raise TopologyError(f"link mtu {self.mtu} out of range [{_MTU_MIN}, {_MTU_MAX}]")

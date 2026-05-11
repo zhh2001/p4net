@@ -51,7 +51,7 @@ import。任何未在包的 `__all__` 中导出的对象都属于此类。
 | --- | --- | --- |
 | `Host` | 稳定 | 字段名与类型稳定。可在带安全默认值的前提下追加新字段。 |
 | `P4Switch` | 稳定 | 同 `Host`。 |
-| `Link` | 稳定 | 对称与非对称损伤字段（`bandwidth`、`delay`、`jitter`、`loss_pct` 及对应的 `*_a_to_b` / `*_b_to_a`）均稳定。 |
+| `Link` | 稳定 | 对称与非对称损伤字段（`bandwidth`、`delay`、`jitter`、`loss_pct` 及对应的 `*_a_to_b` / `*_b_to_a`）均稳定。1.1 引入的每方向叠加字段（`delay_a_to_b_extra`、`delay_b_to_a_extra`、`jitter_a_to_b_extra`、`jitter_b_to_a_extra`、`loss_pct_a_to_b_extra`、`loss_pct_b_to_a_extra`）同为稳定。 |
 | `LinkEndpoint` | 稳定 | |
 | `Topology` | 稳定 | `add_host`、`add_switch`、`add_link`、`validate`、`to_graphviz`、`render_graphviz`、`to_dict`、`from_dict` 均稳定。`to_dict` / `from_dict` 的往返格式属于公共契约。 |
 | `TopologyError` | 稳定 | |

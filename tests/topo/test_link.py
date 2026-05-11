@@ -189,3 +189,63 @@ def test_link_loss_pct_a_to_b_range(bad_loss: float) -> None:
 def test_link_loss_pct_b_to_a_range(bad_loss: float) -> None:
     with pytest.raises(TopologyError, match="loss_pct_b_to_a"):
         Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"), loss_pct_b_to_a=bad_loss)
+
+
+def test_link_delay_extra_requires_symmetric_base() -> None:
+    with pytest.raises(TopologyError, match="delay_a_to_b_extra requires symmetric delay"):
+        Link(
+            a=LinkEndpoint(node="h1"),
+            b=LinkEndpoint(node="s1"),
+            delay_a_to_b_extra="50ms",
+        )
+
+
+def test_link_delay_extra_conflicts_with_per_direction() -> None:
+    with pytest.raises(TopologyError, match="both delay_a_to_b and delay_a_to_b_extra"):
+        Link(
+            a=LinkEndpoint(node="h1"),
+            b=LinkEndpoint(node="s1"),
+            delay_a_to_b="200ms",
+            delay_a_to_b_extra="50ms",
+        )
+
+
+def test_link_jitter_extra_requires_symmetric_base() -> None:
+    with pytest.raises(TopologyError, match="jitter_a_to_b_extra requires symmetric jitter"):
+        Link(
+            a=LinkEndpoint(node="h1"),
+            b=LinkEndpoint(node="s1"),
+            delay="10ms",
+            jitter_a_to_b_extra="1ms",
+        )
+
+
+def test_link_loss_pct_extra_requires_symmetric_base() -> None:
+    with pytest.raises(TopologyError, match="loss_pct_b_to_a_extra requires symmetric loss_pct"):
+        Link(
+            a=LinkEndpoint(node="h1"),
+            b=LinkEndpoint(node="s1"),
+            loss_pct_b_to_a_extra=5.0,
+        )
+
+
+def test_link_loss_pct_extra_negative_rejected() -> None:
+    with pytest.raises(TopologyError, match=r"loss_pct_a_to_b_extra .* non-negative"):
+        Link(
+            a=LinkEndpoint(node="h1"),
+            b=LinkEndpoint(node="s1"),
+            loss_pct=1.0,
+            loss_pct_a_to_b_extra=-0.5,
+        )
+
+
+def test_link_delay_extra_accepted() -> None:
+    link = Link(
+        a=LinkEndpoint(node="h1"),
+        b=LinkEndpoint(node="s1"),
+        delay="100ms",
+        delay_a_to_b_extra="50ms",
+    )
+    assert link.delay == "100ms"
+    assert link.delay_a_to_b_extra == "50ms"
+    assert link.delay_b_to_a_extra is None

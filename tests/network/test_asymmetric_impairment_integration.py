@@ -132,3 +132,76 @@ def test_asymmetric_delay_round_trip(compiled: dict[str, Path], tmp_path: Path) 
         result.stdout  # noqa: B018  (kept for debugging)
     finally:
         net.stop()
+
+
+def test_symmetric_base_plus_a_to_b_extra(compiled: dict[str, Path], tmp_path: Path) -> None:
+    """100ms symmetric base + 100ms a_to_b extra on h1↔s1; RTT ≈ 300 ms.
+
+    h1 → s1: delay 100ms (base) + 100ms (extra) = 200ms one way.
+    s1 → h1: delay 100ms (base only) = 100ms one way.
+    h2 ↔ s1: unimpaired.
+    Round trip h1 → h2 → h1 ≈ 200 + 100 = 300 ms.
+    """
+    suffix = _suffix()
+    h1, h2, s1 = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
+    grpc, thrift = _two_free_ports()
+    topo = Topology()
+    topo.add_host(h1, ip="10.0.0.1/24", mac="00:00:00:00:00:01")
+    topo.add_host(h2, ip="10.0.0.2/24", mac="00:00:00:00:00:02")
+    topo.add_switch(s1, p4_src=_TWO_PORT_SWAP, grpc_port=grpc, thrift_port=thrift)
+    topo.add_link(
+        h1,
+        s1,
+        port_b=1,
+        delay="100ms",
+        delay_a_to_b_extra="100ms",
+    )
+    topo.add_link(h2, s1, port_b=2)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        h1r, h2r = net.host(h1), net.host(h2)
+        h1r.exec(
+            [
+                "ip",
+                "neigh",
+                "replace",
+                "10.0.0.2",
+                "lladdr",
+                "00:00:00:00:00:02",
+                "dev",
+                f"{h1}-eth0",
+                "nud",
+                "permanent",
+            ]
+        )
+        h2r.exec(
+            [
+                "ip",
+                "neigh",
+                "replace",
+                "10.0.0.1",
+                "lladdr",
+                "00:00:00:00:00:01",
+                "dev",
+                f"{h2}-eth0",
+                "nud",
+                "permanent",
+            ]
+        )
+        result = h1r.exec(
+            ["ping", "-4", "-c", "5", "-W", "3", "-w", "20", "10.0.0.2"],
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"ping failed (rc={result.returncode}): "
+            f"stderr={result.stderr.decode(errors='replace')!r}"
+        )
+        avg_ms = _parse_ping_avg_ms(result.stdout)
+        assert 280.0 < avg_ms < 360.0, (
+            f"base+extra delay not in expected range: avg={avg_ms} ms "
+            f"(expected ~300 ms ± tolerance)"
+        )
+    finally:
+        net.stop()

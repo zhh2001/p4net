@@ -12,7 +12,12 @@ import pytest
 from pytest_mock import MockerFixture
 
 from p4net.network import Network, NetworkAlreadyRunningError, NodeNotFoundError
-from p4net.topo import Topology
+from p4net.network.orchestrator import (
+    _add_durations,
+    _format_duration_ns,
+    _parse_duration_ns,
+)
+from p4net.topo import Link, LinkEndpoint, Topology
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -896,3 +901,102 @@ def test_pingall6_empty_when_no_v6_hosts(patched: dict[str, Any], tmp_path: Path
         assert net.pingall6() == {}
     finally:
         net.stop()
+
+
+# ---------------------------------------------------------------------------
+# _direction_params with extras
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_ns"),
+    [
+        ("100ms", 100_000_000),
+        ("1s", 1_000_000_000),
+        ("250us", 250_000),
+        ("500ns", 500),
+        ("0ms", 0),
+    ],
+)
+def test_parse_duration_ns(value: str, expected_ns: int) -> None:
+    assert _parse_duration_ns(value) == expected_ns
+
+
+@pytest.mark.parametrize(
+    ("ns", "expected"),
+    [
+        (100_000_000, "100ms"),
+        (1_000_000_000, "1s"),
+        (1_500_000_000, "1500ms"),
+        (250_000, "250us"),
+        (500, "500ns"),
+    ],
+)
+def test_format_duration_ns(ns: int, expected: str) -> None:
+    assert _format_duration_ns(ns) == expected
+
+
+def test_add_durations_sums_canonical() -> None:
+    assert _add_durations("100ms", "50ms") == "150ms"
+    assert _add_durations("1s", "500ms") == "1500ms"
+    assert _add_durations("100us", "1ms") == "1100us"
+
+
+def test_direction_params_extra_adds_to_symmetric_delay() -> None:
+    link = Link(
+        a=LinkEndpoint(node="h1", iface_name="h1-eth0"),
+        b=LinkEndpoint(node="s1", iface_name="s1-eth0"),
+        delay="100ms",
+        delay_a_to_b_extra="50ms",
+    )
+    _rate, delay, jitter, loss = Network._direction_params(link, "a_to_b")
+    assert delay == "150ms"
+    assert jitter is None
+    assert loss is None
+    _rate, delay, _jitter, _loss = Network._direction_params(link, "b_to_a")
+    assert delay == "100ms"
+
+
+def test_direction_params_no_extra_returns_base() -> None:
+    link = Link(
+        a=LinkEndpoint(node="h1", iface_name="h1-eth0"),
+        b=LinkEndpoint(node="s1", iface_name="s1-eth0"),
+        delay="100ms",
+    )
+    _, delay_ab, _, _ = Network._direction_params(link, "a_to_b")
+    _, delay_ba, _, _ = Network._direction_params(link, "b_to_a")
+    assert delay_ab == "100ms"
+    assert delay_ba == "100ms"
+
+
+def test_direction_params_loss_extra_sums() -> None:
+    link = Link(
+        a=LinkEndpoint(node="h1", iface_name="h1-eth0"),
+        b=LinkEndpoint(node="s1", iface_name="s1-eth0"),
+        loss_pct=1.0,
+        loss_pct_a_to_b_extra=4.0,
+    )
+    _, _, _, loss_ab = Network._direction_params(link, "a_to_b")
+    _, _, _, loss_ba = Network._direction_params(link, "b_to_a")
+    assert loss_ab == 5.0
+    assert loss_ba == 1.0
+
+
+def test_link_round_trip_preserves_extras() -> None:
+    topo = Topology()
+    topo.add_host("h1", ip="10.0.0.1/24")
+    topo.add_switch("s1", p4_src=Path("p.p4"))
+    topo.add_link(
+        "h1",
+        "s1",
+        delay="100ms",
+        delay_a_to_b_extra="50ms",
+        loss_pct=1.0,
+        loss_pct_b_to_a_extra=2.0,
+    )
+    round_tripped = Topology.from_dict(topo.to_dict())
+    link = next(iter(round_tripped.links))
+    assert link.delay_a_to_b_extra == "50ms"
+    assert link.delay_b_to_a_extra is None
+    assert link.loss_pct_b_to_a_extra == 2.0
+    assert link.loss_pct_a_to_b_extra is None

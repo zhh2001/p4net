@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
@@ -44,8 +45,67 @@ from p4net.runtime import (
     enable_ipv6,
 )
 from p4net.topo import Host, Link, Topology
+from p4net.topo.exceptions import TopologyError
 
 logger = logging.getLogger(__name__)
+
+_DURATION_UNITS_NS: dict[str, int] = {
+    "ns": 1,
+    "us": 1_000,
+    "ms": 1_000_000,
+    "s": 1_000_000_000,
+}
+
+
+def _parse_duration_ns(value: str) -> int:
+    """Parse a netem-style duration string (e.g. ``"100ms"``, ``"1s"``) to ns."""
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(ns|us|ms|s)\s*", value)
+    if match is None:
+        raise ValueError(f"invalid duration string {value!r}")
+    magnitude, unit = match.groups()
+    return round(float(magnitude) * _DURATION_UNITS_NS[unit])
+
+
+def _format_duration_ns(ns: int) -> str:
+    """Format nanoseconds back into the largest exact unit (canonical short form)."""
+    for unit, scale in (("s", 1_000_000_000), ("ms", 1_000_000), ("us", 1_000), ("ns", 1)):
+        if ns % scale == 0 and ns >= scale:
+            return f"{ns // scale}{unit}"
+    return f"{ns}ns"
+
+
+def _add_durations(base: str, extra: str) -> str:
+    """Return the canonical-shortest sum of two netem duration strings."""
+    return _format_duration_ns(_parse_duration_ns(base) + _parse_duration_ns(extra))
+
+
+def _resolve_dir_str(
+    sym: str | None,
+    per_dir: str | None,
+    extra: str | None,
+) -> str | None:
+    """Resolve a per-direction string-typed netem param (delay / jitter)."""
+    if extra is not None and sym is not None:
+        return _add_durations(sym, extra)
+    if per_dir is not None:
+        return per_dir
+    return sym
+
+
+def _resolve_dir_loss(
+    sym: float | None,
+    per_dir: float | None,
+    extra: float | None,
+) -> float | None:
+    """Resolve a per-direction loss percentage with cap-at-100 + raise on overflow."""
+    if extra is not None and sym is not None:
+        total = sym + extra
+        if total > 100.0:
+            raise TopologyError(f"loss_pct base {sym} + extra {extra} = {total}, exceeds 100.0")
+        return total
+    if per_dir is not None:
+        return per_dir
+    return sym
 
 
 class Network:
@@ -476,14 +536,24 @@ class Network:
         """Return ``(rate, delay, jitter, loss_pct)`` netem args for one direction.
 
         Each element falls back to the symmetric value if the matching
-        ``*_a_to_b`` / ``*_b_to_a`` field is unset.
+        ``*_a_to_b`` / ``*_b_to_a`` field is unset. If the matching
+        ``*_extra`` field is set, it is summed on top of the symmetric base.
         """
         suffix = "_a_to_b" if direction == "a_to_b" else "_b_to_a"
         rate: str | None = getattr(link, "bandwidth" + suffix) or link.bandwidth
-        delay: str | None = getattr(link, "delay" + suffix) or link.delay
-        jitter: str | None = getattr(link, "jitter" + suffix) or link.jitter
-        asym_loss: float | None = getattr(link, "loss_pct" + suffix)
-        loss: float | None = asym_loss if asym_loss is not None else link.loss_pct
+        delay = _resolve_dir_str(
+            link.delay, getattr(link, "delay" + suffix), getattr(link, "delay" + suffix + "_extra")
+        )
+        jitter = _resolve_dir_str(
+            link.jitter,
+            getattr(link, "jitter" + suffix),
+            getattr(link, "jitter" + suffix + "_extra"),
+        )
+        loss = _resolve_dir_loss(
+            link.loss_pct,
+            getattr(link, "loss_pct" + suffix),
+            getattr(link, "loss_pct" + suffix + "_extra"),
+        )
         return rate, delay, jitter, loss
 
     @staticmethod
