@@ -424,8 +424,10 @@ p4net> topology graph /tmp/topo.dot format=dot
 
 ## 接下来读什么
 
-- [示例目录](examples/index.md)收录了六个可运行的拓扑——每个
-  示例只展示一项特性，比这个「大杂烩」教程更易读。
-- [API 参考](api/network.md)记录了上文用到的每一个类与函数。
-- [路线图](roadmap.md)列出 v0.3.0 候选项，包括 PSA 架构支持
-  与异步 P4Runtime 客户端。
+- [示例目录](examples/index.md)收录七个可运行的拓扑——
+  每个示例只展示一项特性，比这个「大杂烩」教程更易读。
+- [API 参考](api/network.md)记录了上文用到的每个类与函数。
+- [路线图](roadmap.md)列出 1.x 与 2.0 候选项，
+  包括 PSA 架构支持与异步 P4Runtime 客户端。
+- 想系统地学 P4 语言本身？可以参考同作者的中文 P4
+  教程仓库：[p4-language-guide-zh](https://github.com/zhh2001/p4-language-guide-zh)。
