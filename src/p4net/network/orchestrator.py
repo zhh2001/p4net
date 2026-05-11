@@ -411,6 +411,7 @@ class Network:
                 bmv2.grpc_address,
                 device_id=int(sw.device_id) if sw.device_id is not None else 0,
                 election_id=election_id,
+                thrift_address=("127.0.0.1", int(bmv2.thrift_port)),
             )
             client.connect()
             self._clients[sw_name] = client

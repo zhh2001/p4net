@@ -74,7 +74,11 @@ import。任何未在包的 `__all__` 中导出的对象都属于此类。
 
 | 符号 | 等级 | 备注 |
 | --- | --- | --- |
-| `P4RuntimeClient` | 稳定 | `connect`、`disconnect`、`set_pipeline_config`、`get_pipeline_config`、`insert_table_entry`、`modify_table_entry`、`delete_table_entry`、`list_table_entries`、`clear_table`、`read_counter`、`write_counter`、`add_multicast_group`、`modify_multicast_group`、`delete_multicast_group`、`list_multicast_groups`、`send_packet_out`、`on_packet_in`、`expect_packet_in`。 |
+| `P4RuntimeClient` | 稳定 | `connect`、`disconnect`、`set_pipeline_config`、`get_pipeline_config`、`insert_table_entry`、`modify_table_entry`、`delete_table_entry`、`list_table_entries`、`clear_table`、`read_counter`、`write_counter`、`add_multicast_group`、`modify_multicast_group`、`delete_multicast_group`、`list_multicast_groups`、`send_packet_out`、`on_packet_in`、`expect_packet_in`、`read_register`、`write_register`。 |
+| `P4RuntimeClient.read_register` / `write_register` | 稳定 | 读取单个 cell 或整个数组；写入单个 cell。BMv2 的 PI 不实现 P4Runtime RegisterEntry，因此实现走 BMv2 Thrift 控制通道（`simple_switch_CLI`）；Python API 契约与符合 P4Runtime 标准的目标一致。 |
+| `P4InfoIndex.register_by_name` | 稳定 | 按名查找返回 `RegisterSpec`；不存在抛出 `NoSuchRegisterError`。 |
+| `RegisterSpec` | 稳定 | 不可变 dataclass，含 `id`、`name`、`bitwidth`、`size`。 |
+| `NoSuchRegisterError` | 稳定 | 寄存器名不存在时由查找接口抛出。 |
 | `P4RuntimeClient` 选举 ID | 临时 | 「毫秒时间戳」生成器与外部类型（`tuple[int, int]`）稳定；如果带来运维压力，策略可能变化。 |
 | `P4InfoIndex` | 稳定 | 顶层查询（`tables`、`actions`、`counters`、控制器报头元数据）稳定。 |
 | `P4InfoIndex.decode_match` | 临时 | 位宽感知格式化规则（32 位 → IPv4，48 位 → MAC，128 位 → IPv6，其余十进制）在 1.x 内稳定；如需为新字段类型添加规则，会走弃用流程。 |

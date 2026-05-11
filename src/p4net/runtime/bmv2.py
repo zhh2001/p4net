@@ -119,6 +119,11 @@ class BMv2Switch:
         """P4Runtime device ID this switch reports as."""
         return self._device_id
 
+    @property
+    def thrift_port(self) -> int:
+        """Thrift bind port for ``simple_switch_CLI`` and register operations."""
+        return self._thrift_port
+
     # Argv construction --------------------------------------------------
 
     def _build_argv(self) -> list[str]:

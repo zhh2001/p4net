@@ -23,6 +23,7 @@ from google.protobuf import text_format
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2, p4runtime_pb2_grpc
 
+from p4net.control.codec import encode_value
 from p4net.control.exceptions import (
     ConnectionError,
     DuplicateEntryError,
@@ -54,6 +55,51 @@ class CounterData:
 
     packet_count: int
     byte_count: int
+
+
+def _parse_register_read_single(output: str, name: str, index: int) -> int:
+    """Parse ``register_read <name> <index>`` output: ``<name>[<index>]= <value>``."""
+    needle = f"{name}["
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        # simple_switch_CLI emits lines prefixed with "RuntimeCmd: "; strip.
+        if line.startswith("RuntimeCmd:"):
+            line = line[len("RuntimeCmd:") :].strip()
+        if line.startswith(needle):
+            eq = line.find("=")
+            if eq == -1:
+                continue
+            value_text = line[eq + 1 :].strip()
+            try:
+                return int(value_text)
+            except ValueError as exc:
+                raise P4RuntimeError(
+                    f"register_read {name}[{index}]: could not parse value {value_text!r}"
+                ) from exc
+    raise P4RuntimeError(f"register_read {name}[{index}]: no value line in output: {output!r}")
+
+
+def _parse_register_read_array(output: str, name: str, size: int) -> list[int]:
+    """Parse ``register_read <name>`` output: ``<name>= v0, v1, v2, ...``."""
+    needle = f"{name}="
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if line.startswith("RuntimeCmd:"):
+            line = line[len("RuntimeCmd:") :].strip()
+        if line.startswith(needle):
+            value_text = line[len(needle) :].strip()
+            try:
+                values = [int(v.strip()) for v in value_text.split(",") if v.strip()]
+            except ValueError as exc:
+                raise P4RuntimeError(
+                    f"register_read {name}: could not parse values from {value_text!r}"
+                ) from exc
+            if len(values) != size:
+                raise P4RuntimeError(
+                    f"register_read {name}: expected {size} cells, got {len(values)}"
+                )
+            return values
+    raise P4RuntimeError(f"register_read {name}: no value line in output: {output!r}")
 
 
 def _extract_p4_canonical_codes(exc: grpc.RpcError) -> list[int]:
@@ -102,6 +148,7 @@ class P4RuntimeClient:
         election_id: tuple[int, int] = (1, 0),
         role: str | None = None,
         channel_options: Sequence[tuple[str, object]] | None = None,
+        thrift_address: tuple[str, int] | None = None,
     ) -> None:
         self._target = target
         self._device_id = int(device_id)
@@ -111,6 +158,7 @@ class P4RuntimeClient:
         self._channel_options: list[tuple[str, Any]] = (
             list(channel_options) if channel_options is not None else list(_DEFAULT_CHANNEL_OPTIONS)
         )
+        self._thrift_address = thrift_address
 
         self._channel: Any = None
         self._stub: Any = None
@@ -689,6 +737,158 @@ class P4RuntimeClient:
             self._stub.Write(req, timeout=timeout)
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc) from exc
+
+    # Registers ----------------------------------------------------------
+
+    # BMv2's P4Runtime backend currently returns UNIMPLEMENTED for RegisterEntry
+    # over gRPC ("Register reads are not supported yet" in libpifeproto). The
+    # P4Runtime contract is honored at the Python API surface — same method
+    # names and semantics — but the implementation delegates to BMv2's Thrift
+    # control channel via ``simple_switch_CLI``. Targets with a compliant
+    # P4Runtime RegisterEntry implementation can be migrated by swapping the
+    # transport here without changing the public API.
+
+    def write_register(
+        self,
+        name: str,
+        index: int,
+        value: int,
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        """Write a single cell of a P4 register.
+
+        Args:
+            name: Fully qualified P4 register name
+                (e.g. ``MyIngress.switch_id``).
+            index: Cell index in the register array. Must be in range
+                ``[0, size)``.
+            value: Integer value to write. Must fit in the register's
+                bitwidth.
+
+        Raises:
+            NoSuchRegisterError: if the register doesn't exist.
+            EncodingError: if ``index`` is out of range or ``value``
+                exceeds the register's bitwidth.
+            P4RuntimeError: if the underlying control channel returns
+                an error or this client has no Thrift address configured.
+        """
+        self._require_connected_with_index()
+        idx = self._index
+        assert idx is not None
+        spec = idx.register_by_name(name)
+        if not 0 <= int(index) < spec.size:
+            raise EncodingError(f"register {name!r} index {index} out of range [0, {spec.size})")
+        # Force bitwidth validation. Result bytes are unused — the Thrift
+        # CLI takes a decimal integer.
+        encode_value(int(value), spec.bitwidth)
+        self._run_thrift_cli(
+            f"register_write {name} {int(index)} {int(value)}",
+            timeout=timeout,
+            op_description=f"register_write {name}[{index}]",
+        )
+        logger.debug(
+            "BMv2 thrift register_write %s[%d] = %d (bitwidth=%d)",
+            name,
+            int(index),
+            int(value),
+            spec.bitwidth,
+        )
+
+    def read_register(
+        self,
+        name: str,
+        index: int | None = None,
+        *,
+        timeout: float = 5.0,
+    ) -> int | list[int]:
+        """Read a P4 register.
+
+        Args:
+            name: Fully qualified P4 register name.
+            index: Cell index, or ``None`` to read every cell.
+
+        Returns:
+            If ``index`` is given: the integer value of that cell.
+            If ``index`` is ``None``: a list of integers indexed by
+            position ``[0, size)``. Cells default to ``0`` (BMv2
+            initializes register elements to zero).
+
+        Raises:
+            NoSuchRegisterError: if the register doesn't exist.
+            EncodingError: if ``index`` is out of range.
+            P4RuntimeError: if the underlying control channel returns
+                an error or this client has no Thrift address configured.
+        """
+        self._require_connected_with_index()
+        idx = self._index
+        assert idx is not None
+        spec = idx.register_by_name(name)
+        if index is not None and not 0 <= int(index) < spec.size:
+            raise EncodingError(f"register {name!r} index {index} out of range [0, {spec.size})")
+        if index is not None:
+            output = self._run_thrift_cli(
+                f"register_read {name} {int(index)}",
+                timeout=timeout,
+                op_description=f"register_read {name}[{index}]",
+            )
+            return _parse_register_read_single(output, name, int(index))
+        output = self._run_thrift_cli(
+            f"register_read {name}",
+            timeout=timeout,
+            op_description=f"register_read {name}",
+        )
+        return _parse_register_read_array(output, name, spec.size)
+
+    def _run_thrift_cli(
+        self,
+        command: str,
+        *,
+        timeout: float,
+        op_description: str,
+    ) -> str:
+        """Run a single command against ``simple_switch_CLI`` and return stdout."""
+        if self._thrift_address is None:
+            raise P4RuntimeError(
+                "register operations require a Thrift sidecar address; "
+                f"construct P4RuntimeClient with thrift_address=(host, port). "
+                f"Operation: {op_description}"
+            )
+        host, port = self._thrift_address
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                [
+                    "simple_switch_CLI",
+                    "--thrift-ip",
+                    str(host),
+                    "--thrift-port",
+                    str(int(port)),
+                ],
+                input=command + "\n",
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            raise P4RuntimeError(
+                "simple_switch_CLI not found on PATH; required for register operations"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise P4RuntimeError(
+                f"{op_description} timed out after {timeout}s against thrift {host}:{port}"
+            ) from exc
+        combined = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise P4RuntimeError(
+                f"{op_description} failed (rc={result.returncode}): {combined.strip()}"
+            )
+        for line in combined.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Error:") or "Invalid" in stripped:
+                raise P4RuntimeError(f"{op_description}: {stripped}")
+        return result.stdout
 
     # Multicast groups ---------------------------------------------------
 

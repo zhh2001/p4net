@@ -82,7 +82,11 @@ Stable client API; provisional codec edge cases.
 
 | Symbol | Tier | Note |
 | --- | --- | --- |
-| `P4RuntimeClient` | Stable | `connect`, `disconnect`, `set_pipeline_config`, `get_pipeline_config`, `insert_table_entry`, `modify_table_entry`, `delete_table_entry`, `list_table_entries`, `clear_table`, `read_counter`, `write_counter`, `add_multicast_group`, `modify_multicast_group`, `delete_multicast_group`, `list_multicast_groups`, `send_packet_out`, `on_packet_in`, `expect_packet_in`. |
+| `P4RuntimeClient` | Stable | `connect`, `disconnect`, `set_pipeline_config`, `get_pipeline_config`, `insert_table_entry`, `modify_table_entry`, `delete_table_entry`, `list_table_entries`, `clear_table`, `read_counter`, `write_counter`, `add_multicast_group`, `modify_multicast_group`, `delete_multicast_group`, `list_multicast_groups`, `send_packet_out`, `on_packet_in`, `expect_packet_in`, `read_register`, `write_register`. |
+| `P4RuntimeClient.read_register` / `write_register` | Stable | Read a single cell or the full array; write a single cell. BMv2's PI does not implement P4Runtime RegisterEntry, so the implementation uses BMv2's Thrift control channel via `simple_switch_CLI`; the Python API contract matches what a P4Runtime-compliant target would expose. |
+| `P4InfoIndex.register_by_name` | Stable | Returns a `RegisterSpec` for the named register; raises `NoSuchRegisterError`. |
+| `RegisterSpec` | Stable | Frozen dataclass with `id`, `name`, `bitwidth`, `size`. |
+| `NoSuchRegisterError` | Stable | Raised by register lookups when the name doesn't exist. |
 | `P4RuntimeClient` election ID | Provisional | The millisecond-time-since-epoch generator is stable behavior; the underlying type (`tuple[int, int]`) is stable; the strategy may change if it ever causes operational pain. |
 | `P4InfoIndex` | Stable | Top-level lookups (`tables`, `actions`, `counters`, controller-packet metadata) are stable. |
 | `P4InfoIndex.decode_match` | Provisional | Width-aware formatting rules (32-bit → IPv4, 48-bit → MAC, 128-bit → IPv6, else decimal) are stable in 1.x; we may add new field-type rules with deprecation notice. |
