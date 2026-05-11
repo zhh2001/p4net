@@ -30,6 +30,7 @@ nav:
       - p4net.cli: api/cli.md
     - API Stability: api-stability.md
     - Performance: performance.md
+    - Known Limitations: known-limitations.md
     - Glossary: glossary.md
   - Examples:
     - Overview: examples/index.md
@@ -116,6 +117,7 @@ plugins:
             API: API
             API Stability: API 稳定性
             Performance: 性能特征
+            Known Limitations: 已知限制
             Glossary: 术语表
             Examples: 示例
             Development: 开发
