@@ -44,6 +44,11 @@ design discussion happens once, in public, before the code lands.
   decodes the full hop-by-hop stack. Same P4 binary on both switches;
   per-switch identity supplied via the v1.2 register API. No public
   API changes. See [Changelog](changelog.md).
+- **v1.4.0** (2026-05-11) — cross-switch INT timestamp alignment via
+  `RunningSwitch.boot_timestamp_us` (wall-clock μs since Unix epoch at
+  BMv2 process start). The multi-hop INT example now writes a
+  coordination file at start; the listener displays aligned wall-clock
+  timestamps and per-hop forwarding latency. See [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 

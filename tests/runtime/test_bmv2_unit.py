@@ -522,9 +522,7 @@ def test_boot_timestamp_us_cleared_on_stop(tmp_path: Path, mocker: MockerFixture
     assert sw.boot_timestamp_us is None
 
 
-def test_boot_timestamp_us_cleared_on_popen_failure(
-    tmp_path: Path, mocker: MockerFixture
-) -> None:
+def test_boot_timestamp_us_cleared_on_popen_failure(tmp_path: Path, mocker: MockerFixture) -> None:
     _patch_which(mocker)
     mocker.patch(
         "p4net.runtime.bmv2.subprocess.Popen",

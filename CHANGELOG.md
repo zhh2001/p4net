@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-11
+
+### Added
+
+- `RunningSwitch.boot_timestamp_us`: wall-clock microseconds since
+  Unix epoch when the switch's BMv2 process started. Captured
+  immediately before ``subprocess.Popen``, so drift from BMv2's
+  internal clock zero is bounded by Popen overhead (sub-millisecond
+  typically). Combine with INT shim ``ingress_timestamp_us`` to
+  compute wall-clock arrival time and align timestamps across
+  multiple switches. **Stable** per the API stability commitment.
+  Underlying machinery: ``BMv2Switch.boot_timestamp_us`` (read-only,
+  ``None`` when the switch is not running).
+
+### Changed
+
+- Multi-hop INT example listener now reads each switch's BMv2 boot
+  timestamp from a coordination file at
+  ``/tmp/p4net-int-multi-hop-boot-times.json`` written by
+  ``topology.py``'s ``setup(net)``, and displays both raw and aligned
+  wall-clock timestamps plus a computed ``latency_s1_to_s2`` line
+  (real per-hop forwarding latency through BMv2's userspace pipeline
+  plus the veth pair). Listener falls back gracefully to the v1.3
+  unaligned display when the coordination file is missing.
+- Multi-hop INT example README and docs page updated to document the
+  alignment formula and replace the v1.3 caveat about non-comparable
+  cross-switch timestamps.
+- Multi-hop INT integration test asserts aligned causal ordering
+  (`aligned_s2 >= aligned_s1 - 5 ms`) — an assertion that could not
+  hold on v1.3's raw-timestamp path.
+
 ## [1.3.0] - 2026-05-11
 
 ### Added

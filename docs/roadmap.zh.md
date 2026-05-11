@@ -38,6 +38,10 @@ description: p4net 已发布的版本里程碑，以及面向 2.0 的候选特�
   各自插入自己的元数据 shim；接收端解析整条逐跳栈。同一份 P4 二进制
   在两台交换机上运行；逐交换机身份通过 v1.2 寄存器 API 提供。无公共
   API 变化。详见 [变更日志](changelog.md)。
+- **v1.4.0**（2026-05-11）—— 通过 `RunningSwitch.boot_timestamp_us`
+  （BMv2 进程启动时的 Unix 微秒挂钟值）实现跨交换机 INT 时间戳对齐。
+  多跳 INT 示例在启动时写入协调文件；listener 显示对齐后的挂钟
+  时间戳和逐跳转发延迟。详见 [变更日志](changelog.md)。
 
 ## 1.x 候选项（仅追加，不破坏 API）
 

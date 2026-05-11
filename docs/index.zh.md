@@ -89,14 +89,16 @@ with Network(topo) as net:
 
 ## 项目状态
 
-p4net 当前为 **v1.3.0**——稳定版本。公共 API 已按
+p4net 当前为 **v1.4.0**——稳定版本。公共 API 已按
 [API 稳定性](api-stability.md)做出承诺：标为稳定的符号在 1.x 内不会
 被破坏。补丁版本只修 bug；小版本以追加方式新增功能。在 v1.0.0
 稳定性基础之上：v1.1.0 加入了单交换机 INT 示例、统一的 `p4net.*`
 logger 层次与 CLI 详细度控制、按方向叠加的链路损伤；v1.2.0 在
 `P4RuntimeClient` 上加入了寄存器读写 API，并据此把 INT 示例中的
 `switch_id` 改成运行时可配置；v1.3.0 加入了多跳 INT 示例，演示
-跨两台交换机的生产形态堆叠遥测。完整版本历史见
+跨两台交换机的生产形态堆叠遥测；v1.4.0 加入了
+`RunningSwitch.boot_timestamp_us`，把每台交换机的 BMv2 时间戳对齐到
+挂钟——多跳 INT 示例现在能上报真实的逐跳转发延迟。完整版本历史见
 [变更日志](changelog.md)；已知边界见[已知限制](known-limitations.md)；
 后续计划见[路线图](roadmap.md)。
 
