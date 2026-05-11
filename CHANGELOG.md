@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-11
+
+### Added
+
+- `P4RuntimeClient.write_register(name, index, value)` and
+  `P4RuntimeClient.read_register(name, index=None)` for direct
+  read/write access to P4 registers. Both methods are **stable** per
+  the API stability commitment. On BMv2 the implementation uses the
+  Thrift control channel via `simple_switch_CLI`, because BMv2's PI
+  backend currently returns UNIMPLEMENTED for P4Runtime RegisterEntry;
+  the Python API surface matches what a P4Runtime-compliant target
+  would expose.
+- `P4InfoIndex.register_by_name(name)` exposing `RegisterSpec`
+  metadata (`id`, `name`, `bitwidth`, `size`), plus
+  `P4InfoIndex.register_names`.
+- `RegisterSpec` dataclass and `NoSuchRegisterError` exception,
+  exported from `p4net.control`.
+- `P4RuntimeClient(..., thrift_address=(host, port))` constructor
+  argument so register operations can reach BMv2's Thrift sidecar.
+  The orchestrator wires it from `BMv2Switch.thrift_port`.
+
+### Changed
+
+- INT example now uses a register-backed `switch_id` instead of a
+  hard-coded P4 constant. `examples/int/topology.py` writes the
+  register in `setup(net)`; multi-switch INT deployments can assign
+  distinct identifiers without recompiling.
+- INT shim's timestamp field renamed from `ingress_timestamp_ns` to
+  `ingress_timestamp_us` to reflect BMv2's actual reporting
+  resolution. **Wire format is unchanged**; only naming. A v1.1.0
+  capture decodes identically against the v1.2.0 listener.
+
+### Fixed
+
+- Asymmetric-delay round-trip test
+  (`test_asymmetric_delay_round_trip`) upper-bound tolerance widened
+  from 280 ms to 320 ms to eliminate suite-load flakes. Lower bound
+  unchanged.
+
 ## [1.1.0] - 2026-05-11
 
 ### Added

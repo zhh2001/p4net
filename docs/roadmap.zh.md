@@ -28,6 +28,12 @@ description: p4net 已发布的版本里程碑，以及面向 2.0 的候选特�
   `p4net.*` logger 层次与 CLI 详细度控制、按方向叠加的链路损伤、
   已知限制清单、自定义 404 页。详见[日志](logging.md)、
   [已知限制](known-limitations.md)、[变更日志](changelog.md)。
+- **v1.2.0**（2026-05-11）—— 寄存器 API
+  （`P4RuntimeClient.read_register` / `write_register`）、INT 示例的
+  `switch_id` 从常量改为寄存器、INT shim 时间戳字段正名为
+  `ingress_timestamp_us`、非对称延迟测试容差放宽以消除测试套压力下的
+  抖动。详见 [API 稳定性](api-stability.md) 与
+  [变更日志](changelog.md)。
 
 ## 1.x 候选项（仅追加，不破坏 API）
 

@@ -32,6 +32,13 @@ design discussion happens once, in public, before the code lands.
   page. See [Logging](logging.md),
   [Known Limitations](known-limitations.md), and
   [Changelog](changelog.md).
+- **v1.2.0** (2026-05-11) — register API
+  (`P4RuntimeClient.read_register` / `write_register`), INT example now
+  uses a register-backed `switch_id` instead of a hard-coded constant,
+  INT shim timestamp field correctly named `ingress_timestamp_us`,
+  asymmetric-delay test tolerance widened to eliminate suite-load
+  flakes. See [API Stability](api-stability.md) and
+  [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 

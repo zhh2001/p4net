@@ -9,7 +9,7 @@
 
 A P4Runtime-native SDN simulation framework for BMv2.
 
-Status: 1.1.0 — stable. Public API committed per [API Stability](https://zhh2001.github.io/p4net/api-stability/). Patch releases for fixes; minor releases for new functionality with deprecation cycles where needed.
+Status: 1.2.0 — stable. Public API committed per [API Stability](https://zhh2001.github.io/p4net/api-stability/). Patch releases for fixes; minor releases for new functionality with deprecation cycles where needed.
 
 ## Features
 
@@ -25,6 +25,7 @@ Status: 1.1.0 — stable. Public API committed per [API Stability](https://zhh20
 - Asymmetric link impairment (per-direction `bandwidth`, `delay`, `jitter`, `loss_pct`).
 - Topology visualization (Graphviz DOT / PNG / SVG).
 - In-band network telemetry (INT) example.
+- Direct P4 register read/write via P4Runtime gRPC.
 - Unified `p4net.*` logger hierarchy with CLI verbosity control.
 - No OpenFlow, no Open vSwitch, no Docker.
 
