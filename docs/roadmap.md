@@ -26,19 +26,16 @@ design discussion happens once, in public, before the code lands.
   SECURITY.md, performance baseline, Unicode-aware doc anchors. See
   [API Stability](api-stability.md), [Performance](performance.md),
   and [Changelog](changelog.md).
+- **v1.1.0** (2026-05-11) — polish minor: INT example, unified
+  `p4net.*` logger hierarchy with CLI verbosity control, per-direction
+  additive link impairment, known-limitations catalogue, custom 404
+  page. See [Logging](logging.md),
+  [Known Limitations](known-limitations.md), and
+  [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 
-### Symmetric base + per-direction extra link impairment
-
-v0.2 ships either symmetric or asymmetric link parameters (rejecting
-the mix at construction time). A `delay_a_to_b_extra` /
-`delay_b_to_a_extra` pattern would let users layer a per-direction
-adjustment on top of a symmetric base — e.g. a baseline 10 ms link
-with an additional 50 ms only on the uplink — without forcing them to
-spell out both sides explicitly. Same shape for the other three
-parameters (`bandwidth`, `jitter`, `loss_pct`). Additive: existing
-calls keep working unchanged. Carried forward from phase-12 OQ #4.
+None currently open; ideas welcome via issues.
 
 ## 2.0 candidates (may require API breakage)
 

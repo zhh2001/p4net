@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-11
+
+### Added
+
+- INT (In-band Network Telemetry) example: single-switch topology where
+  the P4 pipeline inserts a 14-byte INT shim header (switch_id,
+  ingress_timestamp, egress_port, queue_depth, original etherType,
+  reserved) between Ethernet and IPv4 on every forwarded packet. A raw
+  AF_PACKET socket listener inside the receiving host's namespace
+  decodes the shim and prints structured per-frame telemetry.
+  Demonstrates real wire-level in-band telemetry, not controller-punt.
+- `Link.delay_a_to_b_extra`, `Link.delay_b_to_a_extra`,
+  `Link.jitter_a_to_b_extra`, `Link.jitter_b_to_a_extra`,
+  `Link.loss_pct_a_to_b_extra`, `Link.loss_pct_b_to_a_extra`:
+  per-direction additive impairment on top of the symmetric base.
+  Closes phase-12 OQ #4. Round-trips through
+  `Topology.to_dict` / `from_dict`.
+- Unified `p4net.*` logger hierarchy with documented level conventions.
+  Logger namespace is **stable** in 1.x; per-event levels and log
+  message text are not.
+- CLI `--verbose` / `-v` (INFO) and `-vv` (DEBUG) flags for log-level
+  control. Default level remains WARNING.
+- `docs/known-limitations.md`: explicit catalogue of what's not
+  supported in 1.x with workarounds where they exist (single Network
+  lifecycle per Python process, single-host operation, no PSA, no live
+  mutation, BMv2 throughput bounds).
+- `docs/logging.md`: logger hierarchy and level conventions.
+- Custom 404 page replaces Material's generic default.
+
+### Changed
+
+- Internal logging statements at lifecycle boundaries (`Network.start`,
+  BMv2 ready, P4Runtime client connect, `Network.stop`) now log at INFO
+  rather than DEBUG. Existing DEBUG observability is preserved.
+- `docs/api-stability.md` extended with a logger-namespace stability
+  section; `Link` row notes the new `*_extra` fields as Stable.
+
+### Documentation
+
+- New navigation entries: Logging, Known Limitations, INT example.
+- Chinese translations land alongside English for all new pages.
+
 ## [1.0.0] - 2026-05-10
 
 ### Stability commitment
