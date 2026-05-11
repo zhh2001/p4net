@@ -212,3 +212,37 @@ def test_stop_idempotent_on_real_process(compiled_json: Path, tmp_path: Path) ->
     sw.stop()
     sw.stop()  # third call must not raise
     assert not sw.is_running()
+
+
+# ---------------------------------------------------------------------------
+# 6. boot_timestamp_us is a sane wall-clock value on a real process
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_p4c
+def test_boot_timestamp_us_real_wall_clock(compiled_json: Path, tmp_path: Path) -> None:
+    import time
+
+    sw = BMv2Switch(
+        "s_boot",
+        device_id=5,
+        grpc_port=_free_port(),
+        thrift_port=_free_port(),
+        bmv2_json=compiled_json,
+        port_to_iface={},
+        log_dir=tmp_path / "logs",
+    )
+    assert sw.boot_timestamp_us is None
+    before = time.time_ns() // 1000
+    sw.start()
+    after = time.time_ns() // 1000
+    try:
+        sw.wait_until_ready()
+        assert sw.boot_timestamp_us is not None
+        assert before <= sw.boot_timestamp_us <= after
+        # Sanity: 2026 is comfortably past the Unix epoch and before any
+        # plausible test-rig clock skew nightmare.
+        assert sw.boot_timestamp_us > 1_700_000_000_000_000  # year 2023+
+    finally:
+        sw.stop()
+    assert sw.boot_timestamp_us is None

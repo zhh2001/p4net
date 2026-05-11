@@ -469,3 +469,69 @@ def test_context_manager_stops_on_ready_failure(tmp_path: Path, mocker: MockerFi
     # Even after a failed enter, the wrapper should have attempted cleanup.
     # Process was already exited so terminate is not called, but stop() ran.
     proc.terminate.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# boot_timestamp_us
+# ---------------------------------------------------------------------------
+
+
+def test_boot_timestamp_us_is_none_before_start(tmp_path: Path) -> None:
+    sw = _make_switch(tmp_path)
+    assert sw.boot_timestamp_us is None
+
+
+def test_boot_timestamp_us_set_after_start(tmp_path: Path, mocker: MockerFixture) -> None:
+    import time
+
+    _patch_which(mocker)
+    _patch_popen(mocker)
+    sw = _make_switch(tmp_path)
+    before = time.time_ns() // 1000
+    sw.start()
+    after = time.time_ns() // 1000
+    assert sw.boot_timestamp_us is not None
+    # Captured immediately before Popen — should fall in [before, after].
+    assert before <= sw.boot_timestamp_us <= after
+
+
+def test_boot_timestamp_us_sanity_wall_clock(tmp_path: Path, mocker: MockerFixture) -> None:
+    """Result is in the same wall-clock epoch (not, e.g., a monotonic value)."""
+    import time
+
+    _patch_which(mocker)
+    _patch_popen(mocker)
+    sw = _make_switch(tmp_path)
+    sw.start()
+    now_us = time.time_ns() // 1000
+    assert sw.boot_timestamp_us is not None
+    assert abs(now_us - sw.boot_timestamp_us) < 5_000_000  # within 5 seconds
+
+
+def test_boot_timestamp_us_cleared_on_stop(tmp_path: Path, mocker: MockerFixture) -> None:
+    _patch_which(mocker)
+    proc = MagicMock()
+    proc.pid = 1
+    proc.poll.return_value = 0  # already exited fast path
+    proc.returncode = 0
+    _patch_popen(mocker, proc=proc)
+    sw = _make_switch(tmp_path)
+    sw.start()
+    assert sw.boot_timestamp_us is not None
+    sw.stop()
+    assert sw.boot_timestamp_us is None
+
+
+def test_boot_timestamp_us_cleared_on_popen_failure(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    _patch_which(mocker)
+    mocker.patch(
+        "p4net.runtime.bmv2.subprocess.Popen",
+        side_effect=OSError("ENOEXEC"),
+    )
+    sw = _make_switch(tmp_path)
+    with pytest.raises(BMv2StartupError):
+        sw.start()
+    # Even though we set it just before Popen, the OSError path must clear it.
+    assert sw.boot_timestamp_us is None
