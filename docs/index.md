@@ -102,14 +102,18 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
 
 ## Project status
 
-p4net is at **v1.1.0** — a stable release. The public API is
+p4net is at **v1.3.0** — a stable release. The public API is
 committed per [API Stability](api-stability.md): symbols marked
 stable will not break in 1.x. Patch releases ship bug fixes; minor
-releases add functionality additively. v1.1.0 layers an INT (in-band
-network telemetry) example, a unified `p4net.*` logger hierarchy with
-CLI verbosity control, and per-direction additive link impairment on
-top of the v1.0.0 stability baseline. The full version history is in
-the [Changelog](changelog.md); known boundaries are documented in
+releases add functionality additively. On top of the v1.0.0
+stability baseline, v1.1.0 added single-switch INT, a unified
+`p4net.*` logger hierarchy, and per-direction additive link
+impairment; v1.2.0 added a register read/write API on
+`P4RuntimeClient` and used it to make the INT example's `switch_id`
+runtime-configurable; v1.3.0 added a multi-hop INT example showing
+production-style stacked telemetry across two switches. The full
+version history is in the [Changelog](changelog.md); known
+boundaries are documented in
 [Known Limitations](known-limitations.md); future plans are on the
 [Roadmap](roadmap.md).
 
