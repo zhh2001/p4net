@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib.util
+import logging
 import signal
 import sys
 from collections.abc import Sequence
@@ -62,7 +63,27 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="ARG",
         help="Extra argument to pass to p4c (repeatable).",
     )
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase log verbosity (-v INFO, -vv DEBUG; default WARNING).",
+    )
     return p
+
+
+_VERBOSITY_LEVELS = {0: logging.WARNING, 1: logging.INFO}
+
+
+def _configure_logging(verbosity: int) -> None:
+    """Configure the root logger based on the CLI ``-v`` count."""
+    level = _VERBOSITY_LEVELS.get(verbosity, logging.DEBUG)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def _load_topology_module(path: Path) -> ModuleType:
@@ -107,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     parser = _build_parser()
     ns = parser.parse_args(argv)
+    _configure_logging(ns.verbose)
     try:
         module = _load_topology_module(ns.topology_file)
     except FileNotFoundError as exc:

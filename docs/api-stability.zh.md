@@ -133,6 +133,17 @@ CLI 命令语法（用户在提示符里输入的内容）作为面向用户的�
   asyncio + `grpc.aio` 的变体属于 1.x 之后。
 - **跨多机分布式仿真**。仅支持单机。
 
+## Logger 命名空间
+
+`p4net.*` logger 命名空间结构在 1.x 是**稳定**的。通过
+`logging.getLogger("p4net")` 或任意已记录的子包 logger
+（`p4net.network`、`p4net.runtime`、`p4net.control`、
+`p4net.compiler`、`p4net.topo`、`p4net.cli`）访问的代码将持续
+可用。可能会新增子模块 logger；已有的不会被改名。
+
+**日志文本**与**某个具体事件被选用的级别**不在稳定契约范围内
+——请参见[日志](logging.md)了解级别分类与理由。
+
 ## 反馈兼容性问题
 
 我们把稳定 API 上的兼容性回归当作 bug，会在补丁版本中修复。

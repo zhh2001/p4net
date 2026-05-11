@@ -323,6 +323,12 @@ class Network:
     # ----- Internal start/stop ------------------------------------------
 
     def _do_start(self) -> None:
+        logger.info(
+            "Network.start: %d hosts, %d switches, %d links",
+            len(self._topology.hosts),
+            len(self._topology.switches),
+            len(self._topology.links),
+        )
         # 1. validate topology
         if not self._unsafe:
             self._topology.validate()
@@ -395,6 +401,7 @@ class Network:
             bmv2.start()
             self._bmv2_switches[sw_name] = bmv2
             bmv2.wait_until_ready()
+            logger.info("BMv2 %r ready on %s", sw_name, bmv2.grpc_address)
 
         # 10. P4Runtime clients
         election_id = (int(time.time_ns() // 1_000_000), 0)
@@ -411,6 +418,7 @@ class Network:
                 bmv2_json=self._compile_results[sw_name].bmv2_json,
                 p4info=self._compile_results[sw_name].p4info,
             )
+            logger.info("P4Runtime client connected to %r as primary", sw_name)
 
         # 11. RunningHost / RunningSwitch facades
         for h_name, host in self._topology.hosts.items():
@@ -427,6 +435,7 @@ class Network:
                 self._clients[sw_name],
                 self._compile_results[sw_name],
             )
+        logger.info("Network.start: ready")
 
     def _wire_link(self, link: Link, first_link_seen: set[str]) -> None:
         name_a = link.a.iface_name
@@ -585,6 +594,8 @@ class Network:
         return result
 
     def _do_stop(self) -> None:
+        if self._running:
+            logger.info("Network.stop: tearing down")
         # 0. user-spawned processes (xterm, etc.) — reap before namespaces vanish.
         for proc in list(self._spawned_processes):
             try:

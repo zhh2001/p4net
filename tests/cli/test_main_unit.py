@@ -224,4 +224,47 @@ def test_main_unknown_flag_argparse(tmp_path: Path, capsys: pytest.CaptureFixtur
         cli_main.main([str(p), "--no-such-flag"])
 
 
+def test_parser_default_verbose_zero() -> None:
+    ns = cli_main._build_parser().parse_args(["topo.py"])
+    assert ns.verbose == 0
+
+
+def test_parser_v_short_counts() -> None:
+    ns = cli_main._build_parser().parse_args(["topo.py", "-v"])
+    assert ns.verbose == 1
+
+
+def test_parser_vv_short_counts() -> None:
+    ns = cli_main._build_parser().parse_args(["topo.py", "-vv"])
+    assert ns.verbose == 2
+
+
+def test_parser_verbose_long_counts() -> None:
+    ns = cli_main._build_parser().parse_args(["topo.py", "--verbose", "--verbose"])
+    assert ns.verbose == 2
+
+
+@pytest.mark.parametrize(
+    ("verbosity", "expected"),
+    [
+        (0, "WARNING"),
+        (1, "INFO"),
+        (2, "DEBUG"),
+        (3, "DEBUG"),
+    ],
+)
+def test_configure_logging_sets_root_level(
+    verbosity: int,
+    expected: str,
+    mocker: MockerFixture,
+) -> None:
+    basic = mocker.patch("logging.basicConfig")
+    cli_main._configure_logging(verbosity)
+    assert basic.call_count == 1
+    level = basic.call_args.kwargs["level"]
+    import logging as _logging
+
+    assert _logging.getLevelName(level) == expected
+
+
 _KEEP: Any = None  # keep `Any` import live for future tests

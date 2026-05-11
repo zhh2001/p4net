@@ -144,6 +144,19 @@ external code should not subclass `CommandDispatcher` or `P4NetShell`.
 - **Distributed simulation across multiple machines.** Single-host
   only.
 
+## Logger namespace
+
+The `p4net.*` logger namespace structure is **Stable** in 1.x.
+Code that reaches into the namespace via
+`logging.getLogger("p4net")` or any documented subpackage logger
+(`p4net.network`, `p4net.runtime`, `p4net.control`, `p4net.compiler`,
+`p4net.topo`, `p4net.cli`) will continue to work. New submodule
+loggers may be added; existing ones won't be renamed.
+
+Log **message text** and the **level chosen for any specific
+event** are **not** part of the stable contract — see
+[Logging](logging.md) for the level taxonomy and rationale.
+
 ## Reporting incompatibilities
 
 We treat compatibility regressions in stable APIs as bugs to fix in
