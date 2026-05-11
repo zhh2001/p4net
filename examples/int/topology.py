@@ -38,7 +38,7 @@ topology.add_link(h2, s1, port_b=2)
 
 
 def setup(net: Network) -> None:
-    """Static ARP both sides; LPM entries forward to the right egress port."""
+    """Static ARP both sides; LPM entries; write the switch_id register."""
     h1 = net.host("h1")
     h2 = net.host("h2")
     h1.exec(
@@ -83,6 +83,11 @@ def setup(net: Network) -> None:
         action="MyIngress.set_egress_port",
         params={"port": 2},
     )
+
+    # Assign this switch's INT identifier. The INT shim stamps every
+    # forwarded packet with this value. For multi-switch topologies,
+    # give each switch a distinct id.
+    s1.client.write_register("MyIngress.switch_id", index=0, value=1)
 
 
 if __name__ == "__main__":

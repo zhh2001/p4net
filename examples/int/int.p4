@@ -25,15 +25,14 @@
  * user-space listener on the receiving host parses the shim from a raw
  * AF_PACKET socket; see `examples/int/listener.py`.
  *
- * Pairs with `examples/int/topology.py`, which programs `ipv4_lpm` and
- * pre-seeds the static ARP entries.
+ * Pairs with `examples/int/topology.py`, which programs `ipv4_lpm`,
+ * writes the ``switch_id`` register, and pre-seeds static ARP entries.
  */
 #include <core.p4>
 #include <v1model.p4>
 
 const bit<16> ETHERTYPE_IPV4 = 0x0800;
 const bit<16> ETHERTYPE_INT  = 0x88B6;
-const bit<8>  SWITCH_ID      = 1;
 
 header ethernet_t {
     bit<48> dstAddr;
@@ -92,6 +91,11 @@ control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply {} }
 
 control MyIngress(inout headers hdr, inout metadata meta,
                   inout standard_metadata_t std) {
+    /* One-element register holding the configured switch identifier.
+     * The control plane writes this at start via
+     * ``client.write_register("MyIngress.switch_id", index=0, value=N)``. */
+    register<bit<8>>(1) switch_id;
+
     action drop() {
         mark_to_drop(std);
     }
@@ -118,8 +122,10 @@ control MyIngress(inout headers hdr, inout metadata meta,
             ipv4_lpm.apply();
             /* Only stamp INT shim on packets actually being forwarded. */
             if (std.egress_spec != 0) {
+                bit<8> sid;
+                switch_id.read(sid, 0);
                 hdr.int_shim.setValid();
-                hdr.int_shim.switch_id            = SWITCH_ID;
+                hdr.int_shim.switch_id            = sid;
                 hdr.int_shim.ingress_timestamp_us = (bit<48>) std.ingress_global_timestamp;
                 hdr.int_shim.egress_port          = (bit<16>) std.egress_spec;
                 hdr.int_shim.queue_depth          = (bit<16>) std.deq_qdepth;

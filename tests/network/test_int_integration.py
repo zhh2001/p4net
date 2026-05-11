@@ -167,6 +167,8 @@ def test_int_shim_inserted_on_forwarded_packet(compiled: dict[str, Path], tmp_pa
             action="MyIngress.set_egress_port",
             params={"port": 2},
         )
+        # New in 1.2: switch_id is register-backed, not const.
+        sw.client.write_register("MyIngress.switch_id", index=0, value=1)
 
         capture: dict[str, bytes] = {}
         stop_event = threading.Event()

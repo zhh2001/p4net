@@ -125,10 +125,17 @@ switch:
 - **Single hop only.** Real INT stacks one shim per traversed switch
   and lets the egress switch strip them all. Multi-hop is left as an
   extension exercise.
-- **Switch identifier is hardcoded** to `1` via a `const` in
-  `int.p4`. P4Runtime doesn't have a stable register-write API in the
-  current client, so per-switch configuration would need a one-row
-  table or recompiling per switch.
+- **Switch identifier is now register-backed.** Since p4net 1.2.0 the
+  pipeline declares ``register<bit<8>>(1) switch_id;`` and the topology's
+  ``setup(net)`` writes it via
+  ``s1.client.write_register("MyIngress.switch_id", index=0, value=1)``.
+  In a multi-switch INT deployment, distinguish switches without
+  recompiling:
+
+  ```python
+  s1.client.write_register("MyIngress.switch_id", index=0, value=1)
+  s2.client.write_register("MyIngress.switch_id", index=0, value=2)
+  ```
 
 ## Compatibility
 
@@ -141,12 +148,12 @@ listener.
 
 ## Variations to try
 
-- Change the `SWITCH_ID` const in `int.p4`, recompile (`Network`
-  recompiles on the next start), and confirm the listener sees the new
-  value.
-- Add a second switch, give it `SWITCH_ID = 2`, and chain h1 → s1 →
-  s2 → h2. Extend the listener (or the P4 pipeline) to recognize
-  stacked shims.
+- Change the `switch_id` register write in `setup(net)` from `value=1`
+  to something else and confirm the listener reports the new value
+  without any P4 recompile.
+- Add a second switch, write its `switch_id` register to `2`, and chain
+  h1 → s1 → s2 → h2. Extend the listener (or the P4 pipeline) to
+  recognize stacked shims.
 - Pipe the listener's output to a file and post-process offline to
   compute per-flow latency from `ingress_timestamp_us` deltas across
   consecutive packets.

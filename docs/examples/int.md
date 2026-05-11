@@ -51,9 +51,12 @@ Key points:
 - The ingress control populates the shim from
   `standard_metadata` after the LPM table has set
   `std.egress_spec`.
-- `switch_id` is hardcoded via a `const` because the current
-  P4Runtime client doesn't have a register-write API; per-switch
-  parameterization would use a default-action table or a recompile.
+- `switch_id` is now register-backed
+  (``register<bit<8>>(1) switch_id;``). The topology's ``setup(net)``
+  calls
+  ``s1.client.write_register("MyIngress.switch_id", index=0, value=1)``;
+  multi-switch INT deployments can assign distinct identifiers without
+  recompiling.
 
 ## The listener
 
@@ -108,16 +111,16 @@ switch:
   level.
 - **Single hop only.** Real INT stacks one shim per traversed hop;
   multi-hop is left as an extension exercise.
-- **Switch identifier is hardcoded.** Change `SWITCH_ID` in
-  `int.p4` to relabel; for multi-switch deployments the obvious
-  pattern is a one-row default-action table populated per switch
-  at start.
+- **Switch identifier is register-backed.** Change the
+  ``write_register("MyIngress.switch_id", index=0, value=N)`` call in
+  the topology's ``setup(net)`` to relabel; multi-switch deployments
+  give each switch a distinct ``N`` with no recompile required.
 
 ## Variations to try
 
-- Add a second switch with `SWITCH_ID = 2` and chain h1 → s1 →
-  s2 → h2. Extend the listener (or the P4 pipeline) to handle a
-  shim stack.
+- Add a second switch, write its ``switch_id`` register to ``2``,
+  and chain h1 → s1 → s2 → h2. Extend the listener (or the P4
+  pipeline) to handle a shim stack.
 - Pipe the listener's output to a file and post-process to compute
   per-flow latency deltas from `ingress_timestamp_us`.
 - Add `delay="50ms"` or `loss_pct=2.0` to one of the h↔s links

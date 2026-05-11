@@ -42,9 +42,10 @@ INT（带内网络遥测）shim 头。shim 中携带交换机 ID、入端时间�
 - shim 头静态声明，deparser 按 valid 位条件发送。
 - ingress 控制在 LPM 表设好 `std.egress_spec` 之后再从
   `standard_metadata` 填 shim。
-- `switch_id` 用 `const` 写死，因为当前 P4Runtime 客户端没有
-  寄存器写 API；要做每交换机参数化，模式是用默认动作表或者按
-  交换机重编译。
+- `switch_id` 现在是寄存器（``register<bit<8>>(1) switch_id;``）。
+  拓扑的 ``setup(net)`` 用
+  ``s1.client.write_register("MyIngress.switch_id", index=0, value=1)``
+  写入；多交换机 INT 部署可以无重编译地为每台分配独立编号。
 
 ## listener
 
@@ -95,13 +96,14 @@ sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
   仅此而已。
 - **只演示单跳**：真实 INT 每过一跳叠一层 shim；多跳留作扩展
   练习。
-- **交换机 ID 写死**：改 `int.p4` 里的 `SWITCH_ID`。多交换机部署
-  的常规做法是用一行默认动作表，每台交换机各自填值。
+- **交换机 ID 由寄存器配置**：改拓扑 ``setup(net)`` 中
+  ``write_register("MyIngress.switch_id", index=0, value=N)`` 的 ``N``
+  即可换标。多交换机部署给每台分配不同 ``N`` ，无须重编译。
 
 ## 可以试试
 
-- 加第二个交换机 `SWITCH_ID = 2`，串成 h1 → s1 → s2 → h2，
-  扩展 listener（或 P4 流水线）处理 shim 栈。
+- 加第二个交换机，把它的 ``switch_id`` 寄存器写为 ``2``，串成
+  h1 → s1 → s2 → h2，扩展 listener（或 P4 流水线）处理 shim 栈。
 - 把 listener 输出重定向到文件，离线算出基于
   `ingress_timestamp_us` 的逐流延迟差。
 - 给某条 h↔s 链路加 `delay="50ms"` 或 `loss_pct=2.0`，看
