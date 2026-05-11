@@ -73,7 +73,8 @@ Stable user-facing surface; some lower-level details provisional.
 | `Network` | Stable | `start`, `stop`, `host`, `switch`, `pingall`, `pingall6`, `__enter__`, `__exit__` are stable. |
 | `Network.xterm` | Experimental | Depends on `$DISPLAY`; behavior may evolve as we refine the spawned-process tracking. |
 | `RunningHost` | Stable | `name`, `primary_ip`, `primary_ip6`, `interfaces`, `interfaces6`, `ping`, `exec`, `popen` are stable. |
-| `RunningSwitch` | Stable | `name`, `client`, `bmv2`, `compile_result`, `log_file`, `descriptor` are stable. |
+| `RunningSwitch` | Stable | `name`, `client`, `bmv2`, `compile_result`, `log_file`, `descriptor`, `boot_timestamp_us` are stable. |
+| `RunningSwitch.boot_timestamp_us` | Stable | Wall-clock microseconds since Unix epoch when this switch's BMv2 process started. Combine with INT shim `ingress_timestamp_us` to compute wall-clock arrival time and align timestamps across multiple switches. Raises `NetworkNotRunningError` if accessed before `start` or after `stop`. |
 | `NetworkError` and subclasses | Stable | `NetworkAlreadyRunningError`, `NetworkNotRunningError`, `NodeNotFoundError`. |
 
 ### `p4net.control`

@@ -16,7 +16,7 @@ from typing import IO
 
 from p4net.compiler import CompileResult
 from p4net.control import P4RuntimeClient
-from p4net.network.exceptions import NetworkError
+from p4net.network.exceptions import NetworkError, NetworkNotRunningError
 from p4net.runtime import BMv2Switch, NetworkNamespace, NSProcess
 from p4net.topo import Host, P4Switch
 
@@ -220,6 +220,31 @@ class RunningSwitch:
     def log_file(self) -> Path:
         """Path to the BMv2 log file."""
         return self._bmv2.log_file
+
+    @property
+    def boot_timestamp_us(self) -> int:
+        """Wall-clock microseconds since Unix epoch when this switch's BMv2
+        process started.
+
+        Combined with INT shim ``ingress_timestamp_us``, gives wall-clock
+        arrival time::
+
+            wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+
+        This is the alignment point for comparing timestamps across multiple
+        switches — BMv2's per-process ``ingress_global_timestamp`` clock
+        starts at zero on each process's boot.
+
+        Raises:
+            NetworkNotRunningError: if the underlying BMv2 process has not
+                been started (or has already been stopped).
+        """
+        ts = self._bmv2.boot_timestamp_us
+        if ts is None:
+            raise NetworkNotRunningError(
+                f"switch {self.name!r} has no boot timestamp; BMv2 is not running"
+            )
+        return ts
 
     def __repr__(self) -> str:
         return f"RunningSwitch(name={self.name!r}, grpc={self._bmv2.grpc_address!r})"

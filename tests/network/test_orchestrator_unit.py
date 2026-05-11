@@ -1000,3 +1000,32 @@ def test_link_round_trip_preserves_extras() -> None:
     assert link.delay_b_to_a_extra is None
     assert link.loss_pct_b_to_a_extra == 2.0
     assert link.loss_pct_a_to_b_extra is None
+
+
+# ---------------------------------------------------------------------------
+# RunningSwitch.boot_timestamp_us
+# ---------------------------------------------------------------------------
+
+
+def test_running_switch_boot_timestamp_proxies_bmv2() -> None:
+    from p4net.network.nodes import RunningSwitch
+    from p4net.topo import P4Switch
+
+    sw_desc = P4Switch(name="s1", p4_src=Path("p.p4"))
+    bmv2 = MagicMock()
+    bmv2.boot_timestamp_us = 1_736_700_000_000_000
+    rs = RunningSwitch(sw_desc, bmv2, MagicMock(), MagicMock())
+    assert rs.boot_timestamp_us == 1_736_700_000_000_000
+
+
+def test_running_switch_boot_timestamp_raises_when_none() -> None:
+    from p4net.network.exceptions import NetworkNotRunningError
+    from p4net.network.nodes import RunningSwitch
+    from p4net.topo import P4Switch
+
+    sw_desc = P4Switch(name="s1", p4_src=Path("p.p4"))
+    bmv2 = MagicMock()
+    bmv2.boot_timestamp_us = None
+    rs = RunningSwitch(sw_desc, bmv2, MagicMock(), MagicMock())
+    with pytest.raises(NetworkNotRunningError, match="no boot timestamp"):
+        _ = rs.boot_timestamp_us

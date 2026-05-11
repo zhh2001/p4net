@@ -281,6 +281,18 @@ def test_multi_switch_chain_with_two_port_swap(tmp_path: Path) -> None:
         _add_static_arp(net.host(h2), "10.0.0.1", "00:00:00:00:00:01")
         # Two sequential pings to give counters/flows time to settle.
         assert net.ping(h1, h2, count=3, timeout=3.0) is True
+        # boot_timestamp_us: both switches expose plausible wall-clock μs,
+        # and they differ (two distinct processes started sequentially).
+        import time
+
+        now_us = time.time_ns() // 1000
+        s1_boot = net.switch(s1).boot_timestamp_us
+        s2_boot = net.switch(s2).boot_timestamp_us
+        assert s1_boot > 1_700_000_000_000_000  # post-2023
+        assert s2_boot > 1_700_000_000_000_000
+        assert abs(now_us - s1_boot) < 60_000_000  # within 60s
+        assert abs(now_us - s2_boot) < 60_000_000
+        assert s1_boot != s2_boot
 
 
 # ---------------------------------------------------------------------------
