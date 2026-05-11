@@ -42,12 +42,13 @@ from p4net.control.exceptions import (
     EntryNotFoundError,
     NoSuchActionError,
     NoSuchFieldError,
+    NoSuchRegisterError,
     NoSuchTableError,
     NotPrimaryError,
     P4RuntimeError,
     PipelineError,
 )
-from p4net.control.p4info_index import P4InfoIndex
+from p4net.control.p4info_index import P4InfoIndex, RegisterSpec
 
 __all__ = [
     "ConnectionError",
@@ -57,12 +58,14 @@ __all__ = [
     "EntryNotFoundError",
     "NoSuchActionError",
     "NoSuchFieldError",
+    "NoSuchRegisterError",
     "NoSuchTableError",
     "NotPrimaryError",
     "P4InfoIndex",
     "P4RuntimeClient",
     "P4RuntimeError",
     "PipelineError",
+    "RegisterSpec",
     "canonicalize",
     "decode_int",
     "decode_ipv4",

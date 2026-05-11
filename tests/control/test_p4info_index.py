@@ -597,3 +597,50 @@ def test_encode_decode_match_round_trip_ipv6_lpm_subnet() -> None:
     raw = {"hdr.ipv6.dstAddr": (bytes(fm.lpm.value), int(fm.lpm.prefix_len))}
     out = idx.decode_match("MyIngress.ipv6_lpm", raw)
     assert out == {"hdr.ipv6.dstAddr": "fd00::/64"}
+
+
+def _build_p4info_with_register(
+    *,
+    name: str = "MyIngress.test_register",
+    register_id: int = 3001,
+    bitwidth: int = 32,
+    size: int = 256,
+) -> p4info_pb2.P4Info:
+    p = p4info_pb2.P4Info()
+    r = p.registers.add()
+    r.preamble.id = register_id
+    r.preamble.name = name
+    r.type_spec.bitstring.bit.bitwidth = bitwidth
+    r.size = size
+    return p
+
+
+def test_register_by_name_returns_spec() -> None:
+    from p4net.control import RegisterSpec
+
+    idx = P4InfoIndex(_build_p4info_with_register())
+    spec = idx.register_by_name("MyIngress.test_register")
+    assert isinstance(spec, RegisterSpec)
+    assert spec.id == 3001
+    assert spec.name == "MyIngress.test_register"
+    assert spec.bitwidth == 32
+    assert spec.size == 256
+
+
+def test_register_by_name_unknown_raises() -> None:
+    from p4net.control import NoSuchRegisterError
+
+    idx = P4InfoIndex(_build_p4info_with_register())
+    with pytest.raises(NoSuchRegisterError, match="no register named 'missing'"):
+        idx.register_by_name("missing")
+
+
+def test_register_names_lists_all() -> None:
+    p = _build_p4info_with_register()
+    r2 = p.registers.add()
+    r2.preamble.id = 3002
+    r2.preamble.name = "MyIngress.second_register"
+    r2.type_spec.bitstring.bit.bitwidth = 8
+    r2.size = 1
+    idx = P4InfoIndex(p)
+    assert set(idx.register_names) == {"MyIngress.test_register", "MyIngress.second_register"}

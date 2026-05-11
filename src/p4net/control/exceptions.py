@@ -43,3 +43,7 @@ class DuplicateEntryError(P4RuntimeError):
 
 class EntryNotFoundError(P4RuntimeError):
     """Modify or delete failed because the entry does not exist."""
+
+
+class NoSuchRegisterError(P4RuntimeError):
+    """Referenced register is not present in the current P4Info."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +22,27 @@ from p4net.control.exceptions import (
     EncodingError,
     NoSuchActionError,
     NoSuchFieldError,
+    NoSuchRegisterError,
     NoSuchTableError,
     P4RuntimeError,
 )
+
+
+@dataclass(frozen=True)
+class RegisterSpec:
+    """Metadata for a P4 register declared in the pipeline.
+
+    Attributes:
+        id: P4Runtime register ID, used in WriteRequest / ReadRequest.
+        name: Fully qualified P4 name (e.g. ``MyIngress.switch_id``).
+        bitwidth: Width of each register element in bits.
+        size: Number of elements in the register array.
+    """
+
+    id: int
+    name: str
+    bitwidth: int
+    size: int
 
 
 def _import_p4info() -> Any:
@@ -46,6 +65,15 @@ class P4InfoIndex:
         self._tables_by_name: dict[str, Any] = {t.preamble.name: t for t in p4info.tables}
         self._actions_by_name: dict[str, Any] = {a.preamble.name: a for a in p4info.actions}
         self._counters_by_name: dict[str, Any] = {c.preamble.name: c for c in p4info.counters}
+        self._registers_by_name: dict[str, RegisterSpec] = {}
+        for r in p4info.registers:
+            bitwidth = int(r.type_spec.bitstring.bit.bitwidth)
+            self._registers_by_name[r.preamble.name] = RegisterSpec(
+                id=int(r.preamble.id),
+                name=str(r.preamble.name),
+                bitwidth=bitwidth,
+                size=int(r.size),
+            )
         self._packet_in: Any | None = None
         self._packet_out: Any | None = None
         for cpm in p4info.controller_packet_metadata:
@@ -130,6 +158,28 @@ class P4InfoIndex:
             if c.preamble.id == counter_id:
                 return str(c.preamble.name)
         raise P4RuntimeError(f"no counter with id {counter_id}")
+
+    def register_by_name(self, name: str) -> RegisterSpec:
+        """Look up a register by its fully qualified P4 name.
+
+        Args:
+            name: Fully qualified P4 name (e.g. ``MyIngress.switch_id``).
+
+        Returns:
+            A :class:`RegisterSpec` describing the register.
+
+        Raises:
+            NoSuchRegisterError: if no register with that name exists.
+        """
+        spec = self._registers_by_name.get(name)
+        if spec is None:
+            raise NoSuchRegisterError(f"no register named {name!r}")
+        return spec
+
+    @property
+    def register_names(self) -> list[str]:
+        """Names of every register declared in the P4Info."""
+        return list(self._registers_by_name)
 
     def table_requires_priority(self, name: str) -> bool:
         """True iff the table has a TERNARY or RANGE match field."""
