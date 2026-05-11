@@ -9,7 +9,7 @@
 
 A P4Runtime-native SDN simulation framework for BMv2.
 
-Status: 1.2.0 — stable. Public API committed per [API Stability](https://zhh2001.github.io/p4net/api-stability/). Patch releases for fixes; minor releases for new functionality with deprecation cycles where needed.
+Status: 1.3.0 — stable. Public API committed per [API Stability](https://zhh2001.github.io/p4net/api-stability/). Patch releases for fixes; minor releases for new functionality with deprecation cycles where needed.
 
 ## Features
 
@@ -24,7 +24,7 @@ Status: 1.2.0 — stable. Public API committed per [API Stability](https://zhh20
 - IPv4 and IPv6 host addressing with per-interface sysctl gating.
 - Asymmetric link impairment (per-direction `bandwidth`, `delay`, `jitter`, `loss_pct`).
 - Topology visualization (Graphviz DOT / PNG / SVG).
-- In-band network telemetry (INT) example.
+- In-band network telemetry (INT) — single-switch introduction plus a multi-hop production-style example.
 - Direct P4 register read/write via P4Runtime gRPC.
 - Unified `p4net.*` logger hierarchy with CLI verbosity control.
 - No OpenFlow, no Open vSwitch, no Docker.
@@ -103,6 +103,12 @@ venv from `PATH`, run the binary explicitly: `sudo env "PATH=$PATH" p4net ...`.
   per-direction `delay` shaping.
 - [`examples/ipv6_lpm/`](examples/ipv6_lpm/) — runtime-programmed IPv6
   LPM forwarding.
+- [`examples/int/`](examples/int/) — single-switch in-band network
+  telemetry: the pipeline inserts a 14-byte INT shim into every
+  forwarded packet; a raw-socket listener decodes it on the receiver.
+- [`examples/int_multi_hop/`](examples/int_multi_hop/) — multi-hop INT
+  on a two-switch linear path; the listener decodes the full hop-by-hop
+  stack. Production-style telemetry topology.
 
 ## Documentation
 

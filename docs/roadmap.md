@@ -39,6 +39,11 @@ design discussion happens once, in public, before the code lands.
   asymmetric-delay test tolerance widened to eliminate suite-load
   flakes. See [API Stability](api-stability.md) and
   [Changelog](changelog.md).
+- **v1.3.0** (2026-05-11) — multi-hop INT example: two switches in a
+  linear path each insert their own metadata shim; the receiver
+  decodes the full hop-by-hop stack. Same P4 binary on both switches;
+  per-switch identity supplied via the v1.2 register API. No public
+  API changes. See [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 

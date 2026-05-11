@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-05-11
+
+### Added
+
+- New example `examples/int_multi_hop/` demonstrating production-style
+  in-band network telemetry: two switches in a linear path, each
+  inserting its own metadata shim, with a receiver-side listener
+  decoding the full hop-by-hop stack. The P4 program runs unchanged on
+  both switches; per-switch identity comes from the v1.2 register API.
+
+### Documentation
+
+- New documentation site page for the multi-hop INT example, available
+  in both English and 简体中文.
+- Cross-link from `examples/int/README.md` to the multi-hop example as
+  a "next step" for readers progressing past single-switch INT.
+- Examples index (`docs/examples/index.md` and `index.zh.md`)
+  refreshed: now lists all eight bundled examples with a Telemetry
+  column in the comparison table.
+
+### Fixed
+
+- `test_symmetric_base_plus_a_to_b_extra` upper-bound tolerance widened
+  from 360 ms to 450 ms to eliminate consistent failures under
+  full-suite load (same root cause and fix shape as the asymmetric
+  test widened in v1.2.0).
+
 ## [1.2.0] - 2026-05-11
 
 ### Added
