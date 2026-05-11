@@ -31,13 +31,15 @@ ASIC」的实验。工具链由 `p4c`、`simple_switch_grpc` 和内核命名空�
   以及通过 StreamChannel 进行的 CPU 端口数据包 I/O。
 - **基于 `tc netem` 的逐方向链路损伤** —— `bandwidth`、`delay`、
   `jitter`、`loss_pct` 既可对称配置，也可拆成 `*_a_to_b` /
-  `*_b_to_a` 两个方向。
+  `*_b_to_a` 两个方向，或者在对称基础上叠加 `*_extra`。
 - **IPv4 与 IPv6 主机寻址**，每个接口具备独立的 sysctl 门控
   （未显式启用 IPv6 的接口不会自动生成 link-local 地址）。
 - **交互式 CLI** —— `p4net <topology.py>` 启动一个 Shell，提供表内容
   转储、ping 矩阵、数据包发送/监听、拓扑可视化等命令。
 - **拓扑可视化**，由 `Topology.to_graphviz()` 与
   `Topology.render_graphviz()` 提供，输出 DOT、PNG、SVG、PDF 等格式。
+- **统一的 `p4net.*` logger 层次**，附带级别约定与 CLI 详细度开关
+  （`-v` / `-vv`）；参见[日志](logging.md)。
 
 ## 安装
 
@@ -80,18 +82,20 @@ with Network(topo) as net:
 - **[教程](tutorial.md)** —— 一个更长的讲解，覆盖双栈转发、运行时
   表项编程、非对称链路损伤、CPU 端口数据包 I/O。
 - **[架构](architecture.md)** —— 各包的职责与背后设计取舍。
-- **[示例](examples/index.md)** —— 六个可运行的拓扑，覆盖每一项
-  v0.2.0 特性。
+- **[示例](examples/index.md)** —— 七个可运行的拓扑，从端口翻转、
+  L3 转发，一直到带内网络遥测（INT）。
 - **[CLI 参考](cli.md)** —— 每条 Shell 命令的说明与示例输出。
 - **[API 参考](api/network.md)** —— 由 Python docstring 自动生成。
 
 ## 项目状态
 
-p4net 当前为 **v0.2.0**——第二个公开发布版本。v0.2.0 路线图中的五个
-特性（控制器数据包 I/O、IPv6 主机寻址、非对称链路损伤、拓扑可视化、
-`xterm` 帮助方法）都已在该版本中落地。API 在实验场景下足够稳定，1.0
-之前可能会有调整。完整版本历史见[变更日志](changelog.md)；后续计划
-见[路线图](roadmap.md)。
+p4net 当前为 **v1.1.0**——稳定版本。公共 API 已按
+[API 稳定性](api-stability.md)做出承诺：标为稳定的符号在 1.x 内不会
+被破坏。补丁版本只修 bug；小版本以追加方式新增功能。v1.1.0 在 v1.0.0
+的稳定性基础上叠加了 INT（带内网络遥测）示例、统一的 `p4net.*` logger
+层次与 CLI 详细度控制，以及按方向叠加的链路损伤字段。完整版本历史
+见[变更日志](changelog.md)；已知边界见[已知限制](known-limitations.md)；
+后续计划见[路线图](roadmap.md)。
 
 ## 许可证
 

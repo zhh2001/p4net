@@ -37,8 +37,9 @@ no Docker, no OpenFlow, no Open vSwitch — the toolchain is `p4c`,
   reads, multicast group management, CPU-port packet I/O over the
   StreamChannel.
 - **Per-direction link impairment** via `tc netem` — `bandwidth`,
-  `delay`, `jitter`, `loss_pct` either symmetric or split into
-  `*_a_to_b` / `*_b_to_a`.
+  `delay`, `jitter`, `loss_pct` either symmetric, split into
+  `*_a_to_b` / `*_b_to_a`, or layered as a symmetric base plus a
+  per-direction `*_extra`.
 - **IPv4 and IPv6 host addressing** with per-interface sysctl gating
   (link-local addresses are suppressed on interfaces that don't ask
   for IPv6).
@@ -46,6 +47,9 @@ no Docker, no OpenFlow, no Open vSwitch — the toolchain is `p4c`,
   dumps, ping matrices, packet send/listen, topology visualization.
 - **Topology visualization** via `Topology.to_graphviz()` and
   `Topology.render_graphviz()` (DOT, PNG, SVG, PDF).
+- **Unified `p4net.*` logger hierarchy** with documented level
+  conventions and CLI verbosity flags (`-v` / `-vv`); see
+  [Logging](logging.md).
 
 ## Install
 
@@ -89,8 +93,8 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
   and CPU-port packet I/O.
 - **[Architecture](architecture.md)** — what each package does and the
   design decisions behind the layout.
-- **[Examples](examples/index.md)** — six runnable topologies covering
-  every v0.2.0 feature.
+- **[Examples](examples/index.md)** — seven runnable topologies, from
+  port-swap and L3 forwarding to in-band network telemetry (INT).
 - **[CLI Reference](cli.md)** — every shell command with synopses and
   example output.
 - **[API Reference](api/network.md)** — auto-generated from the Python
@@ -98,12 +102,15 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
 
 ## Project status
 
-p4net is at **v0.2.0** — second public release. The five v0.2.0
-roadmap features (controller packet I/O, IPv6 host addressing,
-asymmetric link impairment, topology visualizer, `xterm` helper) all
-ship in this version. APIs are stable for lab use; expect refinement
-before 1.0. The full version history is in the
-[Changelog](changelog.md); future plans are on the
+p4net is at **v1.1.0** — a stable release. The public API is
+committed per [API Stability](api-stability.md): symbols marked
+stable will not break in 1.x. Patch releases ship bug fixes; minor
+releases add functionality additively. v1.1.0 layers an INT (in-band
+network telemetry) example, a unified `p4net.*` logger hierarchy with
+CLI verbosity control, and per-direction additive link impairment on
+top of the v1.0.0 stability baseline. The full version history is in
+the [Changelog](changelog.md); known boundaries are documented in
+[Known Limitations](known-limitations.md); future plans are on the
 [Roadmap](roadmap.md).
 
 ## License
