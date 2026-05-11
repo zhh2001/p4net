@@ -26,12 +26,21 @@ switch (two lines per packet in this topology).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from p4net import Network
 from p4net.topo import Topology
 
 HERE = Path(__file__).resolve().parent
+
+# Coordination file consumed by ``listener.py`` so the listener can align
+# each switch's per-process BMv2 timestamp to wall-clock microseconds:
+#
+#     wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+#
+# Written at the end of ``setup(net)`` once both switches are running.
+BOOT_TIMES_PATH = Path("/tmp/p4net-int-multi-hop-boot-times.json")
 
 topology = Topology()
 h1 = topology.add_host("h1", ip="10.0.0.1/24", mac="00:00:00:00:00:01")
@@ -98,6 +107,15 @@ def setup(net: Network) -> None:
             action="MyIngress.set_egress_port",
             params={"port": 1},
         )
+
+    # Publish each switch's BMv2 boot timestamp so the listener can align
+    # per-switch ``ingress_timestamp_us`` values to a common wall clock.
+    boot_times = {
+        "s1": s1_rt.boot_timestamp_us,
+        "s2": s2_rt.boot_timestamp_us,
+    }
+    BOOT_TIMES_PATH.write_text(json.dumps(boot_times, indent=2))
+    print(f"boot timestamps written to {BOOT_TIMES_PATH}", flush=True)
 
 
 if __name__ == "__main__":

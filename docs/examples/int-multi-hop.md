@@ -94,29 +94,54 @@ traversed switch (two lines per packet in this topology).
 
 ## Sample output
 
-Captured by the multi-hop integration test:
+Captured by the v1.4 multi-hop integration test (aligned mode):
 
 ```
 packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=874083us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=769824us egress_port=2 queue_depth=0
-packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=1875211us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=1770811us egress_port=2 queue_depth=0
+  hop 1: switch_id=1 ts=800454us aligned=1778513670403185us egress_port=2 queue_depth=0
+  hop 2: switch_id=2 ts=699418us aligned=1778513670403875us egress_port=2 queue_depth=0
+  latency_s1_to_s2 = 690us
 ```
 
-`hop 1` is s1 (egress port 2 toward s2); `hop 2` is s2 (egress port 2
-toward h2). The listener prints hops in insertion order, so the first
-switch the packet entered always appears as `hop 1`.
+`hop 1` is s1; `hop 2` is s2. Each `ts` is BMv2's per-process
+`ingress_global_timestamp`; `aligned` is wall-clock μs since Unix
+epoch; `latency_s1_to_s2` is the wall-clock delta between aligned
+arrival times — real per-hop forwarding latency through BMv2's
+userspace pipeline plus the veth pair.
+
+Running the listener directly without `setup(net)` (so no coordination
+file is present) falls back to the v1.3 unaligned display: raw `ts`,
+no `aligned=` line, no latency.
+
+## How cross-switch timestamp alignment works
+
+BMv2's `standard_metadata.ingress_global_timestamp` is **per-process**:
+each `simple_switch_grpc` instance's clock starts at zero on boot, so
+raw `shim_1.ts` and `shim_2.ts` aren't directly comparable across
+hops. Since v1.4, every `RunningSwitch` exposes a `boot_timestamp_us`
+property (wall-clock μs since Unix epoch at process start, captured
+immediately before `subprocess.Popen`). The alignment formula:
+
+```
+wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+```
+
+`setup(net)` writes both switches' boot timestamps to a JSON
+coordination file at `/tmp/p4net-int-multi-hop-boot-times.json`; the
+listener reads it at startup and prints `aligned=...us` next to each
+raw `ts`. Subtraction across hops gives the `latency_s1_to_s2` line.
+
+Drift is bounded by Popen + early-init overhead — sub-millisecond
+typically, occasionally a couple of milliseconds under load. Good
+enough for μs-vs-ms regime decisions; for serious latency research
+use a real shared time source (PTP).
 
 ## What's interesting
 
-- **Timestamps are per-switch-process.** BMv2's
-  `standard_metadata.ingress_global_timestamp` starts at zero when each
-  `simple_switch_grpc` process boots. The two shims' timestamps are
-  not directly comparable; their difference reflects per-process boot
-  skew, not wire latency. For real per-link latency you need a shared
-  time reference (PTP-style) or a controller-mediated boot offset.
+- **Per-hop forwarding latency is now observable.** The
+  `latency_s1_to_s2` line ranges from a few hundred microseconds to
+  a few milliseconds on this rig. Real ASIC switches are 10–100×
+  faster; BMv2's userspace interpreter is the bottleneck.
 - **Egress ports correspond to the path direction.** s1 forwards out
   port 2 toward s2; s2 forwards out port 2 toward h2. Different
   topologies produce different numbers.
@@ -130,6 +155,14 @@ switch the packet entered always appears as `hop 1`.
   path would find both shim slots full and forward without further
   annotation. Real deployments use a P4 header stack of MAX_HOPS depth
   — see the example README for the rewrite recipe.
+- **Alignment drift is sub-millisecond.** `boot_timestamp_us` is
+  captured immediately before `Popen`, but BMv2's actual internal
+  clock zero is slightly later. Good enough for μs/ms regime checks,
+  not good enough for nanosecond-scale latency research; use PTP for
+  that.
+- **Listener relies on a `/tmp/` coordination file.** Concurrent
+  multi-hop INT topologies on the same host would trample each other's
+  files. The example assumes one topology at a time.
 - **`queue_depth` is almost always 0.** Same as the single-switch
   example.
 - **No checksum recomputation for the inserted shims.** The IPv4

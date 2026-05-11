@@ -134,32 +134,71 @@ path, every block has two `hop` lines.
 
 ## Sample output
 
-Captured from the multi-hop integration test:
+Captured from the v1.4 multi-hop integration test (aligned mode):
 
 ```
 packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=874083us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=769824us egress_port=2 queue_depth=0
-packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=1875211us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=1770811us egress_port=2 queue_depth=0
+  hop 1: switch_id=1 ts=800454us aligned=1778513670403185us egress_port=2 queue_depth=0
+  hop 2: switch_id=2 ts=699418us aligned=1778513670403875us egress_port=2 queue_depth=0
+  latency_s1_to_s2 = 690us
 ```
 
-`hop 1` (s1) and `hop 2` (s2) each emit `egress_port=2`: s1 forwards
-out port 2 toward s2, and s2 forwards out port 2 toward h2. The
-listener prints hops in the order they were inserted by the data
-plane, so `hop 1` is always the first switch the packet entered.
+`hop 1` is s1 (forwards out port 2 toward s2); `hop 2` is s2
+(forwards out port 2 toward h2). Each `ts` is the per-switch
+`ingress_global_timestamp` (μs since *that* BMv2 process booted);
+`aligned` is wall-clock μs since Unix epoch (the formula in the next
+section); `latency_s1_to_s2` is the wall-clock delta between the two
+aligned arrival times — real per-hop forwarding latency through BMv2's
+userspace pipeline plus the veth pair, typically tens to a couple
+thousand microseconds on this rig.
+
+If you run the listener directly with `sudo ip netns exec h2 python3
+listener.py --iface h2-eth0` while no topology has populated the
+coordination file, it falls back to the v1.3 "unaligned" display, which
+prints the raw per-switch `ts` and notes that no alignment was available.
+
+## How cross-switch timestamp alignment works
+
+BMv2's `standard_metadata.ingress_global_timestamp` is **per-process**:
+each `simple_switch_grpc` instance's clock starts at zero on boot, so
+two switches running side-by-side report timestamps in independent
+reference frames. Raw `shim_1.ts` and `shim_2.ts` can't be compared
+directly — that's the v1.3 caveat this example used to ship with.
+
+Since v1.4, every `RunningSwitch` exposes a `boot_timestamp_us`
+property: wall-clock μs since Unix epoch when its BMv2 process started.
+Captured immediately before `subprocess.Popen`, so drift from BMv2's
+internal clock zero is bounded by Popen overhead (sub-millisecond on a
+typical Linux host).
+
+The alignment formula:
+
+```
+wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+```
+
+`setup(net)` writes both switches' boot timestamps to a JSON
+coordination file at `/tmp/p4net-int-multi-hop-boot-times.json`; the
+listener reads it at startup, looks up each shim's hop-index → switch
+name, and prints `aligned=...us` next to each raw `ts`. With both
+aligned values in hand, the trailing `latency_s1_to_s2 = ...us` line is
+just subtraction.
+
+The alignment is good enough for "is per-hop latency in the 1 ms
+range or the 100 ms range" — not good enough for nanosecond-precision
+research. For real per-link latency in production INT you'd still want
+a shared time source (PTP). The drift is on the order of the Popen
+syscall (sub-millisecond) plus any kernel-scheduling delay between the
+`time.time_ns()` capture and BMv2's actual clock zero.
 
 ## What's interesting
 
-- **Timestamps are per-switch-process.** Each `simple_switch_grpc`
-  exposes a `standard_metadata.ingress_global_timestamp` that starts at
-  zero when its process boots, not when wall time started. Comparing
-  `shim_1.ts` with `shim_2.ts` directly does **not** give you wire
-  latency between switches — it gives you the difference between two
-  independent clocks. For real per-link latency you'd need a shared
-  time reference (PTP-style) or a controller that records each
-  switch's boot offset.
+- **Per-hop forwarding latency is now observable.** The
+  `latency_s1_to_s2` line is the wall-clock delta between hop 1 and
+  hop 2; on this rig it ranges from a few hundred microseconds to a
+  few milliseconds. Real ASIC switches report tens to hundreds of
+  nanoseconds; BMv2's userspace interpreter is two to three orders of
+  magnitude slower.
 - **Egress ports correspond to the path direction**, not to a fixed
   numbering scheme. s1's port 2 leads to s2; s2's port 2 leads to h2.
   Different topologies will produce different `egress_port` values.
@@ -211,6 +250,19 @@ preceded.
   and would forward without further annotation. The receiver sees only
   the first two hops; deeper paths require the header-stack rewrite
   above.
+- **Alignment drift is sub-millisecond.** `boot_timestamp_us` is
+  captured immediately before `Popen`, but BMv2's actual internal
+  clock zero is slightly later (after exec, after process init).
+  The drift is bounded by Popen + early-init overhead — typically
+  well under 1 ms on a typical Linux host, occasionally a couple of
+  ms under load. Good enough for "is this in the μs or ms regime",
+  not good enough for serious latency research; use PTP for that.
+- **Listener relies on a `/tmp/` coordination file.** If multiple
+  multi-hop INT topologies are running simultaneously on the same
+  host they will trample each other's coordination files. The
+  example assumes one topology at a time; production deployments
+  would pass boot timestamps to the listener via a more isolated
+  channel (a CLI argument, an env var, or a per-topology directory).
 - **`queue_depth` is almost always 0.** Same as the single-switch
   example — BMv2's default queueing doesn't surface meaningful values.
 - **No checksum recomputation for the inserted shims.** The IPv4
