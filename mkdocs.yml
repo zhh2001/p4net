@@ -205,9 +205,6 @@ extra:
     - name: 简体中文
       link: /p4net/zh/
       lang: zh
-  meta:
-    - name: google-site-verification
-      content: wMOTcBwCiCMV7ESftQRY3Glvq8UL4xzUKrZ-1wjOpqM
 
 extra_css:
   - assets/extra.css
