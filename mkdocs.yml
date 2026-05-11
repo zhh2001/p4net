@@ -42,6 +42,7 @@ nav:
     - Asymmetric link: examples/asymmetric-link.md
     - IPv6 LPM: examples/ipv6-lpm.md
     - INT (in-band telemetry): examples/int.md
+    - Multi-hop INT: examples/int-multi-hop.md
   - Development:
     - Contributing: dev/contributing.md
     - Releasing: dev/releasing.md
@@ -122,6 +123,7 @@ plugins:
             Known Limitations: 已知限制
             Logging: 日志
             INT (in-band telemetry): INT（带内遥测）
+            Multi-hop INT: 多跳 INT
             Glossary: 术语表
             Examples: 示例
             Development: 开发

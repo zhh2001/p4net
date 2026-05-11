@@ -1,10 +1,10 @@
 ---
-description: Six runnable p4net example topologies, each isolating a single v0.2.0 feature for easy reading and copy-paste.
+description: Eight runnable p4net example topologies, each isolating one capability for easy reading and copy-paste — from quick-start to multi-hop in-band telemetry.
 ---
 
 # Examples
 
-p4net ships six runnable example topologies under `examples/` in the
+p4net ships eight runnable example topologies under `examples/` in the
 repository. Each one isolates a single capability so the source is
 easy to read and copy. Run any of them with:
 
@@ -36,17 +36,27 @@ console script on `PATH`).
   LPM table programmed at runtime. Shows how `<switch> table dump`
   renders IPv6 entries in human form (`fd00::1/128`) instead of raw
   bytes.
+- **[INT (in-band telemetry)](int.md)** — single-switch INT: the
+  pipeline inserts a 14-byte shim header carrying switch identity,
+  ingress timestamp, egress port, queue depth, and the original
+  etherType. A raw-socket listener decodes the shim on the receiver.
+- **[Multi-hop INT](int-multi-hop.md)** — two switches in series each
+  insert their own shim; the listener decodes the full hop-by-hop
+  stack. Production-style telemetry topology; same P4 binary on both
+  switches, identity supplied by the v1.2 register API.
 
 ## How they fit together
 
-| Example         | Hosts | Switches | IPv4 | IPv6 | Asymmetric | CPU punt | Runtime tables |
-| --------------- | ----- | -------- | ---- | ---- | ---------- | -------- | -------------- |
-| quick_start     | 2     | 1        | ✓    |      |            |          |                |
-| l3_forwarding   | 2     | 1        | ✓    |      |            |          | ✓              |
-| cpu_punt        | 1     | 1        | ✓    |      |            | ✓        |                |
-| dual_stack      | 2     | 1        | ✓    | ✓    |            |          |                |
-| asymmetric_link | 2     | 1        | ✓    |      | ✓          |          |                |
-| ipv6_lpm        | 2     | 1        |      | ✓    |            |          | ✓              |
+| Example         | Hosts | Switches | IPv4 | IPv6 | Asymmetric | CPU punt | Runtime tables | Telemetry |
+| --------------- | ----- | -------- | ---- | ---- | ---------- | -------- | -------------- | --------- |
+| quick_start     | 2     | 1        | ✓    |      |            |          |                |           |
+| l3_forwarding   | 2     | 1        | ✓    |      |            |          | ✓              |           |
+| cpu_punt        | 1     | 1        | ✓    |      |            | ✓        |                |           |
+| dual_stack      | 2     | 1        | ✓    | ✓    |            |          |                |           |
+| asymmetric_link | 2     | 1        | ✓    |      | ✓          |          |                |           |
+| ipv6_lpm        | 2     | 1        |      | ✓    |            |          | ✓              |           |
+| int             | 2     | 1        | ✓    |      |            |          | ✓              | ✓         |
+| int_multi_hop   | 2     | 2        | ✓    |      |            |          | ✓              | ✓ (×2)    |
 
 The [Tutorial](../tutorial.md) combines every feature in one
 4-host, 2-switch program — useful as a kitchen-sink example, but
