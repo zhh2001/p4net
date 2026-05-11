@@ -119,8 +119,9 @@ def _capture_int_frame_in_ns(
         out["error"] = repr(exc).encode("utf-8")
 
 
-def _format_listener_output(frame: bytes) -> str:
-    """Render captured frame in the same format ``listener.py`` prints."""
+def _format_listener_output(frame: bytes, boot_times: dict[str, int]) -> str:
+    """Render captured frame in the same aligned format ``listener.py`` prints."""
+    hop_to_switch = {1: "s1", 2: "s2"}
     offset = ETH_HEADER_LEN
     hops: list[dict[str, int]] = []
     next_proto = int.from_bytes(frame[12:14], "big")
@@ -136,13 +137,29 @@ def _format_listener_output(frame: bytes) -> str:
         dst = socket.inet_ntoa(frame[offset + 16 : offset + 20])
         flow = f" {src} -> {dst}"
     buf.write(f"packet ({len(hops)} hop(s), final proto 0x{next_proto:04x}):{flow}\n")
+    aligned: list[int] = []
     for i, hop in enumerate(hops, 1):
-        buf.write(
-            f"  hop {i}: switch_id={hop['switch_id']} "
-            f"ts={hop['ingress_timestamp_us']}us "
-            f"egress_port={hop['egress_port']} "
-            f"queue_depth={hop['queue_depth']}\n"
-        )
+        sw_name = hop_to_switch.get(i)
+        boot_us = boot_times.get(sw_name) if sw_name else None
+        if boot_us is None:
+            buf.write(
+                f"  hop {i}: switch_id={hop['switch_id']} "
+                f"ts={hop['ingress_timestamp_us']}us [unaligned] "
+                f"egress_port={hop['egress_port']} "
+                f"queue_depth={hop['queue_depth']}\n"
+            )
+        else:
+            aligned_us = boot_us + hop["ingress_timestamp_us"]
+            aligned.append(aligned_us)
+            buf.write(
+                f"  hop {i}: switch_id={hop['switch_id']} "
+                f"ts={hop['ingress_timestamp_us']}us "
+                f"aligned={aligned_us}us "
+                f"egress_port={hop['egress_port']} "
+                f"queue_depth={hop['queue_depth']}\n"
+            )
+    if len(aligned) == 2:
+        buf.write(f"  latency_s1_to_s2 = {aligned[1] - aligned[0]}us\n")
     return buf.getvalue()
 
 
@@ -205,6 +222,18 @@ def test_two_switches_each_insert_their_own_shim(compiled: dict[str, Path], tmp_
         s1_rt.client.write_register("MyIngress.switch_id_reg", index=0, value=1)
         s2_rt.client.write_register("MyIngress.switch_id_reg", index=0, value=2)
 
+        # Mirror what examples/int_multi_hop/topology.py setup(net) does: publish
+        # each switch's BMv2 boot timestamp so per-switch ``ingress_timestamp_us``
+        # values can be aligned to wall clock.
+        import json as _json
+
+        boot_times_path = Path("/tmp/p4net-int-multi-hop-boot-times.json")
+        boot_times = {
+            "s1": s1_rt.boot_timestamp_us,
+            "s2": s2_rt.boot_timestamp_us,
+        }
+        boot_times_path.write_text(_json.dumps(boot_times, indent=2))
+
         for sw_rt, sw_port in ((s1_rt, 2), (s2_rt, 2)):
             sw_rt.client.insert_table_entry(
                 table="MyIngress.l2_forward",
@@ -261,15 +290,41 @@ def test_two_switches_each_insert_their_own_shim(compiled: dict[str, Path], tmp_
         assert shim_2["next_proto"] == ETHERTYPE_IPV4
         assert shim_2["ingress_timestamp_us"] > 0
 
-        # NOTE: per-shim timestamps are not directly comparable across
-        # switches because BMv2's ``ingress_global_timestamp`` is local to
-        # each ``simple_switch_grpc`` process and starts at zero when that
-        # process boots. Each switch's timestamp is monotonic within itself,
-        # but absolute deltas across switches reflect per-process boot skew,
-        # not wire-level latency.
+        # v1.4 aligned causal-ordering check. BMv2's ``ingress_global_timestamp``
+        # is per-process (zero on each switch's boot); combine with each
+        # switch's ``boot_timestamp_us`` to get wall-clock arrival time and
+        # compare across hops.
+        s1_boot = s1_rt.boot_timestamp_us
+        s2_boot = s2_rt.boot_timestamp_us
+        assert s1_boot > 1_700_000_000_000_000
+        assert s2_boot > 1_700_000_000_000_000
+        assert s1_boot != s2_boot
+
+        aligned_s1 = s1_boot + shim_1["ingress_timestamp_us"]
+        aligned_s2 = s2_boot + shim_2["ingress_timestamp_us"]
+        now_us = time.time_ns() // 1000
+        # Both aligned values fall in the current wall-clock window
+        # (within 60 s of "now"). A pre-v1.4 raw-timestamp computation
+        # would not satisfy this — that's the whole point of alignment.
+        assert abs(now_us - aligned_s1) < 60_000_000
+        assert abs(now_us - aligned_s2) < 60_000_000
+        # 5 ms negative slack accommodates sub-millisecond drift from
+        # capturing ``time.time_ns()`` just before Popen vs. BMv2's
+        # internal clock zero. In practice the delta is tens to hundreds
+        # of microseconds (real per-hop forwarding latency through BMv2's
+        # userspace pipeline plus the veth pair).
+        assert aligned_s2 >= aligned_s1 - 5000, (
+            f"aligned causal order violated: aligned_s1={aligned_s1}us, "
+            f"aligned_s2={aligned_s2}us (delta={aligned_s2 - aligned_s1}us)"
+        )
+
+        # Coordination file from setup is present and well-formed.
+        assert boot_times_path.is_file()
+        on_disk = _json.loads(boot_times_path.read_text())
+        assert on_disk == {"s1": s1_boot, "s2": s2_boot}
 
         # Stash a listener-style rendering for the report and README sample.
-        rendered = _format_listener_output(frame)
+        rendered = _format_listener_output(frame, boot_times)
         (tmp_path / "int_multi_hop_output.txt").write_text(rendered)
     finally:
         net.stop()
