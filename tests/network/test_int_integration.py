@@ -200,12 +200,12 @@ def test_int_shim_inserted_on_forwarded_packet(compiled: dict[str, Path], tmp_pa
 
         shim = frame[ETH_HEADER_LEN : ETH_HEADER_LEN + SHIM_LEN]
         switch_id = shim[0]
-        timestamp_ns = int.from_bytes(shim[1:7], "big")
+        timestamp_us = int.from_bytes(shim[1:7], "big")
         egress_port, queue_depth, next_proto = struct.unpack("!HHH", shim[7:13])
         reserved = shim[13]
 
         assert switch_id == 1
-        assert timestamp_ns > 0
+        assert timestamp_us > 0
         assert egress_port == 2
         assert queue_depth >= 0  # BMv2 typically reports 0 here
         assert next_proto == ETHERTYPE_IPV4
@@ -214,7 +214,7 @@ def test_int_shim_inserted_on_forwarded_packet(compiled: dict[str, Path], tmp_pa
         # Stash decoded values where the report can find them.
         decoded = {
             "switch_id": switch_id,
-            "ingress_timestamp_ns": timestamp_ns,
+            "ingress_timestamp_us": timestamp_us,
             "egress_port": egress_port,
             "queue_depth": queue_depth,
             "next_proto": next_proto,

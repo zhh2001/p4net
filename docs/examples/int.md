@@ -95,9 +95,9 @@ switch:
 
 ```
 [listener] bound on h2-eth0, waiting for INT frames
-[switch=1 ts=164832000ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
-[switch=1 ts=165834200ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
-[switch=1 ts=166836100ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=745907us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=1750021us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=2754336us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
 ```
 
 ## Caveats
@@ -119,6 +119,6 @@ switch:
   s2 → h2. Extend the listener (or the P4 pipeline) to handle a
   shim stack.
 - Pipe the listener's output to a file and post-process to compute
-  per-flow latency deltas from `ingress_timestamp_ns`.
+  per-flow latency deltas from `ingress_timestamp_us`.
 - Add `delay="50ms"` or `loss_pct=2.0` to one of the h↔s links
   and verify the timestamps and packet counts respond as expected.

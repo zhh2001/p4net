@@ -83,9 +83,9 @@ sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 
 ```
 [listener] bound on h2-eth0, waiting for INT frames
-[switch=1 ts=164832000ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
-[switch=1 ts=165834200ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
-[switch=1 ts=166836100ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=745907us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=1750021us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=2754336us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
 ```
 
 ## 注意事项
@@ -103,6 +103,6 @@ sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 - 加第二个交换机 `SWITCH_ID = 2`，串成 h1 → s1 → s2 → h2，
   扩展 listener（或 P4 流水线）处理 shim 栈。
 - 把 listener 输出重定向到文件，离线算出基于
-  `ingress_timestamp_ns` 的逐流延迟差。
+  `ingress_timestamp_us` 的逐流延迟差。
 - 给某条 h↔s 链路加 `delay="50ms"` 或 `loss_pct=2.0`，看
   时间戳与包数是否如预期变化。

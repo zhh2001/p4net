@@ -42,7 +42,7 @@ forwards has the shim inserted before egress.
 header ethernet_t { ... }            // 14 B, standard
 header int_shim_t {                  // 14 B, novel
     bit<8>  switch_id;
-    bit<48> ingress_timestamp_ns;
+    bit<48> ingress_timestamp_us;
     bit<16> egress_port;
     bit<16> queue_depth;
     bit<16> next_proto;
@@ -70,7 +70,7 @@ AF_PACKET socket, filters by `etherType == 0x88B6`, and unpacks the
 | Bytes | Field |
 | ----- | ----- |
 | `0`   | `switch_id` |
-| `1..6` | `ingress_timestamp_ns` (48-bit big-endian) |
+| `1..6` | `ingress_timestamp_us` (48-bit big-endian; BMv2 reports microseconds) |
 | `7..8` | `egress_port` |
 | `9..10` | `queue_depth` |
 | `11..12` | `next_proto` |
@@ -107,9 +107,9 @@ switch:
 
 ```
 [listener] bound on h2-eth0, waiting for INT frames
-[switch=1 ts=164832000ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
-[switch=1 ts=165834200ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
-[switch=1 ts=166836100ns egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=745907us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=1750021us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
+[switch=1 ts=2754336us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
 ```
 
 (`queue=0` is expected — see caveats.)
@@ -130,6 +130,15 @@ switch:
   current client, so per-switch configuration would need a one-row
   table or recompiling per switch.
 
+## Compatibility
+
+The on-the-wire shim layout is **unchanged** from v1.1.0; only the
+P4-level field name was renamed from `ingress_timestamp_ns` to
+`ingress_timestamp_us` in v1.2.0 to correctly reflect BMv2's
+microsecond-resolution `standard_metadata.ingress_global_timestamp`.
+A v1.1.0 packet capture decodes identically against the v1.2.0
+listener.
+
 ## Variations to try
 
 - Change the `SWITCH_ID` const in `int.p4`, recompile (`Network`
@@ -139,7 +148,7 @@ switch:
   s2 → h2. Extend the listener (or the P4 pipeline) to recognize
   stacked shims.
 - Pipe the listener's output to a file and post-process offline to
-  compute per-flow latency from `ingress_timestamp_ns` deltas across
+  compute per-flow latency from `ingress_timestamp_us` deltas across
   consecutive packets.
 - Add a per-link `loss_pct` or `delay` to the h1↔s1 link and watch
   the timestamps reflect the delay (subject to `clock_realtime`

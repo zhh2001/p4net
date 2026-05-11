@@ -12,7 +12,7 @@
  * INT shim layout (most-significant bit first, total 14 bytes):
  *
  *     +--------+--------+--------+--------+--------+--------+--------+
- *     |  swid  |        ingress_timestamp_ns (48 bits)              |
+ *     |  swid  |        ingress_timestamp_us (48 bits)              |
  *     |  (8)   |                                                    |
  *     +--------+----------------+-----------------+-----------------+
  *     |   egress_port (16)      |  queue_depth (16) |  next_proto (16) |
@@ -43,7 +43,7 @@ header ethernet_t {
 
 header int_shim_t {
     bit<8>  switch_id;
-    bit<48> ingress_timestamp_ns;
+    bit<48> ingress_timestamp_us;
     bit<16> egress_port;
     bit<16> queue_depth;
     bit<16> next_proto;
@@ -120,7 +120,7 @@ control MyIngress(inout headers hdr, inout metadata meta,
             if (std.egress_spec != 0) {
                 hdr.int_shim.setValid();
                 hdr.int_shim.switch_id            = SWITCH_ID;
-                hdr.int_shim.ingress_timestamp_ns = (bit<48>) std.ingress_global_timestamp;
+                hdr.int_shim.ingress_timestamp_us = (bit<48>) std.ingress_global_timestamp;
                 hdr.int_shim.egress_port          = (bit<16>) std.egress_spec;
                 hdr.int_shim.queue_depth          = (bit<16>) std.deq_qdepth;
                 hdr.int_shim.next_proto           = hdr.ethernet.etherType;

@@ -18,7 +18,7 @@ Wire layout (matches the deparser in int.p4):
     [ Ethernet (14 B, etherType = 0x88B6) ]
     [ INT shim (14 B):                    ]
         switch_id            uint8
-        ingress_timestamp_ns uint48 (big-endian, packed in 6 bytes)
+        ingress_timestamp_us uint48 (big-endian, packed in 6 bytes; BMv2 reports microseconds)
         egress_port          uint16
         queue_depth          uint16
         next_proto           uint16 (= 0x0800 for IPv4)
@@ -49,7 +49,7 @@ def _decode_int_shim(buf: bytes) -> dict[str, int]:
     reserved = buf[13]
     return {
         "switch_id": switch_id,
-        "ingress_timestamp_ns": ts,
+        "ingress_timestamp_us": ts,
         "egress_port": egress_port,
         "queue_depth": queue_depth,
         "next_proto": next_proto,
@@ -102,7 +102,7 @@ def main() -> int:
         flow = f" {addrs[0]} -> {addrs[1]}" if addrs else ""
         sys.stdout.write(
             f"[switch={shim['switch_id']} "
-            f"ts={shim['ingress_timestamp_ns']}ns "
+            f"ts={shim['ingress_timestamp_us']}us "
             f"egress={shim['egress_port']} "
             f"queue={shim['queue_depth']} "
             f"next_proto=0x{shim['next_proto']:04x}]{flow}\n"
