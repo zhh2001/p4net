@@ -49,6 +49,10 @@ design discussion happens once, in public, before the code lands.
   BMv2 process start). The multi-hop INT example now writes a
   coordination file at start; the listener displays aligned wall-clock
   timestamps and per-hop forwarding latency. See [Changelog](changelog.md).
+- **v1.5.0** (2026-05-11) — `Network.boot_timestamps` helper (dict of
+  all switches' boot times) and env-var-keyed coordination file
+  (`P4NET_INT_BOOT_TIMES_PATH`) for the multi-hop INT example so
+  concurrent topologies don't collide. See [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 

@@ -9,7 +9,7 @@
 
 A P4Runtime-native SDN simulation framework for BMv2.
 
-Status: 1.4.0 — stable. Public API committed per [API Stability](https://zhh2001.github.io/p4net/api-stability/). Patch releases for fixes; minor releases for new functionality with deprecation cycles where needed.
+Status: 1.5.0 — stable. Public API committed per [API Stability](https://zhh2001.github.io/p4net/api-stability/). Patch releases for fixes; minor releases for new functionality with deprecation cycles where needed.
 
 ## Features
 

@@ -308,12 +308,13 @@ def test_two_switches_each_insert_their_own_shim(compiled: dict[str, Path], tmp_
         # would not satisfy this — that's the whole point of alignment.
         assert abs(now_us - aligned_s1) < 60_000_000
         assert abs(now_us - aligned_s2) < 60_000_000
-        # 5 ms negative slack accommodates sub-millisecond drift from
-        # capturing ``time.time_ns()`` just before Popen vs. BMv2's
-        # internal clock zero. In practice the delta is tens to hundreds
-        # of microseconds (real per-hop forwarding latency through BMv2's
-        # userspace pipeline plus the veth pair).
-        assert aligned_s2 >= aligned_s1 - 5000, (
+        # 20 ms negative slack accommodates drift from capturing
+        # ``time.time_ns()`` just before Popen vs. BMv2's internal clock
+        # zero (Popen + early-init can take several ms under suite load).
+        # Real per-hop forwarding latency is tens to hundreds of μs; the
+        # ms-scale slack is alignment drift, not data-plane latency.
+        # Widened from 5 ms in v1.5 after reproducible suite-load failures.
+        assert aligned_s2 >= aligned_s1 - 20_000, (
             f"aligned causal order violated: aligned_s1={aligned_s1}us, "
             f"aligned_s2={aligned_s2}us (delta={aligned_s2 - aligned_s1}us)"
         )

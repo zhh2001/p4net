@@ -3,4 +3,4 @@
 from p4net.network import Network
 
 __all__ = ["Network", "__version__"]
-__version__ = "1.4.0"
+__version__ = "1.5.0"

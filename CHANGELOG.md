@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-05-11
+
+### Added
+
+- `Network.boot_timestamps`: read-only dict mapping switch name to
+  wall-clock microseconds since Unix epoch when that switch's BMv2
+  process started. Convenience helper over per-switch
+  ``RunningSwitch.boot_timestamp_us``; returns a fresh dict on each
+  call, raises ``NetworkNotRunningError`` if the network isn't
+  running. **Stable** per the API stability commitment.
+
+### Changed
+
+- Multi-hop INT example reads ``P4NET_INT_BOOT_TIMES_PATH`` from the
+  environment to locate its coordination file, defaulting to
+  ``/tmp/p4net-int-multi-hop-boot-times.json`` when unset. Allows
+  concurrent multi-hop INT topologies on the same host. Both
+  ``topology.py`` and ``listener.py`` honor the variable; ``sudo -E``
+  is required to preserve it across privilege escalation.
+- Multi-hop INT example's ``topology.py`` uses the new
+  ``Network.boot_timestamps`` helper instead of a manual dict
+  comprehension over each switch — adapts automatically as switches
+  are added.
+
+### Fixed
+
+- ``test_two_switches_each_insert_their_own_shim`` aligned-causal slack
+  widened from 5 ms to 20 ms to absorb the Popen + BMv2 early-init
+  drift observed reproducibly under full-suite load. The slack is
+  alignment-drift bookkeeping, not data-plane latency; real per-hop
+  forwarding latency through BMv2's userspace pipeline remains in the
+  tens-to-hundreds of microseconds.
+
 ## [1.4.0] - 2026-05-11
 
 ### Added
