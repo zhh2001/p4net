@@ -136,6 +136,32 @@ typically, occasionally a couple of milliseconds under load. Good
 enough for μs-vs-ms regime decisions; for serious latency research
 use a real shared time source (PTP).
 
+`topology.py` builds the coordination dict via
+``Network.boot_timestamps`` (v1.5+) — a read-only dict keyed by
+switch name. The previous hand-written
+``{name: net.switch(name).boot_timestamp_us}`` comprehension still
+works but doesn't adapt as switches are added.
+
+## Running concurrent topologies
+
+The coordination file path defaults to
+`/tmp/p4net-int-multi-hop-boot-times.json`. To run multiple multi-hop
+INT topologies on one host without trampling each other's
+coordination state, set ``P4NET_INT_BOOT_TIMES_PATH`` to a unique
+path before starting each:
+
+```
+P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
+  sudo -E p4net examples/int_multi_hop/topology.py
+P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
+  sudo -E ip netns exec h2 python3 \
+    examples/int_multi_hop/listener.py --iface h2-eth0
+```
+
+``sudo -E`` is required — without it ``sudo`` strips most env vars
+and both processes silently fall back to the default path, causing
+collisions. Topology and listener must agree on the path.
+
 ## What's interesting
 
 - **Per-hop forwarding latency is now observable.** The
@@ -160,9 +186,10 @@ use a real shared time source (PTP).
   clock zero is slightly later. Good enough for μs/ms regime checks,
   not good enough for nanosecond-scale latency research; use PTP for
   that.
-- **Listener relies on a `/tmp/` coordination file.** Concurrent
-  multi-hop INT topologies on the same host would trample each other's
-  files. The example assumes one topology at a time.
+- **Listener relies on a `/tmp/` coordination file.** Path defaults
+  to `/tmp/p4net-int-multi-hop-boot-times.json`; set
+  `P4NET_INT_BOOT_TIMES_PATH` (with `sudo -E`) to run concurrent
+  multi-hop INT topologies on the same host.
 - **`queue_depth` is almost always 0.** Same as the single-switch
   example.
 - **No checksum recomputation for the inserted shims.** The IPv4

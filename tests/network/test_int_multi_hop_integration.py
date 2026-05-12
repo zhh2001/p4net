@@ -328,3 +328,70 @@ def test_two_switches_each_insert_their_own_shim(compiled: dict[str, Path], tmp_
         (tmp_path / "int_multi_hop_output.txt").write_text(rendered)
     finally:
         net.stop()
+
+
+def test_env_var_overrides_coordination_path(
+    compiled: dict[str, Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``P4NET_INT_BOOT_TIMES_PATH`` redirects the coordination file.
+
+    Two parts:
+
+    1. Loading ``examples/int_multi_hop/topology.py`` with the env var set
+       picks up the override as ``BOOT_TIMES_PATH``.
+    2. A real network bring-up using ``net.boot_timestamps`` writes the
+       file at the override path and does not touch the default path.
+    """
+    import importlib.util
+    import json as _json
+
+    override_path = tmp_path / "phase22-override.json"
+    default_path = Path("/tmp/p4net-int-multi-hop-boot-times.json")
+    if default_path.exists():
+        default_path.unlink()
+    monkeypatch.setenv("P4NET_INT_BOOT_TIMES_PATH", str(override_path))
+
+    # Part 1: load topology.py as a one-off module and confirm BOOT_TIMES_PATH
+    # honors the env var. No package import shenanigans needed.
+    topology_py = (
+        Path(__file__).resolve().parent.parent.parent / "examples" / "int_multi_hop" / "topology.py"
+    )
+    spec = importlib.util.spec_from_file_location("_phase22_topology", topology_py)
+    assert spec is not None and spec.loader is not None
+    topo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(topo_mod)
+    assert override_path == topo_mod.BOOT_TIMES_PATH
+
+    # Part 2: real bring-up; assert the file lands at the override path.
+    suffix = _suffix()
+    h1 = f"h{suffix}a"
+    h2 = f"h{suffix}b"
+    s1 = f"s{suffix}1"
+    s2 = f"s{suffix}2"
+    grpc1, thrift1 = _two_free_ports()
+    grpc2, thrift2 = _two_free_ports()
+    topo = Topology()
+    topo.add_host(h1, ip="10.0.0.1/24", mac="00:00:00:00:00:01")
+    topo.add_host(h2, ip="10.0.0.2/24", mac="00:00:00:00:00:02")
+    topo.add_switch(s1, p4_src=_MULTI_HOP_P4, grpc_port=grpc1, thrift_port=thrift1)
+    topo.add_switch(s2, p4_src=_MULTI_HOP_P4, grpc_port=grpc2, thrift_port=thrift2)
+    topo.add_link(h1, s1, port_b=1)
+    topo.add_link(s1, s2, port_a=2, port_b=1)
+    topo.add_link(s2, h2, port_a=2)
+
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        boot_times = net.boot_timestamps
+        override_path.write_text(_json.dumps(boot_times, indent=2))
+        assert override_path.is_file()
+        assert not default_path.exists(), (
+            "default coordination file should not be touched when env var is set"
+        )
+        on_disk = _json.loads(override_path.read_text())
+        assert set(on_disk) == {s1, s2}
+        assert all(isinstance(v, int) and v > 0 for v in on_disk.values())
+    finally:
+        net.stop()

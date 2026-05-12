@@ -126,6 +126,29 @@ wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
 负载影响达到几毫秒。够用来判断「跨跳延迟是 μs 量级还是 ms 量级」，
 真要做纳秒级延迟研究还得用 PTP 这类共享时间源。
 
+`topology.py` 用 ``Network.boot_timestamps``（v1.5+）来构建协调字典
+——这是一个按交换机名字索引的只读字典。之前手写的
+``{name: net.switch(name).boot_timestamp_us}`` 仍可用，但加交换机
+时不会自动适配。
+
+## 同主机并行运行多份拓扑
+
+协调文件默认路径是 `/tmp/p4net-int-multi-hop-boot-times.json`。
+要在同一主机上并行跑多份多跳 INT 拓扑而不互相覆盖，设置环境变量
+``P4NET_INT_BOOT_TIMES_PATH`` 指向各自独立的路径：
+
+```
+P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
+  sudo -E p4net examples/int_multi_hop/topology.py
+P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
+  sudo -E ip netns exec h2 python3 \
+    examples/int_multi_hop/listener.py --iface h2-eth0
+```
+
+必须用 ``sudo -E``——否则 ``sudo`` 会清掉大多数环境变量，两个进程
+都会悄悄退回默认路径并互相打架。topology 与 listener 必须读到同一
+路径。
+
 ## 值得注意的点
 
 - **每跳转发延迟现在可观测**。`latency_s1_to_s2` 这一行在本机
@@ -144,8 +167,10 @@ wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
 - **对齐有亚毫秒漂移**。`boot_timestamp_us` 是在 `Popen` 之前一刻
   抓的，BMv2 实际内部时钟零点要更晚一点。够用来粗看，不够用来做
   纳秒级精度研究。
-- **listener 依赖 `/tmp/` 协调文件**。同一主机上并行跑多份多跳 INT
-  会相互覆盖；示例假设同时只跑一份。
+- **listener 依赖 `/tmp/` 协调文件**。默认路径
+  `/tmp/p4net-int-multi-hop-boot-times.json`；要并行跑多份拓扑，请
+  通过 ``P4NET_INT_BOOT_TIMES_PATH``（配合 ``sudo -E``）指向独立
+  路径。
 - **`queue_depth` 几乎总是 0**，与单交换机示例一致。
 - **不重算插入 shim 的校验和**。IPv4 校验和只覆盖 IPv4 头本身；
   位于以太网与 IPv4 之间的 shim 层是无保护的，这与 INT 规范的

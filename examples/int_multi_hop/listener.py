@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import struct
 import sys
@@ -34,7 +35,15 @@ ETH_P_ALL = 0x0003
 ETHERTYPE_INT = 0x88B6
 ETHERTYPE_IPV4 = 0x0800
 SHIM_LEN = 14
-DEFAULT_BOOT_TIMES_PATH = Path("/tmp/p4net-int-multi-hop-boot-times.json")
+# ``P4NET_INT_BOOT_TIMES_PATH`` overrides the coordination file path; pass
+# it with ``sudo -E`` to preserve the variable across privilege escalation.
+# Both this listener and ``topology.py`` read the same env var.
+DEFAULT_BOOT_TIMES_PATH = Path(
+    os.environ.get(
+        "P4NET_INT_BOOT_TIMES_PATH",
+        "/tmp/p4net-int-multi-hop-boot-times.json",
+    )
+)
 # Map a 1-based hop index in the captured frame to the switch name in the
 # coordination file. The 2-switch example always sees s1 first, then s2.
 HOP_INDEX_TO_SWITCH = {1: "s1", 2: "s2"}

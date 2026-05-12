@@ -191,6 +191,33 @@ a shared time source (PTP). The drift is on the order of the Popen
 syscall (sub-millisecond) plus any kernel-scheduling delay between the
 `time.time_ns()` capture and BMv2's actual clock zero.
 
+## Running concurrent topologies
+
+The coordination file path defaults to
+`/tmp/p4net-int-multi-hop-boot-times.json`. To run multiple multi-hop
+INT topologies on the same host without trampling each other's
+coordination state, set `P4NET_INT_BOOT_TIMES_PATH` to a unique path
+before starting each:
+
+```bash
+P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
+  sudo -E p4net examples/int_multi_hop/topology.py
+# in another terminal:
+P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
+  sudo -E ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0
+```
+
+`sudo -E` is required — without it, `sudo` strips most env vars from
+the child environment, the topology and listener fall back to the
+default `/tmp/p4net-int-multi-hop-boot-times.json` path, and the two
+runs collide. The topology and listener must agree on the path; both
+read the same `P4NET_INT_BOOT_TIMES_PATH` variable.
+
+The same v1.5 helper also informs how `topology.py` builds the
+coordination dict: instead of a hand-written comprehension over each
+switch, it calls `net.boot_timestamps`, which adapts automatically as
+switches are added.
+
 ## What's interesting
 
 - **Per-hop forwarding latency is now observable.** The
@@ -257,12 +284,12 @@ preceded.
   well under 1 ms on a typical Linux host, occasionally a couple of
   ms under load. Good enough for "is this in the μs or ms regime",
   not good enough for serious latency research; use PTP for that.
-- **Listener relies on a `/tmp/` coordination file.** If multiple
-  multi-hop INT topologies are running simultaneously on the same
-  host they will trample each other's coordination files. The
-  example assumes one topology at a time; production deployments
-  would pass boot timestamps to the listener via a more isolated
-  channel (a CLI argument, an env var, or a per-topology directory).
+- **Listener relies on a `/tmp/` coordination file.** The path
+  defaults to `/tmp/p4net-int-multi-hop-boot-times.json`. Run
+  concurrent multi-hop INT topologies on the same host by setting
+  `P4NET_INT_BOOT_TIMES_PATH` (with `sudo -E`); see the
+  "Running concurrent topologies" section above. A single default
+  path with one topology at a time is fine.
 - **`queue_depth` is almost always 0.** Same as the single-switch
   example — BMv2's default queueing doesn't surface meaningful values.
 - **No checksum recomputation for the inserted shims.** The IPv4
