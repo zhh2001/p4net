@@ -62,7 +62,8 @@ import。任何未在包的 `__all__` 中导出的对象都属于此类。
 
 | 符号 | 等级 | 备注 |
 | --- | --- | --- |
-| `Network` | 稳定 | `start`、`stop`、`host`、`switch`、`pingall`、`pingall6`、`__enter__`、`__exit__` 均稳定。 |
+| `Network` | 稳定 | `start`、`stop`、`host`、`switch`、`pingall`、`pingall6`、`boot_timestamps`、`__enter__`、`__exit__` 均稳定。 |
+| `Network.boot_timestamps` | 稳定 | 只读字典：交换机名 → 该交换机 BMv2 进程启动时的 Unix 微秒挂钟值。是 `RunningSwitch.boot_timestamp_us` 的便利封装；每次调用返回新字典。在 `start` 之前或 `stop` 之后访问会抛出 `NetworkNotRunningError`。 |
 | `Network.xterm` | 实验性 | 依赖 `$DISPLAY`；随着派生进程跟踪机制完善，行为可能演进。 |
 | `RunningHost` | 稳定 | `name`、`primary_ip`、`primary_ip6`、`interfaces`、`interfaces6`、`ping`、`exec`、`popen` 均稳定。 |
 | `RunningSwitch` | 稳定 | `name`、`client`、`bmv2`、`compile_result`、`log_file`、`descriptor`、`boot_timestamp_us` 均稳定。 |

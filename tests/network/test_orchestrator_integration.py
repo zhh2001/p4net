@@ -294,6 +294,12 @@ def test_multi_switch_chain_with_two_port_swap(tmp_path: Path) -> None:
         assert abs(now_us - s2_boot) < 60_000_000
         assert s1_boot != s2_boot
 
+        # Network.boot_timestamps mirrors the per-switch values.
+        ts_map = net.boot_timestamps
+        assert set(ts_map.keys()) == {s1, s2}
+        assert ts_map[s1] == s1_boot
+        assert ts_map[s2] == s2_boot
+
 
 # ---------------------------------------------------------------------------
 # 6. pingall across three hosts

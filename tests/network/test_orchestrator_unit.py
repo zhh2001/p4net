@@ -1029,3 +1029,53 @@ def test_running_switch_boot_timestamp_raises_when_none() -> None:
     rs = RunningSwitch(sw_desc, bmv2, MagicMock(), MagicMock())
     with pytest.raises(NetworkNotRunningError, match="no boot timestamp"):
         _ = rs.boot_timestamp_us
+
+
+# ---------------------------------------------------------------------------
+# Network.boot_timestamps
+# ---------------------------------------------------------------------------
+
+
+def test_network_boot_timestamps_returns_dict_when_running(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    # Stamp each mock BMv2 with a distinct integer so the property has real
+    # ints to surface (the default MagicMock attribute is itself a MagicMock).
+    topo = _make_simple_topology()
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        for i, bmv2 in enumerate(patched["bmv2s"], start=1):
+            bmv2.boot_timestamp_us = 1_736_700_000_000_000 + i
+        got = net.boot_timestamps
+        assert set(got.keys()) == set(topo.switches)
+        assert all(isinstance(v, int) for v in got.values())
+        # Values match what individual RunningSwitch.boot_timestamp_us returns.
+        for name, value in got.items():
+            assert net.switch(name).boot_timestamp_us == value
+    finally:
+        net.stop()
+
+
+def test_network_boot_timestamps_returns_fresh_dict(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    try:
+        for i, bmv2 in enumerate(patched["bmv2s"], start=1):
+            bmv2.boot_timestamp_us = 1000 + i
+        a = net.boot_timestamps
+        a["s1"] = 999_999  # mutate
+        b = net.boot_timestamps
+        assert b["s1"] != 999_999  # not the same dict
+    finally:
+        net.stop()
+
+
+def test_network_boot_timestamps_raises_when_not_running(tmp_path: Path) -> None:
+    from p4net.network.exceptions import NetworkNotRunningError
+
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    with pytest.raises(NetworkNotRunningError, match="not running"):
+        _ = net.boot_timestamps

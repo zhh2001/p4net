@@ -32,6 +32,7 @@ from p4net.network._cleanup import (
 from p4net.network.exceptions import (
     NetworkAlreadyRunningError,
     NetworkError,
+    NetworkNotRunningError,
     NodeNotFoundError,
 )
 from p4net.network.nodes import RunningHost, RunningSwitch
@@ -196,6 +197,28 @@ class Network:
         if rs is None:
             raise NodeNotFoundError(f"no running switch named {name!r}")
         return rs
+
+    @property
+    def boot_timestamps(self) -> dict[str, int]:
+        """Mapping of switch name to wall-clock μs when its BMv2 started.
+
+        Equivalent to ``{name: self.switch(name).boot_timestamp_us for name
+        in self.topology.switches}``, but more concise and stays in sync
+        with the running set.
+
+        Returns:
+            Fresh dict (callers may mutate it without affecting the
+            network's internal state).
+
+        Raises:
+            NetworkNotRunningError: if the network has not been started or
+                has been stopped.
+        """
+        if not self._running:
+            raise NetworkNotRunningError(
+                "Network is not running; call start() before boot_timestamps"
+            )
+        return {name: rs.boot_timestamp_us for name, rs in self._running_switches.items()}
 
     # Lifecycle ----------------------------------------------------------
 

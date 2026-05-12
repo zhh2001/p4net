@@ -70,7 +70,8 @@ Stable user-facing surface; some lower-level details provisional.
 
 | Symbol | Tier | Note |
 | --- | --- | --- |
-| `Network` | Stable | `start`, `stop`, `host`, `switch`, `pingall`, `pingall6`, `__enter__`, `__exit__` are stable. |
+| `Network` | Stable | `start`, `stop`, `host`, `switch`, `pingall`, `pingall6`, `boot_timestamps`, `__enter__`, `__exit__` are stable. |
+| `Network.boot_timestamps` | Stable | Read-only dict mapping switch name to wall-clock μs since Unix epoch when that switch's BMv2 process started. Convenience helper over per-switch `RunningSwitch.boot_timestamp_us`. Returns a fresh dict on each call. Raises `NetworkNotRunningError` if accessed before `start` or after `stop`. |
 | `Network.xterm` | Experimental | Depends on `$DISPLAY`; behavior may evolve as we refine the spawned-process tracking. |
 | `RunningHost` | Stable | `name`, `primary_ip`, `primary_ip6`, `interfaces`, `interfaces6`, `ping`, `exec`, `popen` are stable. |
 | `RunningSwitch` | Stable | `name`, `client`, `bmv2`, `compile_result`, `log_file`, `descriptor`, `boot_timestamp_us` are stable. |
