@@ -36,7 +36,6 @@ shape of telemetry that's been productized.
   h1 (10.0.0.1/24, 00:00:00:00:00:01)
    |
    | port 1
-   |
    +------+
    |  s1  |   switch_id=1
    +------+
