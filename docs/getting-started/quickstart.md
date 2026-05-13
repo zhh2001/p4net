@@ -13,9 +13,8 @@ with [Installation](installation.md).
 
 ```
 +----+         +----+         +----+
-| h1 |--eth0---|    |---eth0--| h2 |
-+----+   1    | s1 |    2    +----+
-              +----+
+| h1 |--eth0---| s1 |---eth0--| h2 |
++----+    1    +----+    2    +----+
 ```
 
 `h1` and `h2` are Linux hosts in private network namespaces. `s1` is
