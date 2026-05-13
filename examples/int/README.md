@@ -28,7 +28,7 @@ read.
 ```
    h1                s1                h2
  (10.0.0.1/24) --- int.p4 --- (10.0.0.2/24)
-                port 1   port 2
+               port 1   port 2
 ```
 
 One switch, two hosts. Every packet that the switch's `ipv4_lpm` table
