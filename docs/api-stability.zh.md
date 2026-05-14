@@ -67,6 +67,7 @@ import。任何未在包的 `__all__` 中导出的对象都属于此类。
 | `Network.xterm` | 实验性 | 依赖 `$DISPLAY`；随着派生进程跟踪机制完善，行为可能演进。 |
 | `RunningHost` | 稳定 | `name`、`primary_ip`、`primary_ip6`、`interfaces`、`interfaces6`、`ping`、`exec`、`popen` 均稳定。 |
 | `RunningSwitch` | 稳定 | `name`、`client`、`bmv2`、`compile_result`、`log_file`、`descriptor`、`boot_timestamp_us` 均稳定。 |
+| `RunningSwitch.async_client` | 临时 | 惰性属性，返回**未连接**的 `AsyncP4RuntimeClient`。已预置同步客户端的 P4Info 索引。每个 `RunningSwitch` 实例内缓存；`Network.stop()` 时重置。状态与异步客户端一致——参见上文「临时等级与异步客户端」。 |
 | `RunningSwitch.boot_timestamp_us` | 稳定 | 该交换机 BMv2 进程启动时的 Unix 时间戳（微秒）。配合 INT shim 的 `ingress_timestamp_us` 计算挂钟到达时间，对齐跨交换机的时间戳。在 `start` 之前或 `stop` 之后访问会抛出 `NetworkNotRunningError`。 |
 | `NetworkError` 及子类 | 稳定 | `NetworkAlreadyRunningError`、`NetworkNotRunningError`、`NodeNotFoundError`。 |
 

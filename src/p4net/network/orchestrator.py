@@ -633,6 +633,23 @@ class Network:
                 logger.warning("spawned process reap (pid=%s): %r", getattr(proc, "pid", "?"), exc)
         self._spawned_processes.clear()
 
+        # 1a. Async P4Runtime clients (if any were lazily constructed and
+        # connected). We run a fresh event loop per client to avoid
+        # interfering with the caller's loop; a failure here is logged
+        # and does not block shutdown.
+        for sw_name, rs in list(self._running_switches.items()):
+            ac = rs._async_client
+            if ac is None:
+                continue
+            try:
+                if ac.is_connected:
+                    import asyncio as _asyncio
+
+                    _asyncio.run(ac.disconnect())
+            except Exception as exc:
+                logger.warning("async client disconnect %r: %r", sw_name, exc)
+            rs._reset_async_client()
+
         # 1. P4Runtime clients
         for sw_name, client in list(self._clients.items()):
             try:

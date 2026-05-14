@@ -1079,3 +1079,51 @@ def test_network_boot_timestamps_raises_when_not_running(tmp_path: Path) -> None
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     with pytest.raises(NetworkNotRunningError, match="not running"):
         _ = net.boot_timestamps
+
+
+# ---------------------------------------------------------------------------
+# RunningSwitch.async_client
+# ---------------------------------------------------------------------------
+
+
+def test_running_switch_async_client_lazy_cached() -> None:
+    from p4net.control import AsyncP4RuntimeClient
+    from p4net.network.nodes import RunningSwitch
+    from p4net.topo import P4Switch
+
+    bmv2 = MagicMock()
+    bmv2.grpc_port = 50051
+    bmv2.thrift_port = 9090
+    bmv2.device_id = 0
+    sync_client = MagicMock()
+    sync_client._index = MagicMock()
+    rs = RunningSwitch(
+        P4Switch(name="s1", p4_src=Path("p.p4")),
+        bmv2,
+        sync_client,
+        MagicMock(),
+    )
+    ac = rs.async_client
+    assert isinstance(ac, AsyncP4RuntimeClient)
+    # Cached.
+    assert rs.async_client is ac
+    # Plumbed through.
+    assert ac.grpc_address == ("127.0.0.1", 50051)
+    assert ac.device_id == 0
+    assert ac._thrift_address == ("127.0.0.1", 9090)
+    assert ac._info_index is sync_client._index
+
+
+def test_running_switch_async_client_reset_after_stop(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    """Network.stop() drops the cached async client on each RunningSwitch."""
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    sw = net.switch("s1")
+    first = sw.async_client
+    assert first is sw.async_client  # cached
+    net.stop()
+    # The orchestrator clears the running-switches dict on stop AND zeroes
+    # the per-RunningSwitch async cache via _reset_async_client.
+    assert sw._async_client is None

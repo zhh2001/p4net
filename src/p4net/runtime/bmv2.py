@@ -126,6 +126,11 @@ class BMv2Switch:
         return self._thrift_port
 
     @property
+    def grpc_port(self) -> int:
+        """gRPC port the P4Runtime server bound to (host portion is ``grpc_bind_addr``)."""
+        return self._grpc_port
+
+    @property
     def boot_timestamp_us(self) -> int | None:
         """Wall-clock microseconds since Unix epoch when this BMv2 process started.
 

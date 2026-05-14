@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import IO
 
 from p4net.compiler import CompileResult
-from p4net.control import P4RuntimeClient
+from p4net.control import AsyncP4RuntimeClient, P4RuntimeClient
 from p4net.network.exceptions import NetworkError, NetworkNotRunningError
 from p4net.runtime import BMv2Switch, NetworkNamespace, NSProcess
 from p4net.topo import Host, P4Switch
@@ -190,6 +190,7 @@ class RunningSwitch:
         self._bmv2 = bmv2
         self._client = client
         self._compile_result = compile_result
+        self._async_client: AsyncP4RuntimeClient | None = None
 
     @property
     def name(self) -> str:
@@ -245,6 +246,45 @@ class RunningSwitch:
                 f"switch {self.name!r} has no boot timestamp; BMv2 is not running"
             )
         return ts
+
+    @property
+    def async_client(self) -> AsyncP4RuntimeClient:
+        """Lazy-constructed async P4Runtime client for this switch.
+
+        Returns an **unconnected** :class:`AsyncP4RuntimeClient`. Call
+        ``await async_client.connect()`` to attach. The async client
+        receives the parsed P4Info index from the sync client at
+        ``self.client``, so reads/writes against the running pipeline
+        work immediately after connect.
+
+        Mastership is independent: each client has its own election ID.
+        By default the sync client wins primary because it connected
+        first (its election ID is the millisecond-time-since-epoch of
+        ``Network.start``, which precedes any async lazy construction).
+        If you want async to be primary, pass ``election_id=(...)`` with
+        a higher value when constructing your own client; calling
+        ``async_client.connect()`` without further configuration will
+        take primary if the sync client has been disconnected, otherwise
+        the BMv2 will reject the arbitration.
+
+        The returned instance is cached; subsequent property accesses
+        return the same object. Reset on ``Network.stop()`` so the next
+        ``Network.start()`` (if supported) gets a fresh client.
+
+        **Provisional** in p4net 1.x — see :class:`AsyncP4RuntimeClient`.
+        """
+        if self._async_client is None:
+            self._async_client = AsyncP4RuntimeClient(
+                grpc_address=("127.0.0.1", self._bmv2.grpc_port),
+                device_id=self._bmv2.device_id,
+                info_index=self._client._index,
+                thrift_address=("127.0.0.1", self._bmv2.thrift_port),
+            )
+        return self._async_client
+
+    def _reset_async_client(self) -> None:
+        """Drop the cached async client. Called by ``Network.stop()``."""
+        self._async_client = None
 
     def __repr__(self) -> str:
         return f"RunningSwitch(name={self.name!r}, grpc={self._bmv2.grpc_address!r})"

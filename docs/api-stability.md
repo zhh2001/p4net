@@ -75,6 +75,7 @@ Stable user-facing surface; some lower-level details provisional.
 | `Network.xterm` | Experimental | Depends on `$DISPLAY`; behavior may evolve as we refine the spawned-process tracking. |
 | `RunningHost` | Stable | `name`, `primary_ip`, `primary_ip6`, `interfaces`, `interfaces6`, `ping`, `exec`, `popen` are stable. |
 | `RunningSwitch` | Stable | `name`, `client`, `bmv2`, `compile_result`, `log_file`, `descriptor`, `boot_timestamp_us` are stable. |
+| `RunningSwitch.async_client` | Provisional | Lazy property returning an unconnected `AsyncP4RuntimeClient` for this switch. Pre-seeded with the sync client's P4Info index. Cached per `RunningSwitch`; reset on `Network.stop()`. Provisional pending async-client soak (see "Provisional tier and async client"). |
 | `RunningSwitch.boot_timestamp_us` | Stable | Wall-clock microseconds since Unix epoch when this switch's BMv2 process started. Combine with INT shim `ingress_timestamp_us` to compute wall-clock arrival time and align timestamps across multiple switches. Raises `NetworkNotRunningError` if accessed before `start` or after `stop`. |
 | `NetworkError` and subclasses | Stable | `NetworkAlreadyRunningError`, `NetworkNotRunningError`, `NodeNotFoundError`. |
 
