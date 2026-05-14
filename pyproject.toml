@@ -32,6 +32,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
+  "pytest-asyncio>=0.23",
   "pytest-cov",
   "pytest-mock",
   "ruff>=0.5",
@@ -88,6 +89,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra -q"
+asyncio_mode = "auto"
 markers = [
   "integration: requires root and Linux network namespaces",
   "requires_p4c: requires the 'p4c' compiler binary on PATH",
