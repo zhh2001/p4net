@@ -17,11 +17,18 @@ them so users encounter the boundary before hitting it in their own code.
 - **Why**: gRPC's `StreamChannel` spawns background threads. When
   `subprocess.run` then forks, the multi-threaded-fork-in-Python pathology
   surfaces and the child can hang holding a stale lock.
-- **Workaround**: invoke a fresh Python process per topology run, e.g.
+- **Workaround**: use `AsyncP4RuntimeClient` for all switch
+  interactions (not `P4RuntimeClient`). The async client uses
+  `grpc.aio`, which doesn't spawn background threads, so the
+  multi-threaded-fork pathology doesn't apply. See
+  [Async client](async-client.md). For sync code that can't switch,
+  invoke a fresh Python process per topology run, e.g.
   `subprocess.run([sys.executable, "topology.py"])` from your harness.
   The `docs/performance.md` measurement script uses this pattern.
-- **Status**: not planned for 1.x. An async P4Runtime client (a 2.0
-  candidate) would address this structurally.
+- **Status**: structurally addressed by the v1.6 async client for
+  per-RPC operations. `Network.start()` itself remains synchronous and
+  uses threading for parallel BMv2 startup — a future `AsyncNetwork`
+  would close that last gap.
 
 ## 2. Single-host operation only
 

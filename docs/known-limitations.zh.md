@@ -16,11 +16,15 @@ p4net 的 1.x 系列有意识地放下了若干能力——要么需要破坏性
 - **原因**：gRPC 的 `StreamChannel` 会拉起后台线程。`subprocess.run`
   fork 时，Python 多线程 fork 的固有问题会浮现，子进程可能持有
   陈旧锁卡死。
-- **变通方案**：每次拓扑运行换新 Python 进程，比如让你的外层脚本
-  调用 `subprocess.run([sys.executable, "topology.py"])`。
-  `docs/performance.md` 的测量脚本正是这种写法。
-- **状态**：1.x 不会修。异步 P4Runtime 客户端（2.0 候选）才是结构
-  性的解法。
+- **变通方案**：所有交换机交互改用 `AsyncP4RuntimeClient`（而非
+  `P4RuntimeClient`）。异步客户端走 `grpc.aio`，不起后台线程，因此
+  多线程 fork 的坑不适用。详见[异步客户端](async-client.md)。如果
+  同步代码不便迁移，仍可用「每次拓扑跑都开新 Python 进程」的老方法
+  ——`subprocess.run([sys.executable, "topology.py"])`；
+  `docs/performance.md` 的测量脚本就是这种写法。
+- **状态**：v1.6 引入的异步客户端结构性地解决了 per-RPC 操作的
+  问题。`Network.start()` 本身仍然是同步的，并用线程并行起 BMv2
+  ——未来的 `AsyncNetwork` 会把最后这一段堵上。
 
 ## 2. 仅支持单机运行
 

@@ -29,6 +29,7 @@ nav:
       - p4net.network: api/network.md
       - p4net.cli: api/cli.md
     - API Stability: api-stability.md
+    - Async client: async-client.md
     - Performance: performance.md
     - Known Limitations: known-limitations.md
     - Logging: logging.md
@@ -43,6 +44,7 @@ nav:
     - IPv6 LPM: examples/ipv6-lpm.md
     - INT (in-band telemetry): examples/int.md
     - Multi-hop INT: examples/int-multi-hop.md
+    - Async concurrent: examples/async-concurrent.md
   - Development:
     - Contributing: dev/contributing.md
     - Releasing: dev/releasing.md
@@ -119,11 +121,13 @@ plugins:
             CLI Reference: CLI 参考
             API: API
             API Stability: API 稳定性
+            Async client: 异步客户端
             Performance: 性能特征
             Known Limitations: 已知限制
             Logging: 日志
             INT (in-band telemetry): INT（带内遥测）
             Multi-hop INT: 多跳 INT
+            Async concurrent: 异步并发
             Glossary: 术语表
             Examples: 示例
             Development: 开发
