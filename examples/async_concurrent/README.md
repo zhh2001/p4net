@@ -115,8 +115,8 @@ problem size, growing with the number of switches.
   more. The sync client at `switch.client` is just as fast against one
   switch and doesn't require an event loop.
 - **Direct mappings to the v1.0 sync API** in existing code. The sync
-  client is Stable; the async client is Provisional in 1.x — see the
-  API stability page.
+  client is the v1.0 baseline; the async client is also Stable since
+  1.7.0 — pick whichever fits your codebase.
 
 ## Mastership note
 

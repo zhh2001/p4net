@@ -67,41 +67,42 @@ import。任何未在包的 `__all__` 中导出的对象都属于此类。
 | `Network.xterm` | 实验性 | 依赖 `$DISPLAY`；随着派生进程跟踪机制完善，行为可能演进。 |
 | `RunningHost` | 稳定 | `name`、`primary_ip`、`primary_ip6`、`interfaces`、`interfaces6`、`ping`、`exec`、`popen` 均稳定。 |
 | `RunningSwitch` | 稳定 | `name`、`client`、`bmv2`、`compile_result`、`log_file`、`descriptor`、`boot_timestamp_us` 均稳定。 |
-| `RunningSwitch.async_client` | 临时 | 惰性属性，返回**未连接**的 `AsyncP4RuntimeClient`。已预置同步客户端的 P4Info 索引。每个 `RunningSwitch` 实例内缓存；`Network.stop()` 时重置。状态与异步客户端一致——参见上文「临时等级与异步客户端」。 |
+| `RunningSwitch.async_client` | 稳定（自 1.7 起） | 惰性属性，返回**未连接**的 `AsyncP4RuntimeClient`。已预置同步客户端的 P4Info 索引。每个 `RunningSwitch` 实例内缓存；`Network.stop()` 时重置。1.7.0 由临时升级为稳定——参见下文「临时等级与异步客户端」。 |
 | `RunningSwitch.boot_timestamp_us` | 稳定 | 该交换机 BMv2 进程启动时的 Unix 时间戳（微秒）。配合 INT shim 的 `ingress_timestamp_us` 计算挂钟到达时间，对齐跨交换机的时间戳。在 `start` 之前或 `stop` 之后访问会抛出 `NetworkNotRunningError`。 |
 | `NetworkError` 及子类 | 稳定 | `NetworkAlreadyRunningError`、`NetworkNotRunningError`、`NodeNotFoundError`。 |
 
 ## 临时（Provisional）等级与异步客户端
 
-`AsyncP4RuntimeClient`（1.6 引入）暂时为「临时」（Provisional），而非
-「稳定」。这是有意为之——Python 异步 API 的表面比同步要丰富（取消语义、
-上下文管理器行为、异步迭代人机工程、gather / wait_for 中的异常传播），
-在锁定剩余 1.x 之前，先让它在真实场景中磨合一段时间是明智的。
+`AsyncP4RuntimeClient` 及其配套导出（`AsyncOperationCancelledError`、
+`RunningSwitch.async_client`）在 p4net 1.6.0 作为「临时」（Provisional）
+引入，目的是在锁定 API 表面之前让它先在真实场景里磨合。动机是
+Python 异步 API 的表面比同步要丰富（取消语义、上下文管理器行为、
+异步迭代人机工程、`gather` / `wait_for` 中的异常传播），在锁定
+1.x 剩余周期之前，做实证验证是明智的。
 
-「临时」意味着：
+p4net 1.7.0 中三个符号都已**升级为稳定**，前提是在真实使用中没有出现
+需要不兼容调整的情况。这兑现了 1.6.0 时关于「临时」上限不超过两个
+小版本的承诺（实际在一个小版本之内、承诺窗口内完成升级）。
 
-- 该类不会在 1.x 内被移除。
-- 方法名不会被改名。
-- 常用路径上的行为不会做不兼容的变化。
+「稳定」意味着与 p4net 1.x 内其它「稳定」符号一致的契约：
 
-「临时」保留以下权利：
+- 1.x 内不会被移除。
+- 方法名、签名与文档行为在 1.x 内不会做不兼容变化。
+- 与文档一致的行为修复属于允许且预期之内。
 
-- 为实际暴露出来的边缘情况新增异常类型。
-- 调整取消、异常链或上下文管理器退出的精确语义。
-- 收紧或放宽流式方法的迭代行为。
-
-我们承诺在引入之后的两个 1.x 小版本内将 `AsyncP4RuntimeClient` 升级到
-**稳定**，前提是这段时间内未曾做过不兼容调整。
+「临时」等级在本文档中保留，未来可能用于需要实证磨合的新增项。
+异步客户端的实践验证了「临时」作为一种真正的工程机制是有用的，
+不只是装饰。
 
 ### `p4net.control`
 
-客户端 API 稳定；codec 边缘情况临时；异步客户端临时。
+客户端 API 稳定；codec 边缘情况临时；异步客户端现已稳定。
 
 | 符号 | 等级 | 备注 |
 | --- | --- | --- |
 | `P4RuntimeClient` | 稳定 | `connect`、`disconnect`、`set_pipeline_config`、`get_pipeline_config`、`insert_table_entry`、`modify_table_entry`、`delete_table_entry`、`list_table_entries`、`clear_table`、`read_counter`、`write_counter`、`add_multicast_group`、`modify_multicast_group`、`delete_multicast_group`、`list_multicast_groups`、`send_packet_out`、`on_packet_in`、`expect_packet_in`、`read_register`、`write_register`。 |
-| `AsyncP4RuntimeClient` | 临时 | `P4RuntimeClient` 的异步并行版；通过 `grpc.aio` 镜像同名公开方法。在 1.x 小版本经过实际验证后升级为稳定——见上文「临时等级与异步客户端」。 |
-| `AsyncOperationCancelledError` | 临时 | 异步客户端操作被中途取消时抛出；继承 `P4RuntimeError`。与 `AsyncP4RuntimeClient` 配套。 |
+| `AsyncP4RuntimeClient` | 稳定（自 1.7 起） | `P4RuntimeClient` 的异步并行版；通过 `grpc.aio` 镜像同名公开方法。1.7.0 由临时升级为稳定——见上文「临时等级与异步客户端」。 |
+| `AsyncOperationCancelledError` | 稳定（自 1.7 起） | 异步客户端操作被中途取消时抛出；继承 `P4RuntimeError`。与 `AsyncP4RuntimeClient` 配套。 |
 | `P4RuntimeClient.read_register` / `write_register` | 稳定 | 读取单个 cell 或整个数组；写入单个 cell。BMv2 的 PI 不实现 P4Runtime RegisterEntry，因此实现走 BMv2 Thrift 控制通道（`simple_switch_CLI`）；Python API 契约与符合 P4Runtime 标准的目标一致。 |
 | `P4InfoIndex.register_by_name` | 稳定 | 按名查找返回 `RegisterSpec`；不存在抛出 `NoSuchRegisterError`。 |
 | `RegisterSpec` | 稳定 | 不可变 dataclass，含 `id`、`name`、`bitwidth`、`size`。 |

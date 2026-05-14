@@ -50,4 +50,4 @@ All three hosts can ping each other across the mesh.
 - [Async client](../async-client.md) — overview, mastership patterns,
   cancellation semantics.
 - [API Stability](../api-stability.md) — `AsyncP4RuntimeClient` is
-  Provisional in 1.x.
+  Stable in 1.x since 1.7.0.

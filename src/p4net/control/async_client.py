@@ -8,8 +8,10 @@ BMv2 instance, callers must coordinate mastership explicitly (the sync
 client wins by default because it usually connects first and grabs a
 higher election ID via the millisecond-time-since-epoch generator).
 
-**Provisional** in p4net 1.x. See ``docs/api-stability.md`` for the
-upgrade-to-Stable timeline.
+**Stable** in p4net 1.x since version 1.7.0 (promoted from Provisional
+after empirical user validation, within the two-minor-release commitment
+made in 1.6.0). Backwards-incompatible changes will require a deprecation
+cycle. See ``docs/api-stability.md`` for the full contract.
 """
 
 from __future__ import annotations
@@ -89,7 +91,7 @@ def _parse_register_read_array(output: str, name: str, size: int) -> list[int]:
 
 
 class AsyncP4RuntimeClient:
-    """Async parallel to :class:`P4RuntimeClient`. **Provisional** in 1.x."""
+    """Async parallel to :class:`P4RuntimeClient`. **Stable** in 1.x since 1.7.0."""
 
     def __init__(
         self,

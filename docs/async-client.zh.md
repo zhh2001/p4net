@@ -1,5 +1,5 @@
 ---
-description: AsyncP4RuntimeClient 是基于 grpc.aio 的异步 P4Runtime 客户端，与同步客户端并行存在。1.x 内为「临时」等级。
+description: AsyncP4RuntimeClient 是基于 grpc.aio 的异步 P4Runtime 客户端，与同步客户端并行存在。1.x 自 1.7.0 起为「稳定」。
 ---
 
 # 异步客户端
@@ -12,7 +12,8 @@ description: AsyncP4RuntimeClient 是基于 grpc.aio 的异步 P4Runtime 客户�
 （同步 API）；当需要跨交换机并发、异步 PacketIn 处理器、或者要绕开
 同步客户端的线程限制时，再用 `switch.async_client`。
 
-`AsyncP4RuntimeClient` 在 1.x 内为**临时**等级——详见
+`AsyncP4RuntimeClient` 在 1.x 内自 1.7.0 起为**稳定**等级（由临时
+升级而来，依据真实使用反馈无不兼容调整需求）——详见
 [API 稳定性](api-stability.md)。
 
 ## 为什么用异步
@@ -122,19 +123,9 @@ except P4RuntimeError:
 `asyncio.CancelledError` 本身在调用方 task 层面取消时会原样向上
 传播，不会被客户端拦截。
 
-## 临时等级
+## 稳定性
 
-异步 API 在 1.x 内是临时的。具体而言：
-
-- 该类在 1.x 内不会被移除。
-- 方法名不会被改名。
-- 常用路径的行为不会做不兼容的变化。
-
-可能会演化的：
-
-- 为实际暴露出来的边缘情况新增异常类型。
-- 取消、异常链、上下文管理器退出的精确语义。
-- 流式方法的迭代行为。
-
-我们承诺在引入后的两个 1.x 小版本内将 `AsyncP4RuntimeClient` 升级
-到**稳定**，前提是这段时间内未曾做过不兼容调整。
+异步 API 在 p4net 1.x 自 1.7.0 起为**稳定**。它在 1.6.0 作为「临时」
+引入，在真实使用磨合期内未出现需要不兼容调整的情况，于 1.7.0 升级。
+完整契约与升级理由见
+[API 稳定性](api-stability.md)。

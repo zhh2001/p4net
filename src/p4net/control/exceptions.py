@@ -59,6 +59,6 @@ class AsyncOperationCancelledError(P4RuntimeError):
     ``except P4RuntimeError`` handlers still cover it, but lets cancellation
     sites distinguish a clean cancel from a connection failure.
 
-    **Provisional** in p4net 1.x — same stability tier as
+    **Stable** in p4net 1.x since version 1.7.0 — same stability tier as
     ``AsyncP4RuntimeClient``.
     """

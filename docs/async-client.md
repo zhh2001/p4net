@@ -1,5 +1,5 @@
 ---
-description: AsyncP4RuntimeClient is a parallel async P4Runtime client based on grpc.aio. Provisional in 1.x; mirrors the sync client's API.
+description: AsyncP4RuntimeClient is a parallel async P4Runtime client based on grpc.aio. Stable in 1.x since 1.7.0; mirrors the sync client's API.
 ---
 
 # Async client
@@ -15,9 +15,9 @@ the async API at `switch.async_client` is the right choice when you
 need concurrency across switches, async PacketIn handlers, or want to
 avoid the sync client's threading-related caveats.
 
-`AsyncP4RuntimeClient` is **Provisional** in p4net 1.x — see
-[API Stability](api-stability.md) for the upgrade-to-Stable
-commitment.
+`AsyncP4RuntimeClient` is **Stable** in p4net 1.x since version 1.7.0
+(promoted from Provisional after empirical user soak — see the
+[API Stability](api-stability.md) page for the contract).
 
 ## Why async
 
@@ -142,21 +142,10 @@ except P4RuntimeError:
 unchanged for tasks the caller cancels at the task level (rather
 than inside the RPC).
 
-## Provisional status
+## Stability
 
-The async API is Provisional in 1.x. Concretely:
-
-- The class will not be removed in 1.x.
-- Method names won't be renamed.
-- Common-path behavior won't change incompatibly.
-
-What may evolve:
-
-- New exception types for edge cases that surface in practice.
-- Precise semantics of cancellation, error chaining, context manager
-  exit.
-- Iteration behavior for streaming methods.
-
-The commitment is to upgrade `AsyncP4RuntimeClient` to **Stable**
-within two 1.x minor releases of its introduction, conditional on no
-backwards-incompatible adjustments having been needed.
+The async API is **Stable** in p4net 1.x since version 1.7.0. It was
+introduced as Provisional in 1.6.0 and promoted after real-world user
+soak surfaced no need for backwards-incompatible adjustments — see the
+[API Stability](api-stability.md#provisional-tier-and-async-client)
+page for the full contract and promotion rationale.

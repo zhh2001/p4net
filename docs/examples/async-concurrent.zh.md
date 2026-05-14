@@ -46,4 +46,4 @@ pingall
 
 - [异步客户端](../async-client.md)——总览、主控权模式、取消语义。
 - [API 稳定性](../api-stability.md)——`AsyncP4RuntimeClient` 在 1.x
-  内为临时等级。
+  自 1.7.0 起为稳定等级。

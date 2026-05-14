@@ -75,44 +75,49 @@ Stable user-facing surface; some lower-level details provisional.
 | `Network.xterm` | Experimental | Depends on `$DISPLAY`; behavior may evolve as we refine the spawned-process tracking. |
 | `RunningHost` | Stable | `name`, `primary_ip`, `primary_ip6`, `interfaces`, `interfaces6`, `ping`, `exec`, `popen` are stable. |
 | `RunningSwitch` | Stable | `name`, `client`, `bmv2`, `compile_result`, `log_file`, `descriptor`, `boot_timestamp_us` are stable. |
-| `RunningSwitch.async_client` | Provisional | Lazy property returning an unconnected `AsyncP4RuntimeClient` for this switch. Pre-seeded with the sync client's P4Info index. Cached per `RunningSwitch`; reset on `Network.stop()`. Provisional pending async-client soak (see "Provisional tier and async client"). |
+| `RunningSwitch.async_client` | Stable (since 1.7) | Lazy property returning an unconnected `AsyncP4RuntimeClient` for this switch. Pre-seeded with the sync client's P4Info index. Cached per `RunningSwitch`; reset on `Network.stop()`. Promoted from Provisional in 1.7.0 — see "Provisional tier and async client". |
 | `RunningSwitch.boot_timestamp_us` | Stable | Wall-clock microseconds since Unix epoch when this switch's BMv2 process started. Combine with INT shim `ingress_timestamp_us` to compute wall-clock arrival time and align timestamps across multiple switches. Raises `NetworkNotRunningError` if accessed before `start` or after `stop`. |
 | `NetworkError` and subclasses | Stable | `NetworkAlreadyRunningError`, `NetworkNotRunningError`, `NodeNotFoundError`. |
 
 ## Provisional tier and async client
 
-`AsyncP4RuntimeClient` (added in 1.6) is Provisional, not Stable. This is a
-deliberate choice — async APIs in Python have a richer surface than sync
-(cancellation semantics, context manager behavior, async iteration
-ergonomics, exception propagation through gather/wait_for) that benefits
-from real-world soak before being locked in for the rest of 1.x.
+`AsyncP4RuntimeClient` and its companion exports
+(`AsyncOperationCancelledError`, `RunningSwitch.async_client`) were
+introduced as **Provisional** in p4net 1.6.0 to allow real-world soak
+before locking the API surface. The motivation was that async APIs in
+Python have a richer surface than sync (cancellation semantics, context
+manager behavior, async iteration ergonomics, exception propagation
+through `gather` / `wait_for`) that benefits from empirical validation
+before being locked in for the rest of 1.x.
 
-Provisional means:
+In p4net 1.7.0 all three symbols were **promoted to Stable** following
+real-world user soak in which no backwards-incompatible adjustments
+surfaced. This honors the two-minor-release upper bound on Provisional
+status that 1.6.0 committed to (promotion occurred at one minor release
+in, within the commitment window).
 
-- The class will not be removed in 1.x.
-- Method names won't be renamed.
-- Behavior for common usage paths will not change incompatibly.
+Stable means the same contract as every other Stable symbol in p4net 1.x:
 
-Provisional reserves the right to:
+- The class will not be removed within 1.x.
+- Method names, signatures, and documented behavior will not change
+  incompatibly within 1.x.
+- Bug fixes that align behavior with documentation are allowed and
+  expected.
 
-- Add new exception types for edge cases that surface in practice.
-- Adjust precise semantics of cancellation, error chaining, or context
-  manager exit.
-- Tighten or loosen iteration behavior for streaming methods.
-
-We commit to upgrading `AsyncP4RuntimeClient` to **Stable** within two
-1.x minor releases of its introduction, conditional on no
-backwards-incompatible adjustments having been needed in the interim.
+The Provisional tier remains available in this document and may be used
+for future additions that need empirical soak before lock-in. The
+async-client experience validates the tier's utility as a real
+engineering mechanism, not decoration.
 
 ### `p4net.control`
 
-Stable client API; provisional codec edge cases; async client provisional.
+Stable client API; provisional codec edge cases; async client now Stable.
 
 | Symbol | Tier | Note |
 | --- | --- | --- |
 | `P4RuntimeClient` | Stable | `connect`, `disconnect`, `set_pipeline_config`, `get_pipeline_config`, `insert_table_entry`, `modify_table_entry`, `delete_table_entry`, `list_table_entries`, `clear_table`, `read_counter`, `write_counter`, `add_multicast_group`, `modify_multicast_group`, `delete_multicast_group`, `list_multicast_groups`, `send_packet_out`, `on_packet_in`, `expect_packet_in`, `read_register`, `write_register`. |
-| `AsyncP4RuntimeClient` | Provisional | Async parallel to `P4RuntimeClient`; mirrors the same public method names via `grpc.aio`. Will upgrade to Stable after empirical validation in a 1.x minor — see "Provisional tier and async client" above. |
-| `AsyncOperationCancelledError` | Provisional | Raised when an async client operation is cancelled mid-flight; subclasses `P4RuntimeError`. Pairs with `AsyncP4RuntimeClient`. |
+| `AsyncP4RuntimeClient` | Stable (since 1.7) | Async parallel to `P4RuntimeClient`; mirrors the same public method names via `grpc.aio`. Promoted from Provisional in 1.7.0 — see "Provisional tier and async client" above. |
+| `AsyncOperationCancelledError` | Stable (since 1.7) | Raised when an async client operation is cancelled mid-flight; subclasses `P4RuntimeError`. Pairs with `AsyncP4RuntimeClient`. |
 | `P4RuntimeClient.read_register` / `write_register` | Stable | Read a single cell or the full array; write a single cell. BMv2's PI does not implement P4Runtime RegisterEntry, so the implementation uses BMv2's Thrift control channel via `simple_switch_CLI`; the Python API contract matches what a P4Runtime-compliant target would expose. |
 | `P4InfoIndex.register_by_name` | Stable | Returns a `RegisterSpec` for the named register; raises `NoSuchRegisterError`. |
 | `RegisterSpec` | Stable | Frozen dataclass with `id`, `name`, `bitwidth`, `size`. |

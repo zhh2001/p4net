@@ -271,7 +271,8 @@ class RunningSwitch:
         return the same object. Reset on ``Network.stop()`` so the next
         ``Network.start()`` (if supported) gets a fresh client.
 
-        **Provisional** in p4net 1.x — see :class:`AsyncP4RuntimeClient`.
+        **Stable** in p4net 1.x since version 1.7.0 — see
+        :class:`AsyncP4RuntimeClient`.
         """
         if self._async_client is None:
             self._async_client = AsyncP4RuntimeClient(
