@@ -4,4 +4,4 @@ import p4net
 
 
 def test_version() -> None:
-    assert p4net.__version__ == "1.5.1"
+    assert p4net.__version__ == "1.6.0"

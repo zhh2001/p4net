@@ -89,19 +89,18 @@ with Network(topo) as net:
 
 ## 项目状态
 
-p4net 当前为 **v1.5.1**——稳定版本。公共 API 已按
+p4net 当前为 **v1.6.0**——稳定版本。公共 API 已按
 [API 稳定性](api-stability.md)做出承诺：标为稳定的符号在 1.x 内不会
 被破坏。补丁版本只修 bug；小版本以追加方式新增功能。在 v1.0.0
-稳定性基础之上：v1.1.0 加入了单交换机 INT 示例、统一的 `p4net.*`
-logger 层次与 CLI 详细度控制、按方向叠加的链路损伤；v1.2.0 在
-`P4RuntimeClient` 上加入了寄存器读写 API，并据此把 INT 示例中的
-`switch_id` 改成运行时可配置；v1.3.0 加入了多跳 INT 示例，演示
-跨两台交换机的生产形态堆叠遥测；v1.4.0 加入了
-`RunningSwitch.boot_timestamp_us`，把每台交换机的 BMv2 时间戳对齐到
-挂钟——多跳 INT 示例现在能上报真实的逐跳转发延迟；v1.5.0 新增便利
-封装 `Network.boot_timestamps`，并让多跳 INT 示例的协调文件路径可由
-`P4NET_INT_BOOT_TIMES_PATH` 环境变量指定，使同主机上的并行拓扑
-互不干扰。完整版本历史见 [变更日志](changelog.md)；已知边界见
+稳定性基础之上，1.1–1.5 加入了单交换机与多跳 INT 示例、统一的
+`p4net.*` logger 层次、按方向叠加的链路损伤、`P4RuntimeClient` 的
+寄存器读写 API、用于跨交换机 INT 对齐的
+`RunningSwitch.boot_timestamp_us` 与 `Network.boot_timestamps`，
+以及环境变量驱动的协调文件路径以避免并行多跳 INT 拓扑互相覆盖。
+v1.6 引入 [`AsyncP4RuntimeClient`](async-client.md)——基于
+`grpc.aio` 的异步并行客户端，1.x 内为「临时」，承诺在两个小版本内
+升级为「稳定」——并以 `RunningSwitch.async_client` 惰性暴露。
+完整版本历史见 [变更日志](changelog.md)；已知边界见
 [已知限制](known-limitations.md)；后续计划见 [路线图](roadmap.md)。
 
 ## 许可证

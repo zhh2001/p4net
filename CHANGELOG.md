@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-05-14
+
+### Added
+
+- `AsyncP4RuntimeClient`: parallel async P4Runtime client using
+  `grpc.aio`. Mirrors the sync `P4RuntimeClient` API surface
+  (`connect` / `disconnect`, `push_pipeline`,
+  `insert_table_entry` / `modify_table_entry` /
+  `delete_table_entry` / `list_table_entries`, `read_counter`,
+  `read_register` / `write_register`, `send_packet_out` /
+  `on_packet_in` / `expect_packet_in`). Marked **Provisional** in
+  1.x; commit is to upgrade to Stable within two minor releases
+  conditional on no incompatible adjustments being needed in the
+  interim.
+- `RunningSwitch.async_client`: lazy property returning an
+  unconnected `AsyncP4RuntimeClient` for the switch, pre-seeded with
+  the sync client's P4Info index. **Provisional**.
+- `AsyncOperationCancelledError`: paired exception for async
+  cancellation cases (subclass of `P4RuntimeError`). **Provisional**.
+- New example `examples/async_concurrent/` demonstrating concurrent
+  multi-switch operations via the async client and `asyncio.gather`.
+- `docs/async-client.md` (EN + ZH) explaining the async API,
+  mastership coexistence patterns, and cancellation semantics.
+
+### Changed
+
+- `BMv2Switch.grpc_port` is now a public property (was private,
+  needed by `RunningSwitch.async_client` to plumb the gRPC address
+  through to the async client constructor).
+- `docs/api-stability.md` gained a "Provisional tier and async
+  client" section explaining the rationale for shipping the async
+  client as Provisional rather than Stable on day one.
+- `docs/known-limitations.md`: the "single Network lifecycle per
+  Python process" entry now references the async client as the
+  primary workaround for per-RPC operations.
+- `pytest-asyncio>=0.23` added to dev dependencies;
+  `asyncio_mode = "auto"` in `[tool.pytest.ini_options]` so async
+  tests don't need per-test decorators.
+
 ## [1.5.1] - 2026-05-12
 
 ### Changed

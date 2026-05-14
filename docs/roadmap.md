@@ -55,6 +55,12 @@ design discussion happens once, in public, before the code lands.
   concurrent topologies don't collide. See [Changelog](changelog.md).
 - **v1.5.1** (2026-05-12) — drop misdesigned aligned-causal assertion
   in the multi-hop INT integration test. See [Changelog](changelog.md).
+- **v1.6.0** (2026-05-14) — `AsyncP4RuntimeClient` parallel to the
+  sync client; `RunningSwitch.async_client` lazy property; example
+  `async_concurrent/` showing `asyncio.gather` across switches. New
+  symbols are Provisional in 1.x with a commitment to upgrade to
+  Stable within two minor releases. See
+  [Async client](async-client.md) and [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 
@@ -82,14 +88,17 @@ orchestrator's bookkeeping just needs to re-enter the same paths.
 Promoted to 2.0 because the `Topology` immutability invariant is
 documented in 1.x as part of the stable API.
 
-### Async P4Runtime client
+### AsyncNetwork
 
-An `aio-grpc`-based variant of `P4RuntimeClient` for callers building
-event-driven controllers (e.g. those subscribing to many switches'
-StreamChannels concurrently). Probably co-exists with the threaded
-client rather than replacing it; same `P4InfoIndex` underneath. May
-land in 1.x as a separate `AsyncP4RuntimeClient` if no breakage to
-the existing client is required.
+`AsyncP4RuntimeClient` shipped in v1.6 closes the per-RPC story, but
+`Network.start()` itself is still synchronous and uses threads to
+parallelise BMv2 startup. A future `AsyncNetwork` (or
+`Network.start_async()`) would make the whole lifecycle composable
+inside an existing event loop without `asyncio.to_thread`
+wrappers. Out of scope for 1.x because adding an `async def start`
+alongside the sync `start` would either require keyword-only
+disambiguation or split into a new class; cleanest design needs the
+2.0 freedom to rethink lifecycle.
 
 ## Indefinitely deferred
 

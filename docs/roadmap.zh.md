@@ -48,6 +48,12 @@ description: p4net 已发布的版本里程碑，以及面向 2.0 的候选特�
   主机上并行运行多份拓扑不互相覆盖。详见 [变更日志](changelog.md)。
 - **v1.5.1**（2026-05-12）—— 撤掉多跳 INT 集成测试里设计有误的
   aligned-causal 断言。详见 [变更日志](changelog.md)。
+- **v1.6.0**（2026-05-14）—— 与同步 `P4RuntimeClient` 并行的
+  `AsyncP4RuntimeClient`；`RunningSwitch.async_client` 惰性属性；
+  `async_concurrent/` 示例演示跨交换机的 `asyncio.gather`。新增
+  符号在 1.x 内为「临时」，承诺在两个小版本内升级为「稳定」。
+  详见 [异步客户端](async-client.md) 与
+  [变更日志](changelog.md)。
 
 ## 1.x 候选项（仅追加，不破坏 API）
 
@@ -71,13 +77,14 @@ description: p4net 已发布的版本里程碑，以及面向 2.0 的候选特�
 器的簿记只需要复用同一套代码路径。放到 2.0 是因为 `Topology`
 的不可变约定在 1.x 中作为稳定 API 的一部分被记录。
 
-### 异步 P4Runtime 客户端
+### AsyncNetwork
 
-基于 `aio-grpc` 的 `P4RuntimeClient` 变体，面向事件驱动的控制器
-（例如同时订阅多台交换机 StreamChannel 的场景）。可能与现有的
-线程版本并存，共用同一个 `P4InfoIndex`，而不是替换它。如果新
-客户端能独立成 `AsyncP4RuntimeClient` 而不破坏现有客户端，
-也可以在 1.x 提供。
+v1.6 的 `AsyncP4RuntimeClient` 已经把单次 RPC 的故事讲完，但
+`Network.start()` 本身仍是同步的，并用线程并行起 BMv2。未来的
+`AsyncNetwork`（或 `Network.start_async()`）能让整个生命周期
+不必再用 `asyncio.to_thread` 包装就能融入用户的事件循环。1.x
+不做，因为在已有同步 `start` 旁加 `async def start` 要么需要
+关键字消歧，要么得分出新类；干净的设计需要 2.0 重新规划生命周期。
 
 ## 长期搁置
 
