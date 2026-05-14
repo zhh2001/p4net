@@ -1,7 +1,7 @@
 """Linear 4-node topology demonstrating multi-hop INT.
 
-    h1 (10.0.0.1/24) --- s1 --- s2 --- h2 (10.0.0.2/24)
-                     port1    port2 port1   port2
+    h1 (10.0.0.1/24) --- s1 --------- s2 --- h2 (10.0.0.2/24)
+                    port1  port2 port1  port2
 
 Both switches run the same P4 program (``int_multi_hop.p4``). Each switch's
 ``switch_id`` register is written at start-up via the v1.2 register API:
