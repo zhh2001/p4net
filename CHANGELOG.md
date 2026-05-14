@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-05-12
+
+### Changed
+
+- Multi-hop INT integration test no longer asserts strict aligned-causal
+  ordering between switches. The assertion tested packet causality —
+  guaranteed by construction in a linear topology, not by p4net code —
+  and had to be widened twice (5 ms → 20 ms across v1.4 and v1.5) to
+  absorb measurement drift under suite load. It produced two flakes
+  without catching a real regression. Replaced with a bounded-difference
+  sanity check (aligned timestamps within 10 s of each other) that
+  validates alignment produces plausible numbers without asserting
+  physics. No production code is affected.
+
 ## [1.5.0] - 2026-05-11
 
 ### Added

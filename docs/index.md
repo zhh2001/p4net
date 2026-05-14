@@ -102,7 +102,7 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
 
 ## Project status
 
-p4net is at **v1.5.0** — a stable release. The public API is
+p4net is at **v1.5.1** — a stable release. The public API is
 committed per [API Stability](api-stability.md): symbols marked
 stable will not break in 1.x. Patch releases ship bug fixes; minor
 releases add functionality additively. On top of the v1.0.0

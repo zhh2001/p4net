@@ -53,6 +53,8 @@ design discussion happens once, in public, before the code lands.
   all switches' boot times) and env-var-keyed coordination file
   (`P4NET_INT_BOOT_TIMES_PATH`) for the multi-hop INT example so
   concurrent topologies don't collide. See [Changelog](changelog.md).
+- **v1.5.1** (2026-05-12) — drop misdesigned aligned-causal assertion
+  in the multi-hop INT integration test. See [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 
