@@ -89,7 +89,7 @@ with Network(topo) as net:
 
 ## 项目状态
 
-p4net 当前为 **v1.6.0**——稳定版本。公共 API 已按
+p4net 当前为 **v1.7.0**——稳定版本。公共 API 已按
 [API 稳定性](api-stability.md)做出承诺：标为稳定的符号在 1.x 内不会
 被破坏。补丁版本只修 bug；小版本以追加方式新增功能。在 v1.0.0
 稳定性基础之上，1.1–1.5 加入了单交换机与多跳 INT 示例、统一的
@@ -98,8 +98,9 @@ p4net 当前为 **v1.6.0**——稳定版本。公共 API 已按
 `RunningSwitch.boot_timestamp_us` 与 `Network.boot_timestamps`，
 以及环境变量驱动的协调文件路径以避免并行多跳 INT 拓扑互相覆盖。
 v1.6 引入 [`AsyncP4RuntimeClient`](async-client.md)——基于
-`grpc.aio` 的异步并行客户端，1.x 内为「临时」，承诺在两个小版本内
-升级为「稳定」——并以 `RunningSwitch.async_client` 惰性暴露。
+`grpc.aio` 的异步并行客户端——并以 `RunningSwitch.async_client`
+惰性暴露；v1.7 在真实使用磨合期后将这些符号由「临时」升级为
+**稳定**，兑现 1.6 在 API 稳定性页中的承诺。
 完整版本历史见 [变更日志](changelog.md)；已知边界见
 [已知限制](known-limitations.md)；后续计划见 [路线图](roadmap.md)。
 

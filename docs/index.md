@@ -102,7 +102,7 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
 
 ## Project status
 
-p4net is at **v1.6.0** — a stable release. The public API is
+p4net is at **v1.7.0** — a stable release. The public API is
 committed per [API Stability](api-stability.md): symbols marked
 stable will not break in 1.x. Patch releases ship bug fixes; minor
 releases add functionality additively. On top of the v1.0.0
@@ -112,11 +112,12 @@ additive link impairment, a register read/write API on
 `P4RuntimeClient`, `RunningSwitch.boot_timestamp_us` and
 `Network.boot_timestamps` for cross-switch INT alignment, and an
 env-var-keyed coordination path so concurrent multi-hop INT
-topologies don't collide. v1.6 introduces
+topologies don't collide. v1.6 introduced
 [`AsyncP4RuntimeClient`](async-client.md) — a parallel async
-P4Runtime client backed by `grpc.aio`, **Provisional** in 1.x with
-a commitment to upgrade to Stable within two minor releases — and
-exposes it lazily as `RunningSwitch.async_client`. The full version
+P4Runtime client backed by `grpc.aio` — and exposed it lazily as
+`RunningSwitch.async_client`; v1.7 promoted those symbols from
+Provisional to **Stable** after empirical user soak, honoring the
+commitment 1.6 made in its API-stability page. The full version
 history is in the [Changelog](changelog.md); known boundaries are
 documented in [Known Limitations](known-limitations.md); future
 plans are on the [Roadmap](roadmap.md).

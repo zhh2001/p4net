@@ -61,6 +61,10 @@ design discussion happens once, in public, before the code lands.
   symbols are Provisional in 1.x with a commitment to upgrade to
   Stable within two minor releases. See
   [Async client](async-client.md) and [Changelog](changelog.md).
+- **v1.7.0** (2026-05-14) — `AsyncP4RuntimeClient`,
+  `AsyncOperationCancelledError`, and `RunningSwitch.async_client`
+  promoted from Provisional to **Stable** following real-world user
+  soak. No source-level API change. See [Changelog](changelog.md).
 
 ## 1.x candidates (additive, no API breakage)
 

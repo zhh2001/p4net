@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-14
+
+### Changed
+
+- `AsyncP4RuntimeClient`, `AsyncOperationCancelledError`, and
+  `RunningSwitch.async_client` promoted from **Provisional** to
+  **Stable** following real-world user soak since their introduction
+  in 1.6.0. No source-level API change — only the stability tier is
+  updated; method signatures are byte-for-byte unchanged. The
+  promotion honors the two-minor-release upper bound committed in
+  ``docs/api-stability.md`` (promoted at one minor release in, within
+  the commitment window). See updated stability documentation for
+  the new contract.
+
 ## [1.6.0] - 2026-05-14
 
 ### Added

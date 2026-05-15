@@ -54,6 +54,10 @@ description: p4net 已发布的版本里程碑，以及面向 2.0 的候选特�
   符号在 1.x 内为「临时」，承诺在两个小版本内升级为「稳定」。
   详见 [异步客户端](async-client.md) 与
   [变更日志](changelog.md)。
+- **v1.7.0**（2026-05-14）—— `AsyncP4RuntimeClient`、
+  `AsyncOperationCancelledError`、`RunningSwitch.async_client`
+  在真实使用磨合期后由「临时」升级为**稳定**。无源代码 API
+  变化。详见 [变更日志](changelog.md)。
 
 ## 1.x 候选项（仅追加，不破坏 API）
 
