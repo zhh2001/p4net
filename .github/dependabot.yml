@@ -1,3 +1,26 @@
+# Dependabot policy: every PR opened here should be safe to merge once CI is
+# green, with no manual judgment required. The strategy:
+#
+#  - Runtime-core deps (pyroute2, grpcio, protobuf, p4runtime, prompt_toolkit)
+#    only get PATCH bumps. Minor/major bumps for these can introduce subtle
+#    behavior changes that the GitHub Actions CI won't catch — the real
+#    validation needs root + BMv2 integration, which only runs locally.
+#    Minor/major bumps are explicitly ignored; if you want to evaluate one,
+#    run `@dependabot recreate` on the PR or bump manually.
+#
+#  - Tooling / docs deps are grouped into a few weekly batched PRs so a green
+#    CI signal covers the whole batch. Major bumps of these are also ignored
+#    (they typically need release-note review).
+#
+#  - GitHub Actions: grouped into one weekly PR. Major bumps ignored.
+#
+#  - `versioning-strategy: increase-if-necessary` — p4net is a library, so
+#    we don't aggressively raise lower bounds on every patch.
+#
+# To pick up an explicitly-ignored update: bump manually in pyproject.toml /
+# the workflow file, OR comment `@dependabot recreate` on a future-related PR
+# OR temporarily remove the ignore entry.
+
 version: 2
 updates:
   - package-ecosystem: "pip"
@@ -5,8 +28,76 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    versioning-strategy: increase-if-necessary
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      # Lint / type / format / test tooling — one PR per week.
+      dev-tools:
+        patterns:
+          - "ruff"
+          - "mypy"
+          - "pre-commit"
+          - "pytest"
+          - "pytest-*"
+      # Docs site stack — one PR per week.
+      docs:
+        patterns:
+          - "mkdocs"
+          - "mkdocs-*"
+          - "mkdocstrings"
+          - "mkdocstrings-*"
+          - "pymdown-extensions"
+          - "pillow"
+          - "cairosvg"
+    ignore:
+      # Runtime-core deps: only patches are blind-merge-safe.
+      - dependency-name: "pyroute2"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "grpcio"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "protobuf"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "p4runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "prompt_toolkit"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      # Tooling: majors only need manual review (lint-rule overhauls,
+      # collection-protocol shifts, mypy strict-mode tightening, etc.).
+      - dependency-name: "ruff"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mypy"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pytest"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pytest-asyncio"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pre-commit"
+        update-types: ["version-update:semver-major"]
+      # Docs majors: theme/template overhauls.
+      - dependency-name: "mkdocs"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mkdocs-material"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mkdocstrings"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mkdocstrings-python"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "mkdocs-static-i18n"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "pymdown-extensions"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -14,3 +105,13 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      # All GitHub Actions bumped in one weekly PR.
+      actions:
+        patterns:
+          - "*"
+    ignore:
+      # Action majors (v4→v5, v5→v6) routinely change inputs/outputs and
+      # need release-note review.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
