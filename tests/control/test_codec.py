@@ -162,6 +162,30 @@ def test_encode_value_bytes_passthrough_with_width_check() -> None:
         encode_value(b"\x01\x02\x03", 16)
 
 
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [
+        (b"\x02", 1),
+        (b"\x80", 7),
+        (b"\x02\x00", 9),
+        (b"\x80\x00\x00\x00", 31),
+        (b"\x02" + b"\x00" * 8, 65),
+    ],
+)
+def test_encode_value_bytes_rejects_unused_high_bits(value: bytes, bitwidth: int) -> None:
+    with pytest.raises(EncodingError, match="does not fit"):
+        encode_value(value, bitwidth)
+
+
+@pytest.mark.parametrize("bitwidth", [1, 7, 9, 31, 65])
+def test_bytes_codec_accepts_non_byte_aligned_boundaries(bitwidth: int) -> None:
+    for value in (0, 1, (1 << bitwidth) - 1):
+        full_width = value.to_bytes((bitwidth + 7) // 8, "big")
+        for data in (full_width, canonicalize(full_width)):
+            assert encode_value(data, bitwidth) == data
+            assert decode_int(data, bitwidth) == value
+
+
 def test_encode_value_bool_treated_as_int() -> None:
     # Bool is a subclass of int in Python, but our encoder explicitly accepts it
     # via the bool branch and forwards as int.
@@ -194,6 +218,21 @@ def test_decode_int_accepts_canonical_input() -> None:
 def test_decode_int_rejects_too_wide() -> None:
     with pytest.raises(EncodingError, match="too wide"):
         decode_int(b"\x00\x00\x00\x00\x01", 8)
+
+
+@pytest.mark.parametrize(
+    ("data", "bitwidth"),
+    [
+        (b"\x02", 1),
+        (b"\x80", 7),
+        (b"\x02\x00", 9),
+        (b"\x80\x00\x00\x00", 31),
+        (b"\x02" + b"\x00" * 8, 65),
+    ],
+)
+def test_decode_int_rejects_unused_high_bits(data: bytes, bitwidth: int) -> None:
+    with pytest.raises(EncodingError, match="does not fit"):
+        decode_int(data, bitwidth)
 
 
 def test_decode_int_rejects_non_bytes() -> None:

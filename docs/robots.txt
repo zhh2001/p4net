@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://zhh2001.github.io/p4net/sitemap.xml

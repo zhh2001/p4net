@@ -291,10 +291,11 @@ def test_encode_action_missing_required_param(p4info: p4info_pb2.P4Info) -> None
         idx.encode_action("MyIngress.set_egress_port", {})
 
 
-def test_encode_action_param_overflow(p4info: p4info_pb2.P4Info) -> None:
+@pytest.mark.parametrize("value", [1024, b"\x02\x00", b"\xff\xff"])
+def test_encode_action_param_overflow(p4info: p4info_pb2.P4Info, value: int | bytes) -> None:
     idx = P4InfoIndex(p4info)
     with pytest.raises(EncodingError):
-        idx.encode_action("MyIngress.set_egress_port", {"port": 1024})  # 9-bit max 511
+        idx.encode_action("MyIngress.set_egress_port", {"port": value})  # 9-bit max 511
 
 
 # ---------------------------------------------------------------------------
@@ -502,12 +503,16 @@ class TestControllerPacketMetadata:
         with pytest.raises(NoSuchFieldError):
             idx.encode_packet_out_metadata({"bogus": 0})
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("egress_port", 1024), ("egress_port", b"\x02\x00"), ("_pad0", b"\x80")],
+    )
     def test_encode_packet_out_overflow(
-        self, p4info_with_controller_metadata: p4info_pb2.P4Info
+        self, p4info_with_controller_metadata: p4info_pb2.P4Info, field: str, value: int | bytes
     ) -> None:
         idx = P4InfoIndex(p4info_with_controller_metadata)
         with pytest.raises(EncodingError):
-            idx.encode_packet_out_metadata({"egress_port": 1024})  # 9-bit max 511
+            idx.encode_packet_out_metadata({field: value})
 
     def test_decode_packet_in_metadata_round_trip(
         self, p4info_with_controller_metadata: p4info_pb2.P4Info

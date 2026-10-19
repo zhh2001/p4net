@@ -65,6 +65,8 @@ def encode_value(value: int | str | bytes, bitwidth: int) -> bytes:
             raise EncodingError(
                 f"bytes value of length {len(value)} exceeds {max_bytes} for bitwidth {bitwidth}"
             )
+        if int.from_bytes(value, "big").bit_length() > bitwidth:
+            raise EncodingError(f"bytes value does not fit in {bitwidth} bits")
         return value
     if isinstance(value, bool):
         return encode_int(int(value), bitwidth)
@@ -103,7 +105,10 @@ def decode_int(data: bytes, bitwidth: int) -> int:
         raise EncodingError(f"bitwidth must be positive, got {bitwidth}")
     if len(data) > (bitwidth + 7) // 8:
         raise EncodingError(f"byte string of length {len(data)} too wide for bitwidth {bitwidth}")
-    return int.from_bytes(data, "big")
+    value = int.from_bytes(data, "big")
+    if value.bit_length() > bitwidth:
+        raise EncodingError(f"bytes value does not fit in {bitwidth} bits")
+    return value
 
 
 def parse_lpm(
