@@ -7,7 +7,9 @@ default. Run with `pytest --run-p4c -m requires_p4c`.
 from __future__ import annotations
 
 import json
+import multiprocessing
 import subprocess
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -15,7 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 from pytest_mock import MockerFixture
 
-from p4net.compiler import CompileError, P4Compiler
+from p4net.compiler import CompileError, CompileResult, P4Compiler
 
 pytestmark = pytest.mark.requires_p4c
 
@@ -165,6 +167,35 @@ def test_real_compile_force_rebuilds_cache(tmp_path: Path) -> None:
     assert second.p4info.is_file()
 
 
+def _compile_shared_source(source: Path, cache: Path) -> CompileResult:
+    return P4Compiler(cache_dir=cache).compile(source)
+
+
+@pytest.mark.parametrize("executor_kind", ["threads", "processes"])
+def test_concurrent_compiles_publish_complete_cache(tmp_path: Path, executor_kind: str) -> None:
+    source, _ = _write_include_program(tmp_path)
+    cache = tmp_path / "cache"
+    executor: ThreadPoolExecutor | ProcessPoolExecutor
+    if executor_kind == "threads":
+        executor = ThreadPoolExecutor(max_workers=4)
+    else:
+        executor = ProcessPoolExecutor(
+            max_workers=4, mp_context=multiprocessing.get_context("spawn")
+        )
+    with executor:
+        futures = [executor.submit(_compile_shared_source, source, cache) for _ in range(4)]
+        results = [future.result(timeout=30) for future in futures]
+
+    assert len({result.source_hash for result in results}) == 1
+    for result in results:
+        assert _compiled_egress_port(result.bmv2_json) == 1
+        assert result.p4info.stat().st_size > 0
+        metadata = json.loads((result.bmv2_json.parent / "meta.json").read_text())
+        assert metadata["hash"] == result.source_hash
+    assert list(cache.iterdir()) == [results[0].bmv2_json.parent]
+    assert P4Compiler(cache_dir=cache).compile(source).cache_hit
+
+
 def test_real_compile_syntax_error_raises_and_leaves_no_cache_entry(
     tmp_path: Path,
 ) -> None:
@@ -178,10 +209,7 @@ def test_real_compile_syntax_error_raises_and_leaves_no_cache_entry(
     # The cache_dir may or may not exist; if it does, no hash directory for
     # this failed compile should have been created.
     if cache_dir.exists():
-        entries = [p.name for p in cache_dir.iterdir() if p.is_dir()]
-        # No staging or final entries should remain.
-        assert not any(name.endswith(".tmp-" + str(__import__("os").getpid())) for name in entries)
-        assert not any(len(name) == 64 for name in entries)  # full SHA-256 hex
+        assert list(cache_dir.iterdir()) == []
 
 
 def test_real_compile_meta_json_written(tmp_path: Path) -> None:

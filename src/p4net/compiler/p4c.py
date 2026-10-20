@@ -5,14 +5,14 @@ macro definitions. On a miss, ``p4c -e`` compiles that preprocessed snapshot
 into BMv2 JSON and P4Info. Both invocations use the same target, architecture,
 language version, and extra arguments.
 
-Concurrency: two simultaneous compiles of the same source may both invoke
-``p4c``. The second one notices the cache is populated when it tries to
-install its staged output, discards the staging directory, and treats the
-result as a cache hit. No file locking is performed.
+Concurrent compiles stage their outputs in separate directories and publish
+them with an atomic rename. If another writer has already published complete
+artifacts, its entry is reused. No file locking is performed.
 """
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -46,8 +46,8 @@ class CompileResult:
             --version`` at compile time.
         source_hash: SHA-256 digest of the source path, source bytes,
             preprocessed input, architecture, compiler version, and arguments.
-        cache_hit: ``True`` if cached artifacts were reused after preprocessing,
-            ``False`` if the backend compiled fresh artifacts.
+        cache_hit: ``True`` if backend compilation was skipped after preprocessing,
+            ``False`` if the backend ran, including concurrent cache writes.
     """
 
     source: Path
@@ -307,35 +307,36 @@ class P4Compiler:
                 )
 
             os.makedirs(self._cache_dir, exist_ok=True)
-            staging_dir = self._cache_dir / f"{cache_key}.tmp-{os.getpid()}"
-            if staging_dir.exists():
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            staging_dir.mkdir(parents=True, exist_ok=False)
-
-            shutil.move(str(tmp_json), str(staging_dir / "program.json"))
-            shutil.move(str(tmp_p4info), str(staging_dir / "program.p4info.txtpb"))
-
-            meta = {
-                "hash": cache_key,
-                "arch": arch,
-                "compiler_version": version,
-                "source_basename": source.name,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            with (staging_dir / "meta.json").open("w", encoding="utf-8") as fh:
-                json.dump(meta, fh, indent=2, sort_keys=True)
-
             final_dir = self._cache_dir / cache_key
-            if final_dir.exists():
-                # Another process won the race; discard our staging dir.
-                shutil.rmtree(staging_dir, ignore_errors=True)
-                logger.debug(
-                    "compiler cache race for %s: another writer populated %s",
-                    source,
-                    cache_key,
-                )
-            else:
-                os.rename(str(staging_dir), str(final_dir))
+            with tempfile.TemporaryDirectory(
+                prefix=f"{cache_key}.tmp-", dir=self._cache_dir
+            ) as staging:
+                staging_dir = Path(staging)
+                shutil.move(str(tmp_json), str(staging_dir / "program.json"))
+                shutil.move(str(tmp_p4info), str(staging_dir / "program.p4info.txtpb"))
+
+                meta = {
+                    "hash": cache_key,
+                    "arch": arch,
+                    "compiler_version": version,
+                    "source_basename": source.name,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                with (staging_dir / "meta.json").open("w", encoding="utf-8") as fh:
+                    json.dump(meta, fh, indent=2, sort_keys=True)
+
+                try:
+                    os.rename(str(staging_dir), str(final_dir))
+                except OSError as exc:
+                    if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY) or not self._cache_hit(
+                        final_dir, final_dir / "program.json", final_dir / "program.p4info.txtpb"
+                    ):
+                        raise
+                    logger.debug(
+                        "compiler cache race for %s: another writer populated %s",
+                        source,
+                        cache_key,
+                    )
 
             logger.debug(
                 "p4c compile of %s succeeded in %.3fs (cache key %s)",

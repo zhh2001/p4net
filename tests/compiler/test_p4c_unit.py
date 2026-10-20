@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import shutil
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -308,6 +313,126 @@ def test_force_bypasses_cache_hit(mocker: MockerFixture, tmp_path: Path) -> None
     r3 = c.compile(src, force=True)
     assert r3.cache_hit is False
     assert fake.state["compile_calls"] == 2
+
+
+def test_concurrent_threads_keep_their_staged_artifacts(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    cache = tmp_path / "cache"
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    first_staged = threading.Event()
+    second_finished = threading.Event()
+    main_thread = threading.get_ident()
+    real_move = shutil.move
+
+    def pause_first_writer(src: str, dst: str) -> str:
+        result = real_move(src, dst)
+        if Path(dst).name == "program.json" and threading.get_ident() != main_thread:
+            first_staged.set()
+            assert second_finished.wait(10), "second writer did not finish"
+        return result
+
+    mocker.patch("p4net.compiler.p4c.shutil.move", side_effect=pause_first_writer)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(P4Compiler(cache_dir=cache).compile, source)
+        try:
+            assert first_staged.wait(10), "first writer did not stage its JSON"
+            second = P4Compiler(cache_dir=cache).compile(source)
+        finally:
+            second_finished.set()
+        result = first.result(timeout=10)
+
+    assert result.source_hash == second.source_hash
+    assert result.bmv2_json.read_bytes() == b'{"fake":"json"}'
+    assert result.p4info.read_bytes() == b"fake p4info"
+    assert list(cache.iterdir()) == [result.bmv2_json.parent]
+    assert P4Compiler(cache_dir=cache).compile(source).cache_hit
+
+
+@pytest.mark.parametrize("error_number", [errno.EEXIST, errno.ENOTEMPTY])
+def test_publish_race_reuses_complete_entry(
+    mocker: MockerFixture, tmp_path: Path, error_number: int
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    cache = tmp_path / "cache"
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    real_rename = os.rename
+
+    def another_writer_publishes(src: str, dst: str) -> None:
+        target = Path(dst)
+        if target.parent == cache:
+            target.mkdir()
+            (target / "program.json").write_bytes(b'{"winner":true}')
+            (target / "program.p4info.txtpb").write_bytes(b"winner p4info")
+            (target / "meta.json").write_text("{}")
+            raise OSError(error_number, os.strerror(error_number), dst)
+        real_rename(src, dst)
+
+    mocker.patch("p4net.compiler.p4c.os.rename", side_effect=another_writer_publishes)
+    result = P4Compiler(cache_dir=cache).compile(source)
+    assert result.bmv2_json.read_bytes() == b'{"winner":true}'
+    assert result.p4info.read_bytes() == b"winner p4info"
+    assert list(cache.iterdir()) == [result.bmv2_json.parent]
+    assert P4Compiler(cache_dir=cache).compile(source).cache_hit
+
+
+@pytest.mark.parametrize("failure_at", ["move", "rename"])
+def test_failed_cache_write_cleans_up_staging(
+    mocker: MockerFixture, tmp_path: Path, failure_at: str
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    cache = tmp_path / "cache"
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    error = OSError(errno.ENOSPC, "disk full")
+    real_move = shutil.move
+    real_rename = os.rename
+
+    def fail_move(src: str, dst: str) -> str:
+        if Path(dst).name == "program.p4info.txtpb":
+            raise error
+        return real_move(src, dst)
+
+    def fail_rename(src: str, dst: str) -> None:
+        if Path(dst).parent == cache:
+            raise error
+        real_rename(src, dst)
+
+    if failure_at == "move":
+        mocker.patch("p4net.compiler.p4c.shutil.move", side_effect=fail_move)
+    else:
+        mocker.patch("p4net.compiler.p4c.os.rename", side_effect=fail_rename)
+    with pytest.raises(OSError) as caught:
+        P4Compiler(cache_dir=cache).compile(source)
+    assert caught.value is error
+    assert list(cache.iterdir()) == []
+
+
+def test_publish_race_rejects_incomplete_entry(mocker: MockerFixture, tmp_path: Path) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    cache = tmp_path / "cache"
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    real_rename = os.rename
+    targets = []
+
+    def incomplete_writer(src: str, dst: str) -> None:
+        target = Path(dst)
+        if target.parent == cache:
+            target.mkdir()
+            (target / "program.json").write_bytes(b"{}")
+            targets.append(target)
+        real_rename(src, dst)
+
+    mocker.patch("p4net.compiler.p4c.os.rename", side_effect=incomplete_writer)
+    with pytest.raises(OSError) as caught:
+        P4Compiler(cache_dir=cache).compile(source)
+    assert caught.value.errno in (errno.EEXIST, errno.ENOTEMPTY)
+    assert len(targets) == 1
+    assert list(cache.iterdir()) == targets
 
 
 def test_changed_preprocessed_input_invalidates_cache(
