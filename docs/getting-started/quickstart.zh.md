@@ -4,9 +4,7 @@ description: 用不到 100 行代码完成一个端到端的双主机 p4net 拓�
 
 # 快速上手
 
-本页演示最小的可用 p4net 程序——一台交换机、两台主机、一个端口
-互换的数据平面，最终成功 ping 通。如果你尚未安装 p4net 及其外部
-依赖，请先阅读[安装](installation.md)。
+本页演示最小的可用 p4net 程序——一台交换机、两台主机、一个端口互换的数据平面，最终成功 ping 通。如果你尚未安装 p4net 及其外部依赖，请先阅读[安装](installation.md)。
 
 ## 你将构建的内容
 
@@ -16,10 +14,7 @@ description: 用不到 100 行代码完成一个端到端的双主机 p4net 拓�
 +----+    1    +----+    2    +----+
 ```
 
-`h1` 与 `h2` 是位于私有网络命名空间中的 Linux 主机；`s1` 是一个
-运行端口互换流水线的 `simple_switch_grpc` 进程：从端口 1 进来的
-数据包从端口 2 出去，反之亦然。不需要运行时表项编程——数据平面
-逻辑是写死在 P4 程序里的。
+`h1` 与 `h2` 是位于私有网络命名空间中的 Linux 主机；`s1` 是一个运行端口互换流水线的 `simple_switch_grpc` 进程：从端口 1 进来的数据包从端口 2 出去，反之亦然。不需要运行时表项编程——数据平面逻辑是写死在 P4 程序里的。
 
 ## Python 拓扑
 
@@ -53,10 +48,7 @@ def setup(net: Network) -> None:
              "dev", "h2-eth0", "nud", "permanent"])
 ```
 
-`topology = Topology()` 加上 `def setup(net)` 是 `p4net` 控制台脚本
-约定的形态：模块级的 `topology` 变量加上可选的 `setup(net)`，后者会
-在网络启动后被调用。直接构造 `Network` 对象的纯 Python 脚本同样
-可以。
+`topology = Topology()` 加上 `def setup(net)` 是 `p4net` 控制台脚本约定的形态：模块级的 `topology` 变量加上可选的 `setup(net)`，后者会在网络启动后被调用。直接构造 `Network` 对象的纯 Python 脚本同样可以。
 
 ## P4 程序
 
@@ -110,10 +102,7 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 sudo p4net quickstart.py
 ```
 
-编排器会校验拓扑、编译 `port_swap.p4`、创建命名空间、连通 veth 对、
-配置地址、在 root 命名空间启动 `simple_switch_grpc`、通过 P4Runtime
-推送编译好的流水线、运行 `setup(net)` 注入 ARP，然后进入交互式
-Shell。
+编排器会校验拓扑、编译 `port_swap.p4`、创建命名空间、连通 veth 对、配置地址、在 root 命名空间启动 `simple_switch_grpc`、通过 P4Runtime 推送编译好的流水线、运行 `setup(net)` 注入 ARP，然后进入交互式 Shell。
 
 在 Shell 中：
 
@@ -136,27 +125,19 @@ H \ H   h1   h2
 
 按顺序：
 
-1. `Topology.validate()` 运行（接口名长度、IP 冲突、对称/非对称
-   损伤的相容性等）。
-2. `P4Compiler` 检查内容寻址缓存；缓存未命中时，调用
-   `p4c -b bmv2 --p4runtime-files=...`。
+1. `Topology.validate()` 运行（接口名长度、IP 冲突、对称/非对称损伤的相容性等）。
+2. `P4Compiler` 预处理源码及其引用文件，再检查内容寻址缓存。未命中时，将预处理结果编译为 BMv2 JSON 和 P4Info。
 3. 创建网络命名空间 `h1` 与 `h2`。
-4. 在 root 命名空间创建两对 veth：`h1-eth0 ↔ s1-eth1` 与
-   `h2-eth0 ↔ s1-eth2`，再把主机侧的一端搬入对应命名空间。
+4. 在 root 命名空间创建两对 veth：`h1-eth0 ↔ s1-eth1` 与 `h2-eth0 ↔ s1-eth2`，再把主机侧的一端搬入对应命名空间。
 5. 应用 IPv4 地址、MAC 覆盖、按接口的 IPv6 sysctl 门控；接口拉起。
-6. 启动 `simple_switch_grpc`，参数 `--grpc-server-addr
-   127.0.0.1:50051`；编排器轮询 gRPC 端口直到可连，然后通过
-   `SetForwardingPipelineConfig` 推送流水线。
+6. 启动 `simple_switch_grpc`，参数 `--grpc-server-addr 127.0.0.1:50051`；编排器轮询 gRPC 端口直到可连，然后通过 `SetForwardingPipelineConfig` 推送流水线。
 7. `setup(net)` 注入静态 ARP。
-8. CLI 接管。退出时，上面每一步按相反顺序回卷——通过上下文
-   管理器显式触发，或在异常路径上由 atexit 兜底处理。
+8. CLI 接管。退出时，上面每一步按相反顺序回卷——通过上下文管理器显式触发，或在异常路径上由 atexit 兜底处理。
 
 每一步的细节见[架构](../architecture.md)。
 
 ## 接下来读什么
 
-- [教程](../tutorial.md)演示一个 4 主机、2 交换机的双栈拓扑，包含
-  运行时表项编程、非对称链路损伤、CPU 端口数据包 I/O。
-- [示例目录](../examples/index.md)收录了六个可运行的拓扑，分别
-  覆盖每一项 v0.2.0 特性。
+- [教程](../tutorial.md)演示一个 4 主机、2 交换机的双栈拓扑，包含运行时表项编程、非对称链路损伤、CPU 端口数据包 I/O。
+- [示例目录](../examples/index.md)收录了六个可运行的拓扑，分别覆盖每一项 v0.2.0 特性。
 - [CLI 参考](../cli.md)记录了每条 Shell 命令。

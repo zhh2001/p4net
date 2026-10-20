@@ -4,10 +4,7 @@ description: A two-host p4net topology end to end, with the matching P4 program,
 
 # Quick Start
 
-This page walks through the smallest useful p4net program — two hosts
-on a single switch, a port-swap dataplane, a successful ping. If you
-have not yet installed p4net and its external dependencies, start
-with [Installation](installation.md).
+This page walks through the smallest useful p4net program — two hosts on a single switch, a port-swap dataplane, a successful ping. If you have not yet installed p4net and its external dependencies, start with [Installation](installation.md).
 
 ## What you'll build
 
@@ -17,10 +14,7 @@ with [Installation](installation.md).
 +----+    1    +----+    2    +----+
 ```
 
-`h1` and `h2` are Linux hosts in private network namespaces. `s1` is
-a `simple_switch_grpc` process running a port-swap pipeline: any
-packet arriving on port 1 leaves on port 2, and vice versa. No
-runtime table programming is needed; the dataplane is hardcoded.
+`h1` and `h2` are Linux hosts in private network namespaces. `s1` is a `simple_switch_grpc` process running a port-swap pipeline: any packet arriving on port 1 leaves on port 2, and vice versa. No runtime table programming is needed; the dataplane is hardcoded.
 
 ## The Python topology
 
@@ -54,10 +48,7 @@ def setup(net: Network) -> None:
              "dev", "h2-eth0", "nud", "permanent"])
 ```
 
-The `topology = Topology()` and `def setup(net)` shape is what the
-`p4net` console script looks for: a module-level `topology` and an
-optional `setup(net)` invoked after the network is up. Plain Python
-scripts that build a `Network` directly work too.
+The `topology = Topology()` and `def setup(net)` shape is what the `p4net` console script looks for: a module-level `topology` and an optional `setup(net)` invoked after the network is up. Plain Python scripts that build a `Network` directly work too.
 
 ## The P4 program
 
@@ -111,11 +102,7 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 sudo p4net quickstart.py
 ```
 
-The orchestrator will validate the topology, compile `port_swap.p4`,
-create namespaces, wire veth pairs, configure addresses, start
-`simple_switch_grpc` in the root namespace, push the compiled
-pipeline via P4Runtime, run `setup(net)` to seed ARP, and drop you
-into the interactive shell.
+The orchestrator will validate the topology, compile `port_swap.p4`, create namespaces, wire veth pairs, configure addresses, start `simple_switch_grpc` in the root namespace, push the compiled pipeline via P4Runtime, run `setup(net)` to seed ARP, and drop you into the interactive shell.
 
 In the shell:
 
@@ -138,32 +125,19 @@ Press `Ctrl-D` (or type `exit`) to tear the network down.
 
 In order:
 
-1. `Topology.validate()` ran (interface name length, IP collisions,
-   asymmetric/symmetric impairment conflicts).
-2. `P4Compiler` checked its content-addressed cache; on a miss it
-   shells out to `p4c -b bmv2 --p4runtime-files=...`.
+1. `Topology.validate()` ran (interface name length, IP collisions, asymmetric/symmetric impairment conflicts).
+2. `P4Compiler` preprocessed the source and its includes, then checked its content-addressed cache. On a miss it compiled that input into BMv2 JSON and P4Info.
 3. Network namespaces `h1` and `h2` were created.
-4. veth pairs `h1-eth0 ↔ s1-eth1` and `h2-eth0 ↔ s1-eth2` were
-   created in the root namespace, and the host-side ends were moved
-   into their respective namespaces.
-5. IPv4 addresses, MAC overrides, and per-interface IPv6 sysctls were
-   applied; the interfaces were brought up.
-6. `simple_switch_grpc` was launched with `--grpc-server-addr
-   127.0.0.1:50051`, the orchestrator polled the gRPC port until it
-   accepted connections, then pushed the pipeline config via
-   `SetForwardingPipelineConfig`.
+4. veth pairs `h1-eth0 ↔ s1-eth1` and `h2-eth0 ↔ s1-eth2` were created in the root namespace, and the host-side ends were moved into their respective namespaces.
+5. IPv4 addresses, MAC overrides, and per-interface IPv6 sysctls were applied; the interfaces were brought up.
+6. `simple_switch_grpc` was launched with `--grpc-server-addr 127.0.0.1:50051`, the orchestrator polled the gRPC port until it accepted connections, then pushed the pipeline config via `SetForwardingPipelineConfig`.
 7. `setup(net)` ran static ARP entries.
-8. The CLI took over. On exit, every step above was unwound in
-   reverse — explicitly via the context manager, or as a fallback
-   via the atexit hook.
+8. The CLI took over. On exit, every step above was unwound in reverse — explicitly via the context manager, or as a fallback via the atexit hook.
 
 The depth on each step lives on the [Architecture page](../architecture.md).
 
 ## Next steps
 
-- The [Tutorial](../tutorial.md) walks through a 4-host, 2-switch,
-  dual-stack topology with runtime table programming, asymmetric link
-  impairment, and CPU-port packet I/O.
-- The [Examples directory](../examples/index.md) ships six runnable
-  topologies covering every v0.2.0 feature.
+- The [Tutorial](../tutorial.md) walks through a 4-host, 2-switch, dual-stack topology with runtime table programming, asymmetric link impairment, and CPU-port packet I/O.
+- The [Examples directory](../examples/index.md) ships six runnable topologies covering every v0.2.0 feature.
 - The [CLI reference](../cli.md) documents every shell command.

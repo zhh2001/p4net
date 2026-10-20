@@ -173,14 +173,31 @@ def _make_smart_run(
     version_payload: bytes = b"p4c 1.2.4 (test)\n",
     rc: int = 0,
     stderr: bytes = b"",
+    preprocessed_payload: bytes | None = None,
 ) -> Any:
-    """A subprocess.run replacement that recognises both --version and compile."""
-    state = {"version_calls": 0, "compile_calls": 0, "compile_argvs": []}
+    """A subprocess.run replacement for version, preprocessing, and compilation."""
+    state = {
+        "version_calls": 0,
+        "preprocess_calls": 0,
+        "preprocess_argvs": [],
+        "compile_calls": 0,
+        "compile_argvs": [],
+    }
 
     def fake_run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess[bytes]:
         if "--version" in argv:
             state["version_calls"] = int(state["version_calls"]) + 1
             return _ok_proc(stdout=version_payload)
+        if "-E" in argv:
+            state["preprocess_calls"] = int(state["preprocess_calls"]) + 1
+            argvs_list = state["preprocess_argvs"]
+            assert isinstance(argvs_list, list)
+            argvs_list.append(list(argv))
+            out_dir = Path(argv[argv.index("-o") + 1])
+            source = Path(argv[-1])
+            payload = source.read_bytes() if preprocessed_payload is None else preprocessed_payload
+            (out_dir / f"{source.stem}.p4i").write_bytes(payload)
+            return _ok_proc()
         # Compile path.
         state["compile_calls"] = int(state["compile_calls"]) + 1
         argvs_list = state["compile_argvs"]
@@ -218,16 +235,14 @@ def test_cache_hit_short_circuits(mocker: MockerFixture, tmp_path: Path) -> None
     assert r1.cache_hit is False
     assert fake.state["compile_calls"] == 1
 
-    # Step 2: a fresh compiler with a fresh patched subprocess that returns
-    # only the version call. If anything tries to compile, that's a bug.
-    version_only = MagicMock(side_effect=_make_smart_run())
-    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=version_only)
+    # A fresh compiler must recheck preprocessed input without recompiling.
+    cached_run = MagicMock(side_effect=_make_smart_run())
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=cached_run)
     c2 = P4Compiler(cache_dir=cache_dir)
     r2 = c2.compile(src)
     assert r2.cache_hit is True
-    # subprocess.run was called only for --version, not for the compile.
     compile_calls = sum(
-        1 for call in version_only.call_args_list if "--version" not in call.args[0]
+        1 for call in cached_run.call_args_list if "--p4runtime-files" in call.args[0]
     )
     assert compile_calls == 0
 
@@ -271,6 +286,8 @@ def test_compile_argv_includes_extra_args(mocker: MockerFixture, tmp_path: Path)
     assert "--Wdisable=unused" in argv
     # It is positioned before the source path.
     assert argv.index("--Wdisable=unused") < argv.index(str(src))
+    assert "--Wdisable=unused" in fake.state["preprocess_argvs"][0]
+    assert "-e" in argv
 
 
 def test_force_bypasses_cache_hit(mocker: MockerFixture, tmp_path: Path) -> None:
@@ -291,6 +308,82 @@ def test_force_bypasses_cache_hit(mocker: MockerFixture, tmp_path: Path) -> None
     r3 = c.compile(src, force=True)
     assert r3.cache_hit is False
     assert fake.state["compile_calls"] == 2
+
+
+def test_changed_preprocessed_input_invalidates_cache(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source, b'#include "settings.p4"\n')
+    cache = tmp_path / "cache"
+    mocker.patch(
+        "p4net.compiler.p4c.subprocess.run",
+        side_effect=_make_smart_run(preprocessed_payload=b"const bit<9> PORT = 1;"),
+    )
+    first = P4Compiler(cache_dir=cache).compile(source)
+    mocker.patch(
+        "p4net.compiler.p4c.subprocess.run",
+        side_effect=_make_smart_run(preprocessed_payload=b"const bit<9> PORT = 2;"),
+    )
+    compiler = P4Compiler(cache_dir=cache)
+    second = compiler.compile(source)
+    assert not second.cache_hit
+    assert second.source_hash != first.source_hash
+    assert compiler.compile(source).cache_hit
+
+
+def test_relative_source_paths_in_different_directories_have_separate_cache_entries(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    compiler = P4Compiler(cache_dir=tmp_path / "cache")
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    directories = (tmp_path / "a", tmp_path / "b")
+    results = []
+    for directory in directories:
+        directory.mkdir()
+        _write_p4(directory / "program.p4")
+        monkeypatch.chdir(directory)
+        results.append(compiler.compile(Path("program.p4")))
+    assert results[0].source_hash != results[1].source_hash
+    assert not results[1].cache_hit
+
+
+def test_preprocessing_failure_does_not_return_cached_artifacts(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    compiler = P4Compiler(cache_dir=tmp_path / "cache")
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    first = compiler.compile(source)
+    mocker.patch(
+        "p4net.compiler.p4c.subprocess.run",
+        return_value=_bad_proc(1, stderr=b"settings.p4: No such file or directory"),
+    )
+    with pytest.raises(CompileError, match="No such file"):
+        compiler.compile(source)
+    assert first.bmv2_json.is_file()
+    assert first.p4info.is_file()
+
+
+@pytest.mark.parametrize("empty_file", [False, True])
+def test_preprocessing_requires_output(
+    mocker: MockerFixture, tmp_path: Path, empty_file: bool
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if "--version" in argv:
+            return _ok_proc(stdout=b"p4c test")
+        if empty_file:
+            out_dir = Path(argv[argv.index("-o") + 1])
+            (out_dir / "program.p4i").touch()
+        return _ok_proc()
+
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=run)
+    with pytest.raises(CompileError, match="preprocessed output is missing or empty"):
+        P4Compiler(cache_dir=tmp_path / "cache").compile(source)
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +419,9 @@ def test_compile_raises_when_outputs_missing(mocker: MockerFixture, tmp_path: Pa
     def silent_success(argv: list[str], **kw: Any) -> subprocess.CompletedProcess[bytes]:
         if "--version" in argv:
             return _ok_proc(stdout=b"p4c 1.2.4")
+        if "-E" in argv:
+            out_dir = Path(argv[argv.index("-o") + 1])
+            (out_dir / f"{src.stem}.p4i").write_bytes(src.read_bytes())
         return _ok_proc()  # no files written
 
     mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=silent_success)
@@ -343,6 +439,9 @@ def test_compile_raises_when_p4info_missing(mocker: MockerFixture, tmp_path: Pat
             return _ok_proc(stdout=b"p4c 1.2.4")
         out_dir = Path(argv[argv.index("-o") + 1])
         source = Path(argv[-1])
+        if "-E" in argv:
+            (out_dir / f"{source.stem}.p4i").write_bytes(source.read_bytes())
+            return _ok_proc()
         (out_dir / f"{source.stem}.json").write_bytes(b"{}")
         # Skip the p4info file.
         return _ok_proc()

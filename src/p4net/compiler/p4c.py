@@ -1,10 +1,9 @@
 """Wrapper around the `p4c` driver with content-addressed caching.
 
-Compilation is invoked as
-``p4c --target bmv2 --arch <arch> --std p4-16 -o <out_dir>
---p4runtime-files <out_dir>/program.p4info.txtpb [extra_args] <source>``.
-This is the documented way to run the v1model BMv2 backend with P4Info
-generation; the standard `p4c` driver dispatches to `p4c-bm2-ss` underneath.
+Every lookup runs ``p4c -E`` so the cache key includes resolved headers and
+macro definitions. On a miss, ``p4c -e`` compiles that preprocessed snapshot
+into BMv2 JSON and P4Info. Both invocations use the same target, architecture,
+language version, and extra arguments.
 
 Concurrency: two simultaneous compiles of the same source may both invoke
 ``p4c``. The second one notices the cache is populated when it tries to
@@ -45,9 +44,10 @@ class CompileResult:
             compiled program.
         compiler_version: The version string reported by ``p4c
             --version`` at compile time.
-        source_hash: SHA-256 hex digest used as the cache key.
-        cache_hit: ``True`` if the result was served from cache (no
-            ``p4c`` invocation), ``False`` if it was freshly compiled.
+        source_hash: SHA-256 digest of the source path, source bytes,
+            preprocessed input, architecture, compiler version, and arguments.
+        cache_hit: ``True`` if cached artifacts were reused after preprocessing,
+            ``False`` if the backend compiled fresh artifacts.
     """
 
     source: Path
@@ -147,14 +147,24 @@ class P4Compiler:
         force: bool = False,
         extra_args: Sequence[str] = (),
     ) -> CompileResult:
-        """Compile a .p4 source. Returns immediately on cache hit unless `force`."""
+        """Preprocess a .p4 source and reuse cached artifacts unless `force`.
+
+        Preprocessing resolves includes and macros on every call. Cache misses
+        compile the same preprocessed snapshot used to calculate the key.
+        """
         source = Path(source)
         if not source.is_file():
             raise CompileError(source, 0, f"source file does not exist: {source}")
 
         source_bytes = source.read_bytes()
         version = self.version
-        cache_key = _compute_hash(source_bytes, arch, version, extra_args)
+        preprocessed = self._preprocess(source, arch=arch, extra_args=extra_args)
+        cache_input = (
+            _frame("source_path", os.fsencode(source.absolute()))
+            + _frame("source", source_bytes)
+            + _frame("preprocessed", preprocessed)
+        )
+        cache_key = _compute_hash(cache_input, arch, version, extra_args)
         final_dir = self._cache_dir / cache_key
         final_json = final_dir / "program.json"
         final_p4info = final_dir / "program.p4info.txtpb"
@@ -180,9 +190,49 @@ class P4Compiler:
             extra_args=tuple(extra_args),
             cache_key=cache_key,
             version=version,
+            preprocessed=preprocessed,
         )
 
     # Internal helpers ---------------------------------------------------
+
+    def _preprocess(self, source: Path, *, arch: str, extra_args: Sequence[str]) -> bytes:
+        with tempfile.TemporaryDirectory(prefix="p4net-p4c-preprocess-") as tmp:
+            output = Path(tmp) / f"{source.stem}.p4i"
+            argv = [
+                self._p4c_binary,
+                "--target",
+                "bmv2",
+                "--arch",
+                arch,
+                "--std",
+                "p4-16",
+                "-E",
+                "-o",
+                tmp,
+                *extra_args,
+                str(source),
+            ]
+            logger.debug("preprocessing P4 source: %s", argv)
+            try:
+                result = subprocess.run(argv, capture_output=True, check=False)
+            except FileNotFoundError as exc:
+                raise CompilerNotFoundError(
+                    f"p4c binary {self._p4c_binary!r} not found on PATH"
+                ) from exc
+            if result.returncode != 0:
+                raise CompileError(
+                    source,
+                    result.returncode,
+                    result.stderr.decode("utf-8", errors="replace"),
+                )
+            if not output.is_file() or output.stat().st_size == 0:
+                raise CompileError(
+                    source,
+                    0,
+                    "p4c reported success but preprocessed output is missing "
+                    f"or empty: {output.name}",
+                )
+            return output.read_bytes()
 
     @staticmethod
     def _cache_hit(final_dir: Path, json_path: Path, p4info_path: Path) -> bool:
@@ -200,10 +250,13 @@ class P4Compiler:
         extra_args: tuple[str, ...],
         cache_key: str,
         version: str,
+        preprocessed: bytes,
     ) -> CompileResult:
         with tempfile.TemporaryDirectory(prefix="p4net-p4c-") as tmp:
             tmp_path = Path(tmp)
             tmp_p4info = tmp_path / "program.p4info.txtpb"
+            # With -e, the driver reads <out_dir>/<source_stem>.p4i.
+            (tmp_path / f"{source.stem}.p4i").write_bytes(preprocessed)
             argv = [
                 self._p4c_binary,
                 "--target",
@@ -212,6 +265,7 @@ class P4Compiler:
                 arch,
                 "--std",
                 "p4-16",
+                "-e",
                 "-o",
                 str(tmp_path),
                 "--p4runtime-files",
