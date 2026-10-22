@@ -1,167 +1,191 @@
 ---
-description: Common p4net failure modes — missing tools, sysctl errors, BMv2 startup hangs, gRPC issues, leftover veth pairs, IPv6 noise — with diagnoses and fixes.
+description: Diagnose startup, P4Runtime and connectivity failures using logs, host state and switch configuration.
 ---
 
 # Troubleshooting
 
-Each entry below documents a real failure mode that has surfaced during p4net development or use. Symptom first, then cause, then fix.
+The examples below use `topology.py`, hosts `h1` and `h2`, and switch `s1`. Substitute the names from your topology.
 
-## "Permission denied" creating namespaces / veth
+## Collect logs and current state
 
-!!! warning "Symptom"
-    `PermissionError: [Errno 13] Permission denied` from `ip netns add`, `ip link add ... type veth`, or `tc qdisc add`.
+Activate the Python environment where p4net is installed, then start the topology with Python debug logging, BMv2 logs and packet captures:
 
-**Cause.** p4net needs `CAP_NET_ADMIN` to manipulate namespaces, links, and traffic-control state. Without root or that capability, every network-touching call fails.
+```bash
+sudo env "PATH=$PATH" "$(command -v p4net)" -vv \
+  --log-dir ./logs --pcap-dir ./pcaps topology.py
+```
 
-!!! tip "Fix"
-    Run with `sudo`. If `sudo` strips your venv from `PATH`, use `sudo env "PATH=$PATH" p4net <topology.py>` or pass the absolute path: `sudo "$(. .venv/bin/activate && which p4net)" ...`.
+If the shell opens, check the network and switch state:
 
-    `setcap cap_net_admin+ep` on the Python interpreter works in principle but has nasty interactions with shebang lookup and setuid; not recommended unless you understand the trade-offs.
+```text
+p4net> status
+p4net> switches
+p4net> s1 log
+```
 
-## "p4c not found" / "simple_switch_grpc not found"
+`switches` shows each switch's gRPC address, PID and log path. `s1 log` prints the path, not the file contents. Read the log from another terminal:
 
-!!! warning "Symptom"
-    `FileNotFoundError: [Errno 2] No such file or directory: 'p4c'` or `'simple_switch_grpc'`.
+```bash
+tail -n 80 ./logs/s1.log
+```
 
-**Cause.** The external compiler or BMv2 binary isn't on `PATH`.
+If startup fails before the shell opens, read the exception and the log path it reports. A compiler error contains p4c's stderr; a switch log becomes available once BMv2 is launched.
 
-!!! tip "Fix"
-    Confirm with `which p4c` and `which simple_switch_grpc`. If they're installed but not on `PATH`, fix `PATH` in your shell or invoke p4net with an explicit `PATH` (`sudo env "PATH=$PATH" ...`). If they're not installed, see [Installation → Required external tools](getting-started/installation.md#required-external-tools).
+## Permission denied when creating namespaces or links
 
-## BMv2 startup hangs
+If namespace or link creation reports `Operation not permitted` or `Permission denied`, run the topology with the `sudo` command above. Installing p4net and compiling P4 programs can use your regular account.
 
-!!! warning "Symptom"
-    `Network.start()` hangs at "waiting for BMv2 gRPC to become ready" and eventually times out (default 10 s).
+A failed `sysctl` write is reported as `NamespaceError`. Read the key and command error in its message to check for insufficient permissions, a missing interface or an unavailable `sysctl` command.
 
-**Cause.** BMv2 takes longer than 10 s to bind its gRPC port. Common reasons: the host is heavily loaded, the kernel is paging, or `simple_switch_grpc` was started in a tight loop and the previous instance hasn't released the port yet.
+## External commands cannot be found
 
-!!! tip "Fix"
-    Pass a longer ready timeout to `Network`:
+`CompilerNotFoundError` identifies a missing or unusable p4c. `BMv2NotFoundError` identifies a missing `simple_switch_grpc`. Host commands and namespace configuration also depend on the Linux network tools:
 
-    ```python
-    Network(topo, bmv2_grpc_ready_timeout=30.0)
-    ```
+```bash
+command -v p4c simple_switch_grpc ip tc ping sysctl
+```
 
-    If startup still hangs, check the BMv2 log under `<log_dir>/<switch>.log` — the orchestrator records it. A common line to look for is `Could not bind: Address already in use`, which means a previous instance is still around.
+Install missing tools using [Installation](getting-started/installation.md#required-external-tools). If a tool is installed in a custom directory, include that directory in `PATH` when invoking `sudo`, as in the startup command above. Register operations also need `simple_switch_CLI` and BMv2's Thrift service.
 
-## gRPC `UNAVAILABLE` from the P4Runtime client
+## BMv2 exits or its gRPC port does not become ready
 
-!!! warning "Symptom"
-    `grpc.RpcError: <_InactiveRpcError ... StatusCode.UNAVAILABLE ...>` on `client.connect()` or the first `set_pipeline_config` call.
+`BMv2StartupError` distinguishes an early process exit (`exited before becoming ready`) from a port timeout (`did not open gRPC port within 10.0s`). Check the reported switch log for the cause, such as an invalid BMv2 argument, an interface error or a port conflict.
 
-**Cause.** Same family as the BMv2-startup-hangs case: the client is trying to talk to a port BMv2 hasn't bound yet.
+BMv2 uses both a gRPC port and a Thrift port. For the first switch, the defaults are 50051 and 9090; subsequent switches increment each port by one. Check both listeners:
 
-!!! tip "Fix"
-    The orchestrator polls the gRPC port before calling `connect()`, so this rarely surfaces in the orchestrator-managed flow. If you're driving `P4RuntimeClient` directly, add your own readiness poll, or accept the failure and retry.
+```bash
+sudo ss -ltnp 'sport = :50051'
+sudo ss -ltnp 'sport = :9090'
+```
 
-## gRPC `UNKNOWN` with cryptic byte payload
+Compare the listener PID with the switch PID from `switches`. BMv2 may continue running its Thrift service after a gRPC bind failure, so check the log for `Address already in use` even while the process is alive.
 
-!!! warning "Symptom"
-    A write fails with `grpc.RpcError(StatusCode.UNKNOWN, ...)` and the message contains binary data.
+Match the PID to the experiment that owns it, then stop that experiment or choose other ports. Set `grpc_port` and `thrift_port` in `add_switch()` to select ports for a new topology. p4net assigns default ports by switch order without checking whether another process already uses them.
 
-**Cause.** BMv2 packs per-update error details into a `grpc-status-details-bin` trailer (a serialized `google.rpc.Status` containing one or more `p4.v1.Error` messages with numeric canonical codes). p4net's `P4RuntimeClient._translate_rpc_error` decodes those into specific exceptions (`DuplicateEntryError`, `EntryNotFoundError`, `PipelineError`, etc.), but only when the trailer is present.
+For a switch that takes longer to start, the lower-level `BMv2Switch` interface accepts `startup_timeout` or `wait_until_ready(timeout=...)`. `Network` uses the default 10-second wait.
 
-!!! tip "Fix"
-    Make sure you're using p4net ≥ 0.1.0 (the codec landed in phase 5). If you're seeing the raw `UNKNOWN` from a `client.last_error` access, log the full exception's `details()` and `trailing_metadata()` — the original status is in `grpc-status-details-bin`.
+## P4Runtime connection or write failures
 
-## `pyroute2.NetlinkError(17, 'File exists')` on link create
+A reachable TCP port is only the first startup check. The P4Runtime client must also complete arbitration with the correct `device_id` and role. For `ConnectionError` or gRPC `UNAVAILABLE`, check the address from `switches`, the BMv2 process and its log, then reconnect after resolving the cause.
 
-!!! warning "Symptom"
-    `Network.start()` fails with `LinkError: interface 'h1-eth0' already exists` or similar netlink errors with errno 17.
+p4net reports control failures through exceptions from `p4net.control.exceptions`:
 
-**Cause.** A previous run left the veth pairs around. Normally the atexit cleanup or the SIGINT handler tears them down, but neither runs if the process was killed with `SIGKILL` (e.g. `kill -9` or OOM) or terminated before the handlers were installed.
+| Exception | What to check |
+| --- | --- |
+| `NotPrimaryError` | Controller election ID, role permissions and other connected controllers |
+| `PipelineError` | Whether the BMv2 JSON and P4Info describe the same compiled program, and the switch's rejection message |
+| `DuplicateEntryError` | Whether the entry already exists before inserting it |
+| `EntryNotFoundError` | Whether the entry exists before modifying or deleting it |
+| `P4RuntimeError` | The error message and operation-specific preconditions |
 
-!!! tip "Fix"
-    Verify with `ip link show` — leftover veths usually carry `<host>-eth<N>` names. Delete with:
+For read or write `FAILED_PRECONDITION` errors, check that the switch has a forwarding pipeline. A standalone synchronous client loads one with `set_pipeline_config()`; the asynchronous client uses `await push_pipeline()`. `Network.start()` performs this setup for its managed clients.
 
-    ```
-    sudo ip link del h1-eth0
-    sudo ip netns del h1
-    ```
+P4Runtime can wrap per-entry failures in an outer gRPC `UNKNOWN` status. Both clients use the first recognizable failure code in request order to choose the exception type. If the details cannot be decoded, the result remains a generic `P4RuntimeError`. Print the exception type and message first. For the original RPC details, inspect `exc.__cause__`; when it is a `grpc.RpcError`, use its `code()`, `details()` and `trailing_metadata()` methods.
 
-    Then re-run.
+See the [async client guide](async-client.md) for asynchronous connection and cancellation behavior.
 
-## IPv6 link-local addresses on switch-side veth (older versions)
+## `pingall` reports failures
 
-!!! warning "Symptom"
-    On p4net < 0.2.0, `<host> ifconfig` and `<switch> log` show stray `fe80::` addresses; punt-path captures show MLD chatter.
+Check host addresses, routes, neighbor resolution and P4 forwarding in that order:
 
-**Cause.** The Linux kernel auto-generates `fe80::` link-local addresses on every interface that comes up while `net.ipv6.conf.<iface>.disable_ipv6=0`. Pre-0.2.0 didn't gate the sysctl before bringing the interface up.
+```text
+p4net> h1 ifconfig
+p4net> h1 cmd ip route
+p4net> h1 cmd ip neigh show
+p4net> s1 table list
+```
 
-!!! tip "Fix"
-    Upgrade to p4net ≥ 0.2.0. The orchestrator now writes `disable_ipv6=1` on every interface that doesn't have an explicit IPv6 address before the link goes up; interfaces with `Host.ip6` get `disable_ipv6=0, accept_ra=0, autoconf=0`.
+`h1 ifconfig` runs `ip -br addr` inside the host namespace. Neighbor entries in `INCOMPLETE` or `FAILED` state indicate unresolved addresses. After listing the switch's tables, inspect the relevant entries with `s1 table dump` and the table name.
 
-## Pingall fails with all `X` cells
+ARP behavior depends on the P4 program. The [Quick Start](getting-started/quickstart.md) program forwards Ethernet frames between two ports, including ARP, so hosts learn dynamic neighbors. A program that only forwards IPv4 may need static neighbors or a controller that handles ARP.
 
-!!! warning "Symptom"
-    `pingall` returns a matrix of `X` (failure) cells; nothing reaches anything.
+For the same-subnet addresses and MACs used in Quick Start, static neighbors can be configured in both directions:
 
-**Cause.** Most often, ARP isn't seeded. BMv2 has no ARP responder; without static neighbors, the first ICMP request triggers an ARP broadcast that the dataplane has no rule for.
+```text
+p4net> h1 cmd ip neigh replace 10.0.0.2 lladdr 00:00:00:00:00:02 dev h1-eth0 nud permanent
+p4net> h2 cmd ip neigh replace 10.0.0.1 lladdr 00:00:00:00:00:01 dev h2-eth0 nud permanent
+p4net> pingall
+```
 
-!!! tip "Fix"
-    The bundled examples seed ARP in `setup(net)`:
+Static neighbors provide IP-to-MAC mappings. Forwarding entries still need to match the P4 program.
 
-    ```python
-    h1.exec(["ip", "neigh", "replace", "10.0.0.2",
-             "lladdr", "00:00:00:00:00:02",
-             "dev", "h1-eth0", "nud", "permanent"])
-    ```
+## IPv6 addresses or connectivity are unexpected
 
-    Either do this for every host pair, or implement an ARP responder in the P4 program (e.g. via the CPU-port punt path).
+Check the topology's `ip6`, `ip6_a` and `ip6_b` settings, then inspect the host interface:
 
-## Compiler cache stale after editing P4 source
+```text
+p4net> h1 cmd ip -6 addr show dev h1-eth0
+p4net> h1 cmd sysctl net.ipv6.conf.h1-eth0.disable_ipv6
+```
 
-!!! warning "Symptom"
-    Edits to a `.p4` file aren't reflected in the running pipeline.
+p4net enables IPv6 on host interfaces with configured IPv6 addresses and disables Router Advertisement processing and SLAAC there. Interfaces without IPv6 configuration have IPv6 disabled. IPv6 connectivity needs neighbor resolution and IPv6 forwarding. Forward Neighbor Discovery packets through P4, handle them in a controller, or configure static IPv6 neighbors. See the [dual-stack example](examples/dual-stack.md).
 
-**Cause.** The network may still be running the previous pipeline, or `p4_src` may point to a different file. Older versions of p4net also reused cached output after an included file changed because the cache key covered only the main source and compiler settings.
+## A namespace or interface already exists
 
-!!! tip "Fix"
-    Check `add_switch(p4_src=...)` and restart the network to load the new pipeline. The compiler now checks preprocessed input, including nested includes, before reusing cached output. To force a rebuild when using `P4Compiler` directly, pass `force=True` to `compile()`.
+Stop the original experiment before starting another topology with the same node names. From Python, call `net.stop()`; in asynchronous code, use `await net.astop()` to wait for cleanup. A process terminated with `SIGKILL` cannot run Python cleanup handlers.
 
-## xterm fails with "DISPLAY not set"
+Inspect any remaining resources:
 
-!!! warning "Symptom"
-    `<host> xterm` returns `error: NetworkError: cannot spawn xterm: $DISPLAY is unset`.
+```bash
+sudo ip netns list
+sudo ip -br link
+sudo ip netns exec h1 ip -br link
+```
 
-**Cause.** No X server is reachable from the orchestrator process. `xterm` needs `$DISPLAY` to be set and an X socket reachable.
+If `h1` and the root-namespace interface `s1-eth1` are confirmed leftovers from the stopped experiment, remove the switch end of the veth pair, then the namespace:
 
-!!! tip "Fix"
-    On a desktop Linux session, this works out of the box. Over SSH, use `ssh -X user@host` and pass `-Y` if your X server requires trusted forwarding. On WSL2, install an X server (VcXsrv, XQuartz over forwarded display) and set `DISPLAY` accordingly. On a headless server, `xterm` simply doesn't apply — use `<host> cmd <argv>` for one-shot commands.
+```bash
+sudo ip link delete s1-eth1
+sudo ip netns delete h1
+```
 
-## "Address already in use" on BMv2 gRPC port
+The host end, `h1-eth0`, normally lives inside `h1`. Deleting either end of a veth pair removes both ends.
 
-!!! warning "Symptom"
-    BMv2 fails to start with `Could not bind: Address already in use` in `<log_dir>/<switch>.log`.
+## P4 edits do not appear in the running network
 
-**Cause.** Another `simple_switch_grpc` (or any other process) is already bound to the port the orchestrator picked.
+Check the `p4_src` path in `add_switch()` and restart the network after editing the program. The compiler checks preprocessed input, including included headers, before reusing cached output. An already running switch keeps its loaded pipeline until it is updated or restarted.
 
-!!! tip "Fix"
-    Identify and kill the holder:
+The compiler cache directory must be writable. To select a cache in the current directory and force compilation:
 
-    ```
-    sudo ss -ltnp | grep <port>
-    sudo pkill simple_switch_grpc
-    ```
+```python
+from pathlib import Path
 
-    The orchestrator picks ports starting at 50051; if you have a persistent collision, override per switch: `topology.add_switch("s1", ..., grpc_port=50061)`.
+from p4net.compiler import P4Compiler
 
-## `topology graph` reports "graphviz `dot` binary not found"
+compiler = P4Compiler(cache_dir=Path(".cache/p4net"))
+result = compiler.compile(Path("port_swap.p4"), force=True)
+print(result.bmv2_json)
+print(result.p4info)
+```
 
-!!! warning "Symptom"
-    `topology graph /tmp/topo.png` returns `error: TopologyError: graphviz \`dot\` binary not found on PATH`.
+## `xterm` cannot open a window
 
-**Cause.** `graphviz` isn't installed.
+The host's `xterm` command needs an installed `xterm`, a `DISPLAY` value and access to the X server from its network namespace. Check the environment used to launch p4net:
 
-!!! tip "Fix"
-    Install it (`sudo apt install graphviz`), or use `format=dot` to emit the source verbatim:
+```bash
+command -v xterm
+printenv DISPLAY
+```
 
-    ```
-    p4net> topology graph /tmp/topo.dot format=dot
-    ```
+If `sudo` removes the display environment, preserve `DISPLAY` and the applicable X authorization settings when launching p4net. The server must also authorize that process. To run a command without a graphical window, use the CLI's `h1 cmd` command, for example `h1 cmd ip -br addr`.
 
-    Then render externally with any DOT-aware tool (online viewer, `gxl2dot`, etc.).
+## Graphviz rendering cannot find `dot`
 
-## Nothing here covers your problem
+Install Graphviz with `sudo apt install graphviz` to render SVG, PNG or PDF. DOT export works without `dot`:
 
-Open an issue at <https://github.com/zhh2001/p4net/issues> with the output of `python -c "import p4net; print(p4net.__version__)"`, `p4c --version`, `simple_switch_grpc --version`, the topology file (or a minimal reproducer), and the relevant log lines from `<log_dir>/<switch>.log`.
+```text
+p4net> topology graph ./topology.dot format=dot
+p4net> topology graph ./topology.svg format=svg
+```
+
+The second command requires Graphviz. `topology graph` without a path prints the DOT source in the shell.
+
+## Report a problem
+
+Include the version outputs below, the complete exception, a minimal topology and P4 program, and relevant lines from the switch log when [opening an issue](https://github.com/zhh2001/p4net/issues):
+
+```bash
+python -c "import p4net; print(p4net.__version__)"
+p4c --version
+simple_switch_grpc --version
+```

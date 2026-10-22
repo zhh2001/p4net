@@ -1,167 +1,191 @@
 ---
-description: p4net 常见故障——缺工具、sysctl 错误、BMv2 启动卡住、gRPC 异常、残留 veth、IPv6 噪声等——的现象、原因与修复方法。
+description: 通过日志、主机状态和交换机配置，排查启动、P4Runtime 与网络连通性问题。
 ---
 
 # 故障排查
 
-下列每个条目都是 p4net 开发或使用过程中真实遇到过的故障模式。顺序：现象、原因、修复。
+下文以 `topology.py`、主机 `h1`、`h2` 和交换机 `s1` 为例，操作时替换为实际名称。
 
-## "Permission denied" 创建命名空间或 veth
+## 收集日志和运行状态
 
-!!! warning "现象"
-    `ip netns add`、`ip link add ... type veth` 或 `tc qdisc add` 报 `PermissionError: [Errno 13] Permission denied`。
+激活安装了 p4net 的 Python 环境，然后启用 Python 调试日志、BMv2 日志和抓包：
 
-**原因。** p4net 需要 `CAP_NET_ADMIN` 来操作命名空间、链路、qdisc。无 root 也无该 capability 时，所有触网络的调用都会失败。
+```bash
+sudo env "PATH=$PATH" "$(command -v p4net)" -vv \
+  --log-dir ./logs --pcap-dir ./pcaps topology.py
+```
 
-!!! tip "修复"
-    用 `sudo` 运行。如果 `sudo` 把虚拟环境从 `PATH` 中剥离了，使用 `sudo env "PATH=$PATH" p4net <topology.py>` 或者绝对路径：`sudo "$(. .venv/bin/activate && which p4net)" ...`。
+进入命令行后，先查看网络和交换机状态：
 
-    对 Python 解释器执行 `setcap cap_net_admin+ep` 原理上可行，但与 shebang 查找、setuid 等机制有不良交互；除非你清楚利弊，不推荐这条路。
+```text
+p4net> status
+p4net> switches
+p4net> s1 log
+```
 
-## "p4c not found" / "simple_switch_grpc not found"
+`switches` 会显示各交换机的 gRPC 地址、PID 和日志路径。`s1 log` 只输出路径，查看内容需在另一个终端执行：
 
-!!! warning "现象"
-    `FileNotFoundError: [Errno 2] No such file or directory: 'p4c'` 或 `'simple_switch_grpc'`。
+```bash
+tail -n 80 ./logs/s1.log
+```
 
-**原因。** 外部编译器或 BMv2 二进制不在 `PATH` 上。
+如果启动失败、尚未进入命令行，先查看异常说明及其中的日志路径。编译错误会附带 p4c 的标准错误输出，BMv2 启动后才会生成交换机日志。
 
-!!! tip "修复"
-    用 `which p4c` 与 `which simple_switch_grpc` 验证。已安装但不在 `PATH` 上时，调整 Shell 的 `PATH`，或显式给 p4net 传 `PATH`（`sudo env "PATH=$PATH" ...`）。未安装时见[安装](getting-started/installation.md)中的「必需的外部工具」一节。
+## 创建命名空间或链路时权限不足
 
-## BMv2 启动卡住
+创建命名空间或链路时出现 `Operation not permitted` 或 `Permission denied`，使用上面的 `sudo` 命令启动拓扑。安装 p4net、编译 P4 程序可以使用普通用户。
 
-!!! warning "现象"
-    `Network.start()` 在 "waiting for BMv2 gRPC to become ready" 处停留，最终超时（默认 10 秒）。
+`sysctl` 写入失败会报告为 `NamespaceError`。根据异常中的键名和命令错误，检查权限、接口是否存在，以及 `sysctl` 命令是否可用。
 
-**原因。** BMv2 启动并绑定 gRPC 端口耗时超过 10 秒。常见原因：主机负载高、内核换页、紧密循环里反复重启 `simple_switch_grpc` 而上一个实例尚未释放端口。
+## 找不到外部命令
 
-!!! tip "修复"
-    给 `Network` 传更长的就绪超时：
+`CompilerNotFoundError` 表示找不到 p4c，或 p4c 无法正常运行。`BMv2NotFoundError` 表示找不到 `simple_switch_grpc`。主机命令和命名空间配置还需要 Linux 网络工具：
 
-    ```python
-    Network(topo, bmv2_grpc_ready_timeout=30.0)
-    ```
+```bash
+command -v p4c simple_switch_grpc ip tc ping sysctl
+```
 
-    若仍卡住，看 `<log_dir>/<switch>.log` 中的 BMv2 日志——编排器会把它落盘。常见的关键行是 `Could not bind: Address already in use`，意味着旧实例没退干净。
+缺少的工具按[安装指南](getting-started/installation.md#required-external-tools)补齐。如果工具安装在自定义目录中，使用 `sudo` 时需像启动命令那样显式传入 `PATH`。寄存器操作还需要 `simple_switch_CLI` 和 BMv2 的 Thrift 服务。
 
-## P4Runtime 客户端报 gRPC `UNAVAILABLE`
+## BMv2 提前退出或 gRPC 端口未就绪
 
-!!! warning "现象"
-    `client.connect()` 或第一次 `set_pipeline_config` 抛 `grpc.RpcError: <_InactiveRpcError ... StatusCode.UNAVAILABLE ...>`。
+`BMv2StartupError` 会区分进程提前退出（`exited before becoming ready`）和端口等待超时（`did not open gRPC port within 10.0s`）。先查看异常指出的交换机日志，检查 BMv2 参数、接口错误和端口冲突。
 
-**原因。** 与 BMv2-启动-卡住 同源：客户端尝试连接尚未绑定端口的 BMv2。
+BMv2 同时使用 gRPC 和 Thrift 端口。第一个交换机默认使用 50051 和 9090，后续交换机的端口依次加一。分别检查两个监听端口：
 
-!!! tip "修复"
-    编排器在 `connect()` 之前会轮询 gRPC 端口，所以这个错误在托管路径下很少出现。如果你直接驱动 `P4RuntimeClient`，请自行加就绪轮询，或接受偶发失败并重试。
+```bash
+sudo ss -ltnp 'sport = :50051'
+sudo ss -ltnp 'sport = :9090'
+```
 
-## 错误 `UNKNOWN` 携带难以理解的字节负载
+将监听进程的 PID 与 `switches` 中的交换机 PID 对应起来。gRPC 绑定失败后，BMv2 仍可能继续运行 Thrift 服务，进程存活时也需检查日志中的 `Address already in use`。
 
-!!! warning "现象"
-    某次写操作失败，得到 `grpc.RpcError(StatusCode.UNKNOWN, ...)`，且消息里夹杂二进制数据。
+根据 PID 确认端口所属的实验，关闭对应实验，或选择其他端口。新拓扑可在 `add_switch()` 中通过 `grpc_port` 和 `thrift_port` 指定端口。p4net 按交换机添加顺序分配默认端口，不会探测其他进程是否已占用。
 
-**原因。** BMv2 把每条更新的错误细节打包进 `grpc-status-details-bin` trailer（一个序列化的 `google.rpc.Status`，内含若干 `p4.v1.Error` 消息和数字 canonical code）。p4net 的 `P4RuntimeClient._translate_rpc_error` 会把它们解码成具体异常（`DuplicateEntryError`、`EntryNotFoundError`、`PipelineError` 等），前提是该 trailer 存在。
+如果交换机确实需要更长的启动时间，直接使用底层 `BMv2Switch` 时可设置 `startup_timeout`，或调用 `wait_until_ready(timeout=...)`。`Network` 使用默认的 10 秒等待时间。
 
-!!! tip "修复"
-    确认你使用的 p4net ≥ 0.1.0（codec 在 phase 5 落地）。如果你直接访问了 `client.last_error`，请把异常的 `details()` 与 `trailing_metadata()` 都打印出来——原始状态在 `grpc-status-details-bin` 里。
+## P4Runtime 连接或写入失败
 
-## `pyroute2.NetlinkError(17, 'File exists')` 创建 link 时
+TCP 端口可连接只是启动检查的第一步。P4Runtime 客户端还需使用正确的 `device_id` 和角色完成仲裁。遇到 `ConnectionError` 或 gRPC `UNAVAILABLE`，先核对 `switches` 中的地址、BMv2 进程及其日志，排除原因后再连接。
 
-!!! warning "现象"
-    `Network.start()` 抛 `LinkError: interface 'h1-eth0' already exists` 或类似 errno 17 的 netlink 错误。
+p4net 通过 `p4net.control.exceptions` 中的异常报告控制操作失败：
 
-**原因。** 上一次运行残留了 veth 对。正常情况下 atexit 清理或 SIGINT 处理器会回收它们；但若进程被 `SIGKILL` 干掉（如 `kill -9` 或 OOM），或处理器尚未注册就退出，回收路径不会跑。
+| 异常 | 排查方向 |
+| --- | --- |
+| `NotPrimaryError` | 控制器选举 ID、角色权限，以及其他已连接的控制器 |
+| `PipelineError` | BMv2 JSON 与 P4Info 是否来自同一次编译，以及交换机返回的拒绝原因 |
+| `DuplicateEntryError` | 插入前检查该表项是否已经存在 |
+| `EntryNotFoundError` | 修改或删除前检查该表项是否存在 |
+| `P4RuntimeError` | 查看错误说明和当前操作所需的前置条件 |
 
-!!! tip "修复"
-    用 `ip link show` 查找——残留 veth 通常名为 `<host>-eth<N>`。删除：
+读写遇到 `FAILED_PRECONDITION` 时，检查交换机是否已加载转发流水线。独立使用同步客户端时，通过 `set_pipeline_config()` 加载；异步客户端使用 `await push_pipeline()`。`Network.start()` 会为其管理的客户端完成这一步。
 
-    ```
-    sudo ip link del h1-eth0
-    sudo ip netns del h1
-    ```
+P4Runtime 可能用外层 gRPC `UNKNOWN` 包装逐条操作的错误。同步和异步客户端都会按请求顺序，以首个可识别的失败码确定异常类型，无法解析时保留为通用 `P4RuntimeError`。先输出异常类型和说明；需要原始 RPC 信息时，检查 `exc.__cause__`，若其为 `grpc.RpcError`，可调用 `code()`、`details()` 和 `trailing_metadata()`。
 
-    然后重跑。
+异步连接和取消行为见[异步客户端指南](async-client.md)。
 
-## 老版本中交换机侧 veth 出现 IPv6 link-local
+## `pingall` 出现失败
 
-!!! warning "现象"
-    在 p4net < 0.2.0 上，`<host> ifconfig` 与 `<switch> log` 看到多余的 `fe80::` 地址；punt 路径抓包出现 MLD 报文。
+依次检查主机地址、路由、邻居解析和 P4 转发配置：
 
-**原因。** `net.ipv6.conf.<iface>.disable_ipv6=0` 时，Linux 内核会在每个被拉起的接口上自动生成 `fe80::` link-local 地址。0.2.0 之前没有在拉起前关掉这个 sysctl。
+```text
+p4net> h1 ifconfig
+p4net> h1 cmd ip route
+p4net> h1 cmd ip neigh show
+p4net> s1 table list
+```
 
-!!! tip "修复"
-    升级到 p4net ≥ 0.2.0。编排器现在会先在每个未显式启用 IPv6 的接口上写 `disable_ipv6=1`，再把接口拉起；显式启用了 `Host.ip6` 的接口会得到 `disable_ipv6=0, accept_ra=0, autoconf=0`。
+`h1 ifconfig` 实际在主机命名空间中运行 `ip -br addr`。邻居项处于 `INCOMPLETE` 或 `FAILED` 状态，表示地址解析尚未成功。列出交换机的表名后，可通过 `s1 table dump` 加表名查看相应表项。
 
-## pingall 全部失败
+ARP 的处理方式取决于 P4 程序。[快速上手](getting-started/quickstart.md)中的程序在两个端口之间转发以太网帧，包含 ARP，主机可以动态学习邻居。只转发 IPv4 的程序则可能需要静态邻居，或由控制器处理 ARP。
 
-!!! warning "现象"
-    `pingall` 矩阵全是 `X`；任意主机都 ping 不通其他主机。
+对于快速上手使用的同网段地址和 MAC，可为两端分别配置静态邻居：
 
-**原因。** 最常见的是没注入 ARP。BMv2 没有内置 ARP 响应器；不注入静态邻居，第一次 ICMP 请求触发的 ARP 广播在数据平面没有对应规则。
+```text
+p4net> h1 cmd ip neigh replace 10.0.0.2 lladdr 00:00:00:00:00:02 dev h1-eth0 nud permanent
+p4net> h2 cmd ip neigh replace 10.0.0.1 lladdr 00:00:00:00:00:01 dev h2-eth0 nud permanent
+p4net> pingall
+```
 
-!!! tip "修复"
-    示例都在 `setup(net)` 中注入 ARP：
+静态邻居提供 IP 到 MAC 的映射，转发表项仍需按 P4 程序配置。
 
-    ```python
-    h1.exec(["ip", "neigh", "replace", "10.0.0.2",
-             "lladdr", "00:00:00:00:00:02",
-             "dev", "h1-eth0", "nud", "permanent"])
-    ```
+## IPv6 地址或连通性不符合预期
 
-    要么对每对主机都注入，要么在 P4 程序里实现 ARP 响应器（比如经由 CPU 端口 punt 路径）。
+先核对拓扑中的 `ip6`、`ip6_a` 和 `ip6_b` 配置，再查看主机接口：
 
-## 改了 P4 源码但缓存似乎没失效
+```text
+p4net> h1 cmd ip -6 addr show dev h1-eth0
+p4net> h1 cmd sysctl net.ipv6.conf.h1-eth0.disable_ipv6
+```
 
-!!! warning "现象"
-    修改 `.p4` 文件后，运行的流水线里看不到改动。
+p4net 会为配置了 IPv6 地址的主机接口启用 IPv6，并关闭路由器通告处理和 SLAAC。未配置 IPv6 的接口会禁用 IPv6。IPv6 连通还需邻居解析和 IPv6 转发。可以在 P4 程序中转发邻居发现报文、交给控制器处理，或配置静态 IPv6 邻居，具体可参考[双栈示例](examples/dual-stack.md)。
 
-**原因。** 网络可能仍在运行旧流水线，或者 `p4_src` 指向了另一份文件。旧版 p4net 的缓存键仅包含主文件和编译设置，修改引用文件后也可能继续使用旧产物。
+## 命名空间或接口已经存在
 
-!!! tip "修复"
-    检查 `add_switch(p4_src=...)`，重启网络以加载新流水线。编译器现在会在复用缓存前检查预处理结果，包括嵌套引用文件。直接使用 `P4Compiler` 时，可以向 `compile()` 传入 `force=True` 强制重新编译。
+启动使用相同节点名称的新拓扑前，先关闭原来的实验。Python 中调用 `net.stop()`，异步代码中使用 `await net.astop()` 等待清理完成。进程被 `SIGKILL` 终止时，无法执行 Python 退出清理。
 
-## xterm 报 "DISPLAY not set"
+查看仍存在的资源：
 
-!!! warning "现象"
-    `<host> xterm` 返回 `error: NetworkError: cannot spawn xterm: $DISPLAY is unset`。
+```bash
+sudo ip netns list
+sudo ip -br link
+sudo ip netns exec h1 ip -br link
+```
 
-**原因。** 编排器进程访问不到 X server。`xterm` 需要 `$DISPLAY` 已设置且 X socket 可达。
+确认 `h1` 和根命名空间中的接口 `s1-eth1` 属于已停止实验的残留后，先删除交换机侧的 veth 接口，再删除命名空间：
 
-!!! tip "修复"
-    桌面 Linux 直接可用。SSH 远程则用 `ssh -X user@host`，若服务端要求受信转发就用 `-Y`。WSL2 上需要先装 X server（VcXsrv、转发到 XQuartz 等）并设置 `DISPLAY`。无头服务器上 `xterm` 根本不适用——一次性命令请用 `<host> cmd <argv>`。
+```bash
+sudo ip link delete s1-eth1
+sudo ip netns delete h1
+```
 
-## BMv2 gRPC 端口报 "Address already in use"
+主机侧的 `h1-eth0` 通常位于 `h1` 内。删除 veth 任意一端会同时删除另一端。
 
-!!! warning "现象"
-    BMv2 启动失败，`<log_dir>/<switch>.log` 出现 `Could not bind: Address already in use`。
+## 修改 P4 后运行结果没有变化
 
-**原因。** 另一个 `simple_switch_grpc` 进程（或其他进程）已经占用了编排器选择的端口。
+核对 `add_switch()` 中的 `p4_src` 路径，修改程序后重新启动网络。编译器会在复用缓存前检查预处理结果，包括引用的头文件。已经运行的交换机会继续使用原流水线，直到重新下发或重启。
 
-!!! tip "修复"
-    查找并终止占用方：
+编译缓存目录需要可写。直接使用编译器时，可以指定当前目录下的缓存并强制编译：
 
-    ```
-    sudo ss -ltnp | grep <port>
-    sudo pkill simple_switch_grpc
-    ```
+```python
+from pathlib import Path
 
-    编排器从 50051 开始分配端口；如果你长期遇到冲突，对各交换机显式覆盖：`topology.add_switch("s1", ..., grpc_port=50061)`。
+from p4net.compiler import P4Compiler
 
-## `topology graph` 报找不到 `dot`
+compiler = P4Compiler(cache_dir=Path(".cache/p4net"))
+result = compiler.compile(Path("port_swap.p4"), force=True)
+print(result.bmv2_json)
+print(result.p4info)
+```
 
-!!! warning "现象"
-    `topology graph /tmp/topo.png` 返回 `error: TopologyError: graphviz \`dot\` binary not found on PATH`。
+## `xterm` 无法打开窗口
 
-**原因。** 未安装 `graphviz`。
+主机的 `xterm` 命令需要已安装的 `xterm`、`DISPLAY` 环境变量，以及从该网络命名空间访问 X 服务的能力。先检查启动 p4net 时使用的环境：
 
-!!! tip "修复"
-    安装它（`sudo apt install graphviz`），或用 `format=dot` 直接输出源码：
+```bash
+command -v xterm
+printenv DISPLAY
+```
 
-    ```
-    p4net> topology graph /tmp/topo.dot format=dot
-    ```
+如果 `sudo` 清除了图形会话环境，启动时需保留 `DISPLAY` 和对应的 X 授权设置，X 服务也需允许该进程访问。只需执行命令时，可以使用命令行中的 `h1 cmd`，例如 `h1 cmd ip -br addr`。
 
-    然后用任何识别 DOT 的工具（在线渲染器、`gxl2dot` 等）渲染。
+## Graphviz 渲染时找不到 `dot`
 
-## 上面没覆盖你的问题
+渲染 SVG、PNG 或 PDF 需要 Graphviz，可通过 `sudo apt install graphviz` 安装。仅导出 DOT 文件不需要 `dot`：
 
-请到 <https://github.com/zhh2001/p4net/issues> 提交 issue，附上 `python -c "import p4net; print(p4net.__version__)"`、`p4c --version`、`simple_switch_grpc --version`、拓扑文件（或最小复现代码），以及 `<log_dir>/<switch>.log` 中相关日志。
+```text
+p4net> topology graph ./topology.dot format=dot
+p4net> topology graph ./topology.svg format=svg
+```
+
+第二条命令需要 Graphviz。`topology graph` 不带路径时，会直接在命令行输出 DOT 源码。
+
+## 提交问题
+
+[提交 issue](https://github.com/zhh2001/p4net/issues) 时，附上下列版本输出、完整异常、最小拓扑和 P4 程序，以及交换机日志中相关内容：
+
+```bash
+python -c "import p4net; print(p4net.__version__)"
+p4c --version
+simple_switch_grpc --version
+```
