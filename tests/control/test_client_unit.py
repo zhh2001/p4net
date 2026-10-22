@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import grpc
 import pytest
+from google.rpc import code_pb2, status_pb2
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2
 from pytest_mock import MockerFixture
@@ -570,6 +571,72 @@ def test_set_pipeline_config_failed_precondition_raises_pipeline_error(
     try:
         with pytest.raises(PipelineError, match="bad pipeline"):
             client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path, timeout=2.0)
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete", "multicast", "pipeline"])
+def test_write_permission_denied_raises_not_primary(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    wrapped: bool,
+    operation: str,
+) -> None:
+    client = _push_pipeline(connected_client)
+    stub: MagicMock = connected_client[1]["stub"]
+    error = _grpc_error(
+        grpc.StatusCode.UNKNOWN if wrapped else grpc.StatusCode.PERMISSION_DENIED,
+        "controller is not primary",
+    )
+    if wrapped:
+        status = status_pb2.Status(code=code_pb2.UNKNOWN)
+        status.details.add().Pack(p4runtime_pb2.Error(canonical_code=code_pb2.OK))
+        status.details.add().Pack(p4runtime_pb2.Error(canonical_code=code_pb2.PERMISSION_DENIED))
+        error.trailing_metadata = lambda: (  # type: ignore[method-assign]
+            ("grpc-status-details-bin", status.SerializeToString()),
+        )
+    stub.Write = MagicMock(side_effect=error)
+    stub.SetForwardingPipelineConfig = MagicMock(side_effect=error)
+    index = client.index
+    try:
+        with pytest.raises(NotPrimaryError, match="controller is not primary") as raised:
+            if operation == "pipeline":
+                client.set_pipeline_config(
+                    bmv2_json=connected_client[3], p4info=connected_client[2]
+                )
+            elif operation == "multicast":
+                client.add_multicast_group(1, [1, 2])
+            elif operation == "delete":
+                client.delete_table_entry("MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.1.0/24"})
+            else:
+                method = (
+                    client.insert_table_entry
+                    if operation == "insert"
+                    else client.modify_table_entry
+                )
+                method(
+                    "MyIngress.ipv4_lpm",
+                    {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+                    "MyIngress.set_egress_port",
+                    {"port": 2},
+                )
+        assert raised.value.__cause__ is error
+        assert client.is_connected()
+        assert client.index is index
+    finally:
+        client.disconnect()
+
+
+def test_write_permission_denied_without_detail(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    connected_client[1]["stub"].Write = MagicMock(
+        side_effect=_grpc_error(grpc.StatusCode.PERMISSION_DENIED)
+    )
+    try:
+        with pytest.raises(NotPrimaryError, match="not primary"):
+            client.add_multicast_group(1, [1, 2])
     finally:
         client.disconnect()
 

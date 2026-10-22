@@ -8,11 +8,14 @@ test session and hands out paths to its bmv2 JSON and P4Info.
 from __future__ import annotations
 
 import socket
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import grpc
 import pytest
+from pytest_mock import MockerFixture
 
 from p4net.compiler import P4Compiler
 from p4net.control import (
@@ -272,6 +275,68 @@ def test_not_primary_error_for_lower_election_id(
         assert b2.is_connected()
     finally:
         b2.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["write", "pipeline"])
+def test_write_after_losing_primary_raises_not_primary_and_recovers(
+    bmv2: BMv2Switch,
+    client: P4RuntimeClient,
+    compiled_artifacts: dict[str, Path],
+    mocker: MockerFixture,
+    operation: str,
+) -> None:
+    challenger = P4RuntimeClient(bmv2.grpc_address, device_id=0, election_id=(20, 0))
+    demoted = threading.Event()
+    promoted = threading.Event()
+    signal = client._stream_event.set
+
+    def arbitration_received() -> None:
+        signal()
+        if int(client._arbitration.status.code) == 0:
+            promoted.set()
+        else:
+            demoted.set()
+
+    mocker.patch.object(client._stream_event, "set", side_effect=arbitration_received)
+    channel = client._channel
+    consumer = client._stream_thread
+    index = client.index
+    try:
+        challenger.connect(timeout=5.0)
+        assert demoted.wait(timeout=2.0)
+        assert client.is_connected()
+        with pytest.raises(NotPrimaryError) as raised:
+            if operation == "pipeline":
+                client.set_pipeline_config(**compiled_artifacts)
+            else:
+                client.insert_table_entry(
+                    "MyIngress.ipv4_lpm",
+                    {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+                    "MyIngress.set_egress_port",
+                    {"port": 2},
+                )
+        cause = raised.value.__cause__
+        assert isinstance(cause, grpc.RpcError)
+        assert cause.code() == grpc.StatusCode.PERMISSION_DENIED
+        assert client.index is index
+        assert client.list_table_entries() == []
+
+        challenger.disconnect()
+        assert promoted.wait(timeout=2.0)
+        assert client.is_connected()
+        assert client._channel is channel
+        assert client._stream_thread is consumer
+        if operation == "pipeline":
+            client.set_pipeline_config(**compiled_artifacts)
+        client.insert_table_entry(
+            "MyIngress.ipv4_lpm",
+            {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+            "MyIngress.set_egress_port",
+            {"port": 2},
+        )
+        assert [entry["params"] for entry in client.list_table_entries()] == [{"port": b"\x02"}]
+    finally:
+        challenger.disconnect()
 
 
 # ---------------------------------------------------------------------------

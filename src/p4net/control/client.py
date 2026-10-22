@@ -1133,6 +1133,8 @@ class P4RuntimeClient:
                     break
         if code == grpc.StatusCode.UNAVAILABLE:
             return ConnectionError(f"gRPC unavailable for {self._target!r}: {detail}")
+        if code == grpc.StatusCode.PERMISSION_DENIED:
+            return NotPrimaryError(detail or "client is not primary")
         if code == grpc.StatusCode.NOT_FOUND:
             return EntryNotFoundError(detail or "entry not found")
         if code == grpc.StatusCode.ALREADY_EXISTS:

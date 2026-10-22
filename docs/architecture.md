@@ -73,6 +73,8 @@ P4Runtime gRPC client and codec helpers:
 
 When the synchronous client's StreamChannel ends or fails, it clears its connected state and closes the gRPC channel. New operations raise `ConnectionError`. Call `connect()` to establish a new stream on the same client. `connect()` and `disconnect()` wait for channel cleanup already in progress. If the stream ends during the initial arbitration, `connect()` fails immediately.
 
+If the switch rejects a synchronous write or pipeline update with `PERMISSION_DENIED`, the client raises `NotPrimaryError` and preserves the original RPC error as its cause. Losing primary status leaves the connection open for reads. Writes can resume on the same connection after the switch grants primary status again.
+
 API: [`p4net.control`](api/control.md).
 
 ### `p4net.network`

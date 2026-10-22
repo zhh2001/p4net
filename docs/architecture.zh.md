@@ -73,6 +73,8 @@ P4Runtime gRPC 客户端与 codec 帮助函数：
 
 同步客户端的 StreamChannel 结束或报错后，会清除连接状态并关闭 gRPC 通道。此后发起新操作会抛出 `ConnectionError`，可调用 `connect()` 在同一客户端上重新连接。旧通道正在清理时，`connect()` 和 `disconnect()` 会等待清理完成。初次仲裁期间断流时，`connect()` 会立即报错。
 
+交换机以 `PERMISSION_DENIED` 拒绝同步写入或流水线更新时，客户端会抛出 `NotPrimaryError`，并将原始 RPC 错误保留为异常原因。失去主控权不会关闭连接，仍可读取。重新获得主控权后，可通过同一连接继续写入。
+
 API：[`p4net.control`](api/control.md)。
 
 ### `p4net.network`
