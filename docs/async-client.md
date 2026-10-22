@@ -1,134 +1,170 @@
 ---
-description: AsyncP4RuntimeClient is a parallel async P4Runtime client based on grpc.aio. Stable in 1.x since 1.7.0; mirrors the sync client's API.
+description: Connecting the async P4Runtime client, managing primary status, programming tables, receiving PacketIn, and handling errors.
 ---
 
 # Async client
 
-`AsyncP4RuntimeClient` (added in 1.6) is the async parallel to the sync `P4RuntimeClient` shipped since 1.0. Same public method names, every method `async def`, backed by `grpc.aio` instead of the sync gRPC channel.
+`AsyncP4RuntimeClient` uses `grpc.aio` for concurrent switch programming and PacketIn handling in an event loop. It shares table encodings and the exception hierarchy with `P4RuntimeClient`, but some methods, call patterns, and return types differ. It has been a [stable API](api-stability.md#p4netcontrol) in p4net 1.x since 1.7.0.
 
-The two clients are independent and can coexist. The sync API at `switch.client` remains the recommended starting point for new code; the async API at `switch.async_client` is the right choice when you need concurrency across switches, async PacketIn handlers, or want to avoid the sync client's threading-related caveats.
+## Complete example
 
-`AsyncP4RuntimeClient` is **Stable** in p4net 1.x since version 1.7.0 (promoted from Provisional after empirical user soak — see the [API Stability](api-stability.md) page for the contract).
+This program starts one switch and two hosts, inserts an IPv4 route, and reads it back. `Network.start()` compiles and installs the pipeline. The async client uses the sync client's P4Info index and a higher election ID to become primary.
 
-## Why async
-
-Three reasons to reach for the async API:
-
-1. **Concurrent operations across switches.** Programming N switches' forwarding tables sequentially is O(N × RTT); using `asyncio.gather` collapses that to O(RTT) plus event-loop overhead. The [`async_concurrent`](examples/async-concurrent.md) example shows the speedup pattern in practice.
-
-2. **Natural async PacketIn handlers.** Register an `async def` callback with `client.on_packet_in(...)` and propagate values through the rest of your async pipeline. The sync client's handlers run on a background thread; the async client's run on your event loop.
-
-3. **Bypasses the sync client's multi-threaded-fork pathology.** The sync `P4RuntimeClient` spawns gRPC background threads; combining that with `subprocess.run` in the same Python process can deadlock — see [Known Limitations](known-limitations.md). `grpc.aio` doesn't spawn background threads, so the trap doesn't apply.
-
-## Quick start
+Save the code as `async_demo.py` in the repository root:
 
 ```python
 import asyncio
+from pathlib import Path
+
 from p4net import Network
+from p4net.control import AsyncP4RuntimeClient
 from p4net.topo import Topology
 
 topology = Topology()
-# ... configure topology ...
+h1 = topology.add_host("h1", ip="10.0.1.1/24")
+h2 = topology.add_host("h2", ip="10.0.2.1/24")
+s1 = topology.add_switch("s1", p4_src=Path("examples/async_concurrent/concurrent.p4"))
+topology.add_link(h1, s1, port_b=1)
+topology.add_link(h2, s1, port_b=2)
 
-async def main(net: Network) -> None:
-    sw = net.switch("s1")
-    client = sw.async_client
 
-    async with client:
-        await client.insert_table_entry(
-            "MyIngress.ipv4_lpm",
-            {"hdr.ipv4.dstAddr": "10.0.0.0/24"},
-            "MyIngress.set_egress_port",
-            {"port": 2},
-        )
-        async for entry in client.list_table_entries("MyIngress.ipv4_lpm"):
-            print(entry)
-
-with Network(topology) as net:
-    asyncio.run(main(net))
-```
-
-## Shutting down a network
-
-Use `await net.astop()` when the network is managed inside an event loop:
-
-```python
 async def main() -> None:
     net = Network(topology)
     await asyncio.to_thread(net.start)
     try:
-        client = net.switch("s1").async_client
-        await client.connect()
-        # ... use the network ...
+        sw = net.switch("s1")
+        client = AsyncP4RuntimeClient(
+            grpc_address=("127.0.0.1", sw.bmv2.grpc_port),
+            device_id=sw.client.device_id,
+            info_index=sw.client.index,
+            thrift_address=("127.0.0.1", sw.bmv2.thrift_port),
+            election_id=(sw.client.election_id[0] + 1, 0),
+        )
+        async with client:
+            await client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dstAddr": "10.0.2.0/24"},
+                "MyIngress.set_egress_port",
+                {"port": 2},
+            )
+            async for entry in client.list_table_entries("MyIngress.ipv4_lpm"):
+                print(entry)
     finally:
         await net.astop()
+
 
 asyncio.run(main())
 ```
 
-`astop()` closes each cached async client on the event loop where it connected, then tears down the network resources. It also closes clients still waiting for arbitration. Keep those event loops running until `astop()` finishes. If the shutdown task is cancelled, cleanup finishes before `CancelledError` propagates.
+Run as root using the Python interpreter where p4net is installed:
 
-The synchronous `net.stop()` remains available. Outside an event loop, it waits for cleanup to finish. Inside an event loop, it starts cleanup in a background thread and returns. Use `await net.astop()` to wait for that cleanup. Both methods support repeated calls.
+```bash
+sudo "$(command -v python)" async_demo.py
+```
 
-## API reference
+The output should contain a `MyIngress.ipv4_lpm` entry with action parameters `{'port': b'\x02'}`. See the [async concurrent example](examples/async-concurrent.md) for a full forwarding topology.
 
-See the generated docs for `p4net.control.AsyncP4RuntimeClient`: constructor, properties, lifecycle, table CRUD, counters, registers, packet I/O.
+## Connections and primary status
 
-The API mirror is exact at the method-name level. Where the sync API returns a `list[dict]` for streaming reads, the async API returns an `AsyncIterator[dict]` — `list_table_entries` is the canonical example. Where the sync API takes a `Callable[[bytes, dict], None]` for `on_packet_in`, the async API takes a `Callable[[bytes, dict], Awaitable[None]]`.
+`net.switch("s1").async_client` lazily creates and caches an unconnected client with the sync client's current P4Info index. Call `await client.connect()` before using it. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
 
-## Mastership and dual clients
+Without an explicit `election_id`, the async client generates one from the current millisecond timestamp at its first connection. The sync client created by `Network` also uses a timestamp, so do not rely on construction order to assign primary status. Construct a client with an explicit election ID, as in the complete example, when you need to choose which client writes. Election IDs are compared as `(high, low)` pairs.
 
-Each `P4Runtime` client owns an election ID. The BMv2 device accepts exactly one client as **primary** at any moment; others are secondary. The sync and async clients are **independent** — they each have their own election ID, even when they're hitting the same switch.
+For a backup client that only reads, construct it with `election_id=(0, 0)`. This value permits a backup connection. With other election IDs, an unsuccessful initial arbitration makes `connect()` raise `NotPrimaryError` and close the connection.
 
-Three usage patterns:
+`client.is_primary` reflects the latest arbitration response. After losing primary status, a connected client can still read tables, while P4Runtime writes raise `NotPrimaryError`. `client.is_connected` is a Boolean property, used without parentheses.
 
-- **All sync (the v1.0 default).** Build a `Network`, use `switch.client` for everything. The sync client's election ID is the millisecond-time-since-epoch of `Network.start()`, so it's primary by default.
+## Differences from the sync API
 
-- **All async.** Use `switch.async_client.connect()` for every switch. Pass `election_id=(higher_value, 0)` if the sync client is also connected somewhere; otherwise the async client takes primary on first arbitration.
+| Operation | Sync client | Async client |
+| --- | --- | --- |
+| Connect and disconnect | `connect()`, `disconnect()` | `await connect()`, `await disconnect()` |
+| Table writes | Direct calls | Same method names, used with `await` |
+| Table reads | `list_table_entries()` returns a list | Returns an async iterator, consumed with `async for` without a preceding `await` |
+| P4Info index | `client.index` | `client.info_index` |
+| Pipeline installation | `set_pipeline_config()` accepts file paths | `await push_pipeline()` accepts P4Info text and BMv2 JSON as bytes |
+| One counter cell | `CounterData`, with packet and byte counts | `int`, containing only the packet count |
+| All counter cells | `{index: CounterData}` | `{index: packet_count}` |
+| PacketIn handlers | Regular functions, called on the receiver thread | Async functions, awaited on the event loop |
 
-- **Mixed with explicit election IDs.** Sync primary (writes); async secondary (reads only). Construct the async client with `election_id=(0, 0)` to force it into secondary; reads still work, writes raise `NotPrimaryError`.
+The async client currently has no `get_pipeline_config()`, `clear_table()`, `reset_counter()`, or multicast group operations. See the [control-plane API](api/control.md) for full signatures.
 
-Each arbitration notification updates `client.is_primary`: status `OK` sets it to `True`, and any other status sets it to `False`. The connection stays open when primary status changes. A client that loses primary status can still read, while writes raise `NotPrimaryError`.
+When installing a pipeline yourself, pass text-format P4Info bytes to `push_pipeline()`, rather than a binary protobuf. The client replaces its P4Info index only after a successful response, retaining the previous index after failure or cancellation. Register operations use `simple_switch_CLI`; install that tool and pass `thrift_address` when constructing the client.
 
-## Cancellation and error handling
+## Concurrent operations and PacketIn
 
-`grpc.aio` surfaces remote errors as `grpc.aio.AioRpcError`; the async client translates these into the same exception hierarchy as the sync client (`DuplicateEntryError`, `EntryNotFoundError`, `NotPrimaryError`, `PipelineError`, `P4RuntimeError`).
+For multiple connected primary clients, table writes can run concurrently:
 
-For an `UNKNOWN` response containing per-update P4Runtime errors, the client uses the first recognized failure code, just like the sync client. Duplicate entries raise `DuplicateEntryError`; missing entries raise `EntryNotFoundError`. Missing or malformed error details leave the error as `P4RuntimeError`. The original RPC error remains available as the exception's cause.
+```python
+async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
+    await asyncio.gather(
+        *(
+            client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dstAddr": "10.0.2.0/24"},
+                "MyIngress.set_egress_port",
+                {"port": 2},
+            )
+            for client in clients
+        )
+    )
+```
 
-Table and counter requests that return `FAILED_PRECONDITION` raise `P4RuntimeError` with the server's explanation. For example, this status can mean that no forwarding pipeline has been configured. `PERMISSION_DENIED` still raises `NotPrimaryError`.
+This overlaps the time spent waiting for RPC responses across switches. Total time depends on the number of requests and the switches' processing speed.
 
-`push_pipeline()` classifies RPC failures by status and preserves the original RPC error as the exception's cause:
+Both `on_packet_in()` and its returned unsubscribe function require `await`. This function registers a handler and removes it after waiting for one PacketIn:
+
+```python
+async def watch_packet(client: AsyncP4RuntimeClient) -> None:
+    async def handle_packet(payload: bytes, metadata: dict[str, int]) -> None:
+        print("PacketIn:", len(payload), metadata)
+
+    unsubscribe = await client.on_packet_in(handle_packet)
+    try:
+        await client.expect_packet_in(timeout=5.0)
+    finally:
+        await unsubscribe()
+```
+
+The P4 program must send packets to the CPU port; see the [CPU punt example](examples/cpu-punt.md). The receiver task awaits handlers in sequence. Send lengthy work to a queue or another task.
+
+## Errors, timeouts, and cancellation
+
+RPC failures are translated into p4net exceptions, with the original `grpc.aio.AioRpcError` available through `__cause__`:
 
 | RPC status | Exception |
 | --- | --- |
 | `PERMISSION_DENIED` | `NotPrimaryError` |
 | `UNAVAILABLE` | `ConnectionError` |
-| `CANCELLED` | `AsyncOperationCancelledError` |
-| `INVALID_ARGUMENT`, `FAILED_PRECONDITION` | `PipelineError` |
-| `NOT_FOUND` | `EntryNotFoundError` |
 | `ALREADY_EXISTS` | `DuplicateEntryError` |
+| `NOT_FOUND` | `EntryNotFoundError` |
+| `CANCELLED` | `AsyncOperationCancelledError` |
 | Other error statuses | `P4RuntimeError` |
 
-Failed or cancelled updates retain the current P4Info index. The index is replaced only after a successful response. Cancelling the calling task raises `AsyncOperationCancelledError`; expiration of `push_pipeline(timeout=...)` raises `asyncio.TimeoutError`.
+For `push_pipeline()`, `INVALID_ARGUMENT` and `FAILED_PRECONDITION` instead raise `PipelineError`. For table and counter requests, `FAILED_PRECONDITION` is a regular `P4RuntimeError`, for example when no forwarding pipeline is configured.
 
-If `connect()` is cancelled while waiting for arbitration, it closes its gRPC channel and stops its stream task before propagating `asyncio.CancelledError`. Cancellation by an outer `asyncio.wait_for()` follows the same cleanup path.
+When an outer `UNKNOWN` response contains per-update P4Runtime errors, the client selects the first recognized non-success code. If no such code can be decoded, it raises `P4RuntimeError`.
 
-When the StreamChannel ends or fails, the client clears `is_connected` and `is_primary` and closes the channel. New operations raise `ConnectionError`. Call `connect()` to establish a new stream on the same client. If the stream ends during the initial arbitration, `connect()` fails without waiting for the arbitration timeout. If cleanup is still running, `connect()` and `disconnect()` wait for it to finish.
+Cancellation and timeout results depend on the operation. The timeout column refers to the method's own `timeout=` parameter:
 
-When an in-flight operation is cancelled — typically because the owning task was cancelled, or `disconnect()` was called concurrently — the async client raises [`AsyncOperationCancelledError`](api-stability.md#p4netcontrol), a subclass of `P4RuntimeError`. This lets cancellation sites distinguish a clean cancel from a connection failure:
+| Operation | Calling task cancelled | Timeout |
+| --- | --- | --- |
+| `connect()` | Cleans up, then propagates `asyncio.CancelledError` | Arbitration timeout raises `ConnectionError` |
+| `push_pipeline()`, table writes | `AsyncOperationCancelledError` | `asyncio.TimeoutError` |
+| Iterating `list_table_entries()` | `asyncio.CancelledError` | `P4RuntimeError`, caused by RPC status `DEADLINE_EXCEEDED` |
+| `read_counter()` | `AsyncOperationCancelledError` | `P4RuntimeError`, caused by RPC status `DEADLINE_EXCEEDED` |
+| Register operations, `expect_packet_in()` | `AsyncOperationCancelledError` | `P4RuntimeError` |
 
-```python
-try:
-    await asyncio.wait_for(client.insert_table_entry(...), timeout=1.0)
-except asyncio.TimeoutError:
-    ...  # the wait_for timeout
-except AsyncOperationCancelledError:
-    ...  # in-flight task was cancelled mid-RPC
-except P4RuntimeError:
-    ...  # any other client failure
-```
+An outer `asyncio.wait_for()` cancels the operation it is awaiting, so its final exception also depends on that operation's cancellation handling.
 
-## Stability
+## Shutting down a network
 
-The async API is **Stable** in p4net 1.x since version 1.7.0. It was introduced as Provisional in 1.6.0 and promoted after real-world user soak surfaced no need for backwards-incompatible adjustments — see the [API Stability](api-stability.md#provisional-tier-and-async-client) page for the full contract and promotion rationale.
+Connect, use, and close an async client on the same event loop. The [gRPC AsyncIO documentation](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats) also requires async objects to be used on the thread where they were created. `Network.start()` is synchronous; use `await asyncio.to_thread(net.start)` inside a coroutine.
+
+`await net.astop()` closes the network's cached async clients before releasing network resources. Close clients you construct yourself with `async with` or `await client.disconnect()`, as the complete example does. Keep the clients' event loops running until shutdown finishes. If `astop()` is cancelled, it finishes cleanup before propagating `CancelledError`.
+
+Outside an event loop, `net.stop()` waits for cleanup. Inside an event loop, it starts cleanup in a background thread and returns. Use `await net.astop()` when you need to wait for shutdown.
+
+When the StreamChannel ends or fails, the client clears its connection and primary status and closes the channel. Call `connect()` on the same instance to reconnect. If the stream ends during initial arbitration, the connection wait ends immediately. `connect()` and `disconnect()` wait for any cleanup already in progress.
+
+`grpc.aio` still uses background threads. When creating worker processes, start the processes before opening gRPC connections in each process. See [gRPC's fork documentation](https://github.com/grpc/grpc/blob/master/doc/fork_support.md).

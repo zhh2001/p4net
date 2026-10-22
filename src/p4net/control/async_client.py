@@ -1,17 +1,14 @@
 """Asynchronous P4Runtime client using ``grpc.aio``.
 
-``AsyncP4RuntimeClient`` mirrors the public API surface of the sync
-:class:`p4net.control.P4RuntimeClient`, but every method is ``async def``.
-The two clients are independent: each owns its own gRPC channel, election
-ID, and primary/secondary state. To run both clients against the same
-BMv2 instance, callers must coordinate mastership explicitly (the sync
-client wins by default because it usually connects first and grabs a
-higher election ID via the millisecond-time-since-epoch generator).
+Connection setup, writes, counters, registers, and packet I/O use
+coroutines. ``list_table_entries`` returns an async iterator. Use and
+close each client's gRPC resources on the event loop where it connected.
 
-**Stable** in p4net 1.x since version 1.7.0 (promoted from Provisional
-after empirical user validation, within the two-minor-release commitment
-made in 1.6.0). Backwards-incompatible changes will require a deprecation
-cycle. See ``docs/api-stability.md`` for the full contract.
+Sync and async clients have separate channels and election IDs. Coordinate
+primary status explicitly when connecting both to the same device.
+
+The public API is stable in p4net 1.x since version 1.7.0. See
+``docs/api-stability.md`` for the contract.
 """
 
 from __future__ import annotations

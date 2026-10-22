@@ -253,23 +253,18 @@ class RunningSwitch:
 
         Returns an **unconnected** :class:`AsyncP4RuntimeClient`. Call
         ``await async_client.connect()`` to attach. The async client
-        receives the parsed P4Info index from the sync client at
-        ``self.client``, so reads/writes against the running pipeline
-        work immediately after connect.
+        receives the sync client's current P4Info index when created.
 
-        Mastership is independent: each client has its own election ID.
-        By default the sync client wins primary because it connected
-        first (its election ID is the millisecond-time-since-epoch of
-        ``Network.start``, which precedes any async lazy construction).
-        If you want async to be primary, pass ``election_id=(...)`` with
-        a higher value when constructing your own client; calling
-        ``async_client.connect()`` without further configuration will
-        take primary if the sync client has been disconnected, otherwise
-        the BMv2 will reject the arbitration.
+        The async client generates its own timestamp-based election ID
+        on first connection. Its primary status is independent of the
+        sync client's. To choose an election ID explicitly, construct an
+        :class:`AsyncP4RuntimeClient` yourself. A higher election ID can
+        take primary status from an existing client; ``(0, 0)`` permits
+        a backup connection for reads.
 
         The returned instance is cached; subsequent property accesses
-        return the same object. Reset on ``Network.stop()`` so the next
-        ``Network.start()`` (if supported) gets a fresh client.
+        return the same object. ``Network.stop()`` and ``Network.astop()``
+        close the cached client on its owning event loop and clear it.
 
         **Stable** in p4net 1.x since version 1.7.0 — see
         :class:`AsyncP4RuntimeClient`.
