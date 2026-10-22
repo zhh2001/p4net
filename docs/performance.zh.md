@@ -1,143 +1,112 @@
 ---
-description: p4net 1.0 在 1–8 交换机拓扑下的启动/停止延迟与内存基线。结果具有指示性，并非生产硬件基准。
+description: 测量拓扑启停耗时、空闲 CPU 和内存占用，保留运行环境与原始采样数据。
 ---
 
-# 性能特征
+<a id="性能特征"></a>
 
-p4net 封装的是 `simple_switch_grpc`——一个软件 P4 数据平面。它的
-设计目标不是线速转发基准，而是 P4 程序与控制器的快速迭代。本页
-的数字提供给读者用来估计「我的拓扑要花多久启动」「会消耗多少
-内存」，而不是与硬件 ASIC 比较。
+# 性能基线
+
+本基线测量本机拓扑的启停耗时、运行后空闲状态的 CPU 和内存占用，并检查主机之间是否连通。测量对象是当前检出的项目版本。
 
 ## 测量方法
 
-下面的脚本构建一个 N 交换机的拓扑（每台交换机连两台主机），测量
-`Network.start()` 与 `Network.stop()` 的墙钟时间，然后拆掉。每个
-单元格取两次测试的中位数。内存通过 `/usr/bin/time -v` 报告的
-峰值常驻集（RSS）记录，单独跑一次。pingall 一行使用 2 主机 1
-交换机的拓扑，搭配自带的端口翻转流水线；提前注入静态 ARP；每对
-1 个 ICMP。
+[`tools/benchmark.py`](https://github.com/zhh2001/p4net/blob/main/tools/benchmark.py) 分别构建 1、2、4、8 台交换机，每台连接两台主机。各组交换机与主机相互独立，增加交换机数量会增加进程和命名空间数量，不会增加转发跳数。所有交换机都运行自带的 `examples/quick_start/quick_start.p4` 端口互换程序，使用 BMv2 默认的 `info` 日志级别，不启用抓包或链路损伤。
 
-本地复现：
+每种规模分别在以下两种编译缓存状态下运行五次：
 
-```python
-"""perf_measure.py — minimal harness for p4net 1.0 perf baseline."""
-import gc, socket, statistics, time, uuid
-from pathlib import Path
+- **空缓存（empty）**：每次试验使用新的产物目录。第一台交换机编译程序，其余交换机复用产物。
+- **预热缓存（warm）**：先在本次试验的新目录中编译程序，再计时启动拓扑。所有交换机都复用产物，每次调用仍会执行 P4 预处理。
 
-from p4net import Network
-from p4net.topo import Topology
+这里的缓存指 p4net 的编译产物缓存。脚本不会清空操作系统的文件缓存，会核对并保存每台交换机的缓存命中情况。缓存与拓扑规模的执行顺序逐轮交替。
 
-P4_SRC = Path("examples/quick_start/quick_start.p4").resolve()
+每次试验都启动新的 Python 解释器。协调进程不建立 gRPC 连接，避免前一次试验的 gRPC 线程影响后续进程创建。垃圾回收保持默认设置。
 
+| 指标 | 统计范围 |
+| --- | --- |
+| 启动耗时（秒） | 仅对 `Network.start()` 调用计时。包含编译或缓存查找、命名空间和接口配置、依次启动 BMv2、连接 P4Runtime 和安装流水线。不含解释器启动、拓扑描述构建和缓存预热。 |
+| 停止耗时（秒） | 仅对 `Network.stop()` 调用计时，包含关闭控制连接、停止 BMv2、删除接口和命名空间。 |
+| 空闲 CPU（%） | 拓扑的 Python 工作进程与全部 BMv2 进程的用户态、内核态 CPU 时间之和，除以实际采样时长。100% 代表占用一个逻辑 CPU，总和可以超过 100%。 |
+| PSS（MiB） | 每次采样先汇总上述进程的比例常驻内存，再对采样值取平均。共享映射按使用进程分摊。 |
+| RSS 总和（MiB） | 每次采样先汇总上述进程的常驻内存，再对采样值取平均。共享页面可能被重复计算。 |
+| 连通性 | 每组主机双向各发送一次 IPv4 ping。全部成功后，该次试验才会产生结果。 |
 
-def _two_free_ports() -> tuple[int, int]:
-    with (
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as a,
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as b,
-    ):
-        a.bind(("127.0.0.1", 0))
-        b.bind(("127.0.0.1", 0))
-        return int(a.getsockname()[1]), int(b.getsockname()[1])
+启停计时使用 Python 的 [`perf_counter_ns()`](https://docs.python.org/3/library/time.html#time.perf_counter_ns)。连通性检查完成后先静置一秒，再由协调进程每隔 250 毫秒采样一次，持续五秒。CPU 时间读取自 `/proc/PID/stat`，内存读取自 `/proc/PID/smaps_rollup`，字段含义见 [Linux proc 文档](https://www.kernel.org/doc/html/latest/filesystems/proc.html)。采样期间持续核对进程身份。
 
+资源数据只覆盖空闲窗口内的 Python 工作进程和 BMv2 进程，不包含协调进程、编译子进程、内核网络资源或其他应用。内存值是采样均值，不是完整启停周期的峰值。ping 在采样前执行，不预设静态 ARP，只检查连通性，不报告 RTT 或吞吐量。
 
-def build_topology(n_switches: int) -> Topology:
-    suffix = uuid.uuid4().hex[:6]
-    topo = Topology()
-    for i in range(n_switches):
-        s = f"s{suffix}{i}"
-        g, t = _two_free_ports()
-        topo.add_switch(s, p4_src=P4_SRC, grpc_port=g, thrift_port=t)
-        for j in range(2):
-            h = f"h{suffix}{i}{'a' if j == 0 else 'b'}"
-            topo.add_host(h, ip=f"10.0.{i}.{j + 1}/24",
-                          mac=f"00:00:00:00:{i:02x}:{j + 1:02x}")
-            topo.add_link(h, s, port_b=j + 1)
-    return topo
+## 本地运行
 
+在 Linux 环境的项目源码目录中运行。先将 p4net 安装到虚拟环境，并确认 `PATH` 中有 `p4c`、`simple_switch_grpc`、`ip` 和 `ping`。创建命名空间和读取进程内存需要 root。
 
-def measure(n: int) -> tuple[float, float]:
-    topo = build_topology(n)
-    gc.disable()
-    t0 = time.perf_counter()
-    net = Network(topo)
-    net.start()
-    t1 = time.perf_counter()
-    net.stop()
-    t2 = time.perf_counter()
-    gc.enable()
-    return t1 - t0, t2 - t1
+先在仓库根目录检查脚本和本机依赖：
 
-
-for n in (1, 2, 4, 8):
-    runs = [measure(n) for _ in range(2)]
-    starts = [r[0] for r in runs]
-    stops = [r[1] for r in runs]
-    print(f"n={n}: start={statistics.median(starts):.2f}s "
-          f"stop={statistics.median(stops):.2f}s")
+```bash
+sudo env "PATH=$PATH" .venv/bin/python tools/benchmark.py \
+  --check --switches 1 2 --output .cache/benchmarks/check
 ```
 
-执行：
+`--check` 对每种规模和缓存组合运行一次，检查缓存行为、双向连通性、进程内存读取和资源回收，不保存性能采样、启停耗时或汇总表。
 
+正式采集前，关闭占用 CPU 或内存较多的应用，等待后台活动平稳。如果重启电脑，等开机任务结束后再测。不同轮次保持相同的电源模式、WSL 资源限制和其他负载条件。
+
+```bash
+sudo env "PATH=$PATH" .venv/bin/python tools/benchmark.py \
+  --switches 1 2 4 8 --trials 5 \
+  --idle-seconds 5 --interval 0.25 --settle 1 \
+  --output .cache/benchmarks/baseline
 ```
-sudo -E env "PATH=$PATH" python perf_measure.py
-sudo -E env "PATH=$PATH" /usr/bin/time -v python perf_measure.py     # 测内存
-```
+
+输出目录必须是新目录。后续试验失败时，已经完成的日志和结果会保留。遇到错误或协调进程退出时，脚本会请求工作进程清理拓扑。正常停止后还会检查拓扑进程、命名空间和交换机接口是否残留。
 
 ## 测试环境
 
-- **CPU**：13th Gen Intel Core i5-13500H。
-- **RAM**：运行时可用 8 GB。
-- **内核**：6.6（WSL2 兼容内核）。
-- **操作系统**：Ubuntu 24.04。
-- **Python**：3.12。
-- **BMv2**：`simple_switch_grpc` v1.15。
+`environment.json` 记录系统时间、Git 版本与工作区状态、脚本和 P4 源文件的哈希值、Python 及依赖版本、p4c/BMv2 版本、Linux 和发行版信息、CPU 信息与亲和性、内存信息、负载及测量参数。保存结果时一并保留这个文件。
 
-WSL2 在命名空间与 `tc` 系统调用上引入了一定开销。把本页所有数字
-当作上界；裸机 Linux 会略快。
+WSL2 数据只代表对应的 WSL2 环境。估算另一台机器的启停耗时或内存需求时，应在目标机器上测量。
+
+下方基线采集于 2026-10-23，运行代码对应 [`b2ebbc9`](https://github.com/zhh2001/p4net/commit/b2ebbc964041b30b66b8d089e2d157faea9f1595)，包版本为 `1.7.0`。
+
+| 项目 | 实际环境 |
+| --- | --- |
+| 采集时段 | 2026-10-23 01:48–01:54，UTC+08:00 |
+| CPU | Intel Core i5-13500H，进程可使用 16 个逻辑 CPU |
+| 内存 | WSL2 可见 7.75 GiB |
+| 系统 | Ubuntu 24.04.5 LTS，Linux 6.6.87.2-microsoft-standard-WSL2 |
+| Python | 3.12.3 |
+| 本机工具 | p4c 1.2.5.10（`8b6de3c57`，Release），BMv2 `1.15.0-2bdd0b7b` |
+| 依赖 | grpcio 1.84.0、pyroute2 0.9.6、protobuf 7.36.2、p4runtime 1.6.0 |
 
 ## 测量结果
 
-| 交换机 | 主机 | start (s) | stop (s) |
-| ------ | ---- | --------- | -------- |
-| 1      | 2    | 0.52      | 0.27     |
-| 2      | 4    | 0.55      | 0.51     |
-| 4      | 8    | 1.05      | 0.93     |
-| 8      | 16   | 2.13      | 2.02     |
+`results.json` 保存全部已完成的试验。每次试验的目录还包含独立的 `result.json`、拓扑节点名称、编译产物和 BMv2/工作进程日志。结果中保留每个进程的资源采样和双向 ping 检查结果。某次试验失败时会停止整轮运行，不将未完成的结果计入汇总。
 
-| 场景                            | 墙钟时间  | 峰值 RSS |
-| ------------------------------- | --------- | -------- |
-| `pingall`（1 交换机 / 2 主机）  | 0.02 s    | —        |
-| n=4 拓扑启动（完整一轮）        | —         | ~55 MB   |
+`summary.md` 对每种规模和缓存组合汇总五次试验，分别列出启动耗时、停止耗时、空闲 CPU 占用和内存采样均值的中位数。发布表格时同时保留原始数据，以便查看波动。
 
-（数字来自上文环境的一次实测。交换机行均为预热缓存后的单次试验；
-冷缓存会额外加上一次 `p4c` 调用成本。在不同硬件上重跑得到的数字
-会不同——脚本本身才是规范流程，本表只是某次快照。）
+40 次试验全部完成，300 次方向性 ping 检查全部成功。每次试验产生 21 次资源采样，实际空闲窗口为 5.001–5.012 秒。没有剔除任何试验，每个拓扑的资源回收检查均通过。
+
+| 交换机 | 主机 | 缓存 | 次数 | 启动（秒） | 停止（秒） | 空闲 CPU（%） | PSS（MiB） | RSS 总和（MiB） |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2 | empty | 5 | 0.475 | 0.206 | 0.4 | 82.4 | 97.4 |
+| 1 | 2 | warm | 5 | 0.264 | 0.200 | 0.4 | 82.4 | 97.4 |
+| 2 | 4 | empty | 5 | 0.735 | 0.429 | 1.0 | 96.0 | 138.1 |
+| 2 | 4 | warm | 5 | 0.530 | 0.411 | 1.0 | 95.9 | 138.1 |
+| 4 | 8 | empty | 5 | 1.250 | 0.896 | 1.8 | 121.9 | 219.6 |
+| 4 | 8 | warm | 5 | 1.011 | 0.856 | 1.6 | 121.8 | 219.5 |
+| 8 | 16 | empty | 5 | 2.278 | 1.714 | 2.8 | 173.0 | 382.5 |
+| 8 | 16 | warm | 5 | 2.079 | 1.658 | 2.6 | 173.0 | 382.5 |
+
+表中各值均为五次试验的中位数，内存列先对每次试验的采样取平均。CPU 以一个逻辑 CPU 为 100%。这台机器的 CPU 时间按 10 毫秒计数，在五秒窗口中约对应 0.2 个百分点。
+
+单交换机空缓存组的启动耗时范围为 0.449–0.795 秒。八交换机预热缓存组的启动耗时范围为 2.004–2.142 秒，停止耗时为 1.588–1.833 秒。[原始基线数据包](assets/benchmarks/2026-10-23-b2ebbc9-py312.zip)包含全部试验、环境信息、启停耗时范围、日志、实际使用的脚本和 P4 源文件，以及 SHA-256 校验清单。
 
 ## 观察
 
-- **启动时间主要受 BMv2 的 gRPC 绑定阶段控制**。每个
-  `simple_switch_grpc` 进程从 `Popen` 到接受连接需要约 1.5–2 秒；
-  在串行启动时随交换机数量线性增长。后续版本可考虑并行化这一步。
-- **停止时间主要受 BMv2 进程的 `SIGTERM → wait → SIGKILL` 控制**。
-  每个进程有 2 秒优雅退出窗口；这台机器上 BMv2 总能在窗口内退出。
-- **2 主机拓扑的 `pingall`** 大致等于两次
-  `ip netns exec ping -c 1` 调用加上实际 ICMP 往返时间；上限是
-  `ping -W`，与数据平面无关。
-- **内存随交换机数量呈次线性增长**。每个 BMv2 进程常驻 30–50 MB；
-  Python 编排器无论 N 多少都保持在 100 MB 以下。8 交换机拓扑
-  在 1 GB 内存里跑得很轻松。
+本次测量中，预热缓存组的启动耗时中位数比对应的空缓存组低 0.20–0.24 秒。八交换机预热缓存拓扑的启动耗时中位数为 2.079 秒，停止为 1.658 秒，PSS 采样均值的中位数为 173.0 MiB，空闲 CPU 为 2.6%。这些数据可用于估算这台机器上相同场景的开销，更大规模需要单独测量。
 
-## 注意事项
+当前 BMv2 停止流程在发送 `SIGTERM` 后最多等待五秒，必要时再发送 `SIGKILL`。这是超时时间，不是预期停止耗时。
 
-- 数字对主机 CPU、内核版本、BMv2 构建参数高度敏感。BMv2 的调试版
-  比 release 版慢得多。
-- 本基线测试到的最大拓扑是 8 交换机（16 主机）。更大的拓扑应当
-  也能工作，但不在测试套件覆盖范围内。100+ 交换机的科研工作
-  请先在你的硬件上做扩展测试；「启动时间随 N 线性增长」的假设
-  在更大规模下可能不成立。
-- 上面 `pingall` 测的是编排器端到端 ping 延迟，不是裸数据平面
-  转发率。要测原始转发性能，请在某台主机命名空间里使用
-  `iperf3` 或 `pktgen`——这超出本基线范围。
-- WSL2 比裸机 Linux 慢。如果你的数字明显更慢，先确认是否运行在
-  hypervisor 中。
+<a id="注意事项"></a>
+
+## 适用范围
+
+本基线只发送连通性探测报文，不测量吞吐量、负载下丢包率、RTT 分布或交换机处理时延。P4 程序、表项、BMv2 构建、日志、抓包和流量模式都会影响转发性能。设计流量测试时，可参考[已知限制](known-limitations.md)和 [BMv2 性能说明](https://github.com/p4lang/behavioral-model/blob/main/docs/performance.md)。
