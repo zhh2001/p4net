@@ -247,6 +247,55 @@ async def test_list_table_entries_yields_decoded(
         await client.disconnect()
 
 
+async def test_reads_across_clients_progress_concurrently() -> None:
+    started: set[int] = set()
+    all_started = asyncio.Event()
+    release_responses = asyncio.Event()
+
+    async def read(request: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        started.add(request.device_id)
+        if len(started) == 3:
+            all_started.set()
+        await release_responses.wait()
+        response = p4runtime_pb2.ReadResponse()
+        entry = response.entities.add().table_entry
+        entry.table_id = 2001
+        entry.action.action.action_id = 1001
+        param = entry.action.action.params.add()
+        param.param_id = 1
+        param.value = bytes([request.device_id + 1])
+        yield response
+
+    clients = []
+    for device_id in range(3):
+        client = AsyncP4RuntimeClient(
+            grpc_address=("127.0.0.1", 50051 + device_id),
+            device_id=device_id,
+            info_index=_make_p4info_index(),
+        )
+        client._connected = True
+        client._stub = MagicMock(Read=MagicMock(side_effect=read))
+        clients.append(client)
+
+    async def list_entries(client: AsyncP4RuntimeClient) -> list[dict[str, Any]]:
+        return [entry async for entry in client.list_table_entries("MyIngress.ipv4_lpm")]
+
+    tasks = [asyncio.create_task(list_entries(client)) for client in clients]
+    try:
+        await asyncio.wait_for(all_started.wait(), timeout=5.0)
+        assert started == {0, 1, 2}
+        assert all(not task.done() for task in tasks)
+        release_responses.set()
+        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=5.0)
+        assert [len(entries) for entries in results] == [1, 1, 1]
+        assert [entries[0]["params"]["port"] for entries in results] == [b"\x01", b"\x02", b"\x03"]
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*(client.disconnect() for client in clients))
+
+
 # ---------------------------------------------------------------------------
 # Counters
 # ---------------------------------------------------------------------------

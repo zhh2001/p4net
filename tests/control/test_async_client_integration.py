@@ -15,15 +15,16 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from p4net import Network
 from p4net.control import (
     AsyncOperationCancelledError,  # noqa: F401  (exposed for tests if useful)
+    AsyncP4RuntimeClient,
     NoSuchRegisterError,
     NotPrimaryError,
 )
@@ -87,21 +88,12 @@ async def test_basic_lifecycle(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Concurrent vs sequential inserts across multiple switches.
+# 2. Concurrent reads across multiple switches.
 # ---------------------------------------------------------------------------
 
 
-async def test_concurrent_inserts_across_switches(tmp_path: Path) -> None:
-    """Three switches, ~9 inserts; concurrent should beat sequential by a
-    healthy margin. The sync client (primary) installs sequentially first
-    as the baseline; the async client (secondary) installs concurrently
-    on a different table (NoAction default) and we compare wall time.
-
-    Because secondary writes are rejected, we use the SYNC clients here
-    for both the sequential and the concurrent paths — the concurrent
-    path uses ``asyncio.to_thread`` to fan out the sync calls. This
-    measures the gather/parallelism speedup specifically.
-    """
+async def test_concurrent_reads_across_switches(tmp_path: Path) -> None:
+    """Read each switch's routes concurrently and compare their full contents."""
     suffix = _suffix()
     names = [f"s{suffix}{i}" for i in (1, 2, 3)]
     topo = Topology()
@@ -112,76 +104,48 @@ async def test_concurrent_inserts_across_switches(tmp_path: Path) -> None:
 
     net = Network(topo, log_dir=tmp_path / "logs")
     await asyncio.to_thread(net.start)
+    async_clients = []
     try:
-        # 1. Populate the ipv4_lpm table on every switch via the sync primary
-        # clients (the async clients are secondary in this test, so they
-        # can't write; the comparison is between concurrent and sequential
-        # ASYNC READS).
-        sync_clients = [net.switch(n).client for n in names]
-        routes = [
-            ("10.0.10.0/24", 1),
-            ("10.0.20.0/24", 1),
-            ("10.0.30.0/24", 1),
-            ("10.0.40.0/24", 1),
-            ("10.0.50.0/24", 1),
-        ]
-        for c in sync_clients:
-            for cidr, port in routes:
-                c.insert_table_entry(
+        expected = []
+        for switch_number, name in enumerate(names, start=1):
+            entries = []
+            for subnet in (10, 20, 30, 40, 50):
+                net.switch(name).client.insert_table_entry(
                     "MyIngress.ipv4_lpm",
-                    {"hdr.ipv4.dstAddr": cidr},
+                    {"hdr.ipv4.dstAddr": f"10.{switch_number}.{subnet}.0/24"},
                     "MyIngress.set_egress_port",
-                    {"port": port},
+                    {"port": switch_number},
                 )
+                entries.append(
+                    {
+                        "table": "MyIngress.ipv4_lpm",
+                        "match": {"hdr.ipv4.dstAddr": (bytes([10, switch_number, subnet, 0]), 24)},
+                        "action": "MyIngress.set_egress_port",
+                        "params": {"port": bytes([switch_number])},
+                        "priority": None,
+                    }
+                )
+            expected.append(entries)
 
-        # 2. Build async clients, secondary so they can coexist with sync.
-        async_clients = []
         for n in names:
             ac = net.switch(n).async_client
             ac._election_id = (0, 0)
             async_clients.append(ac)
         await asyncio.gather(*(c.connect() for c in async_clients))
 
-        async def _list_all(client: object) -> int:
-            count = 0
-            async for _e in client.list_table_entries("MyIngress.ipv4_lpm"):  # type: ignore[attr-defined]
-                count += 1
-            return count
+        async def _list_all(client: AsyncP4RuntimeClient) -> list[dict[str, Any]]:
+            entries = [entry async for entry in client.list_table_entries("MyIngress.ipv4_lpm")]
+            return sorted(entries, key=lambda entry: entry["match"]["hdr.ipv4.dstAddr"])
 
-        # Repeat the read sweep N times so the per-call cost dominates
-        # event-loop and dispatcher overhead.
-        N = 8
-        # Sequential baseline.
-        t0 = time.perf_counter()
-        for _ in range(N):
-            for c in async_clients:
-                await _list_all(c)
-        seq_ms = (time.perf_counter() - t0) * 1000.0
-
-        # Concurrent: all reads from all switches in parallel.
-        t0 = time.perf_counter()
-        for _ in range(N):
-            await asyncio.gather(*(_list_all(c) for c in async_clients))
-        conc_ms = (time.perf_counter() - t0) * 1000.0
-
-        await asyncio.gather(*(c.disconnect() for c in async_clients))
-
-        print(
-            f"\nMEASURED concurrent={conc_ms:.2f}ms sequential={seq_ms:.2f}ms "
-            f"ratio={seq_ms / max(conc_ms, 0.001):.2f}x",
-            flush=True,
-        )
-        # Three switches read in parallel should beat three sequential
-        # reads. 1.5x is a conservative threshold for a noisy CI rig.
-        assert conc_ms < seq_ms / 1.5, (
-            f"concurrent={conc_ms:.2f}ms should beat sequential={seq_ms:.2f}ms by 1.5x"
-        )
-        (tmp_path / "async_speedup.txt").write_text(
-            f"concurrent={conc_ms:.2f}ms sequential={seq_ms:.2f}ms "
-            f"ratio={seq_ms / max(conc_ms, 0.001):.2f}x\n"
-        )
+        sequential = [await _list_all(client) for client in async_clients]
+        assert sequential == expected
+        concurrent = await asyncio.gather(*(_list_all(client) for client in async_clients))
+        assert concurrent == expected
     finally:
-        await asyncio.to_thread(net.stop)
+        try:
+            await asyncio.gather(*(client.disconnect() for client in async_clients))
+        finally:
+            await asyncio.to_thread(net.stop)
 
 
 # ---------------------------------------------------------------------------
