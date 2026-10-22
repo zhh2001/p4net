@@ -20,11 +20,14 @@ from p4net.control import (
     AsyncOperationCancelledError,
     AsyncP4RuntimeClient,
     ConnectionError,
+    DuplicateEntryError,
     EncodingError,
+    EntryNotFoundError,
     NoSuchRegisterError,
     NotPrimaryError,
     P4InfoIndex,
     P4RuntimeError,
+    PipelineError,
 )
 
 # ---------------------------------------------------------------------------
@@ -497,6 +500,125 @@ async def test_async_context_manager(patched_aio: dict[str, Any]) -> None:
         assert c.is_connected
     await _arb_task
     assert not client.is_connected
+
+
+# ---------------------------------------------------------------------------
+# Pipeline and RPC errors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("empty_details", [False, True])
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (grpc.StatusCode.PERMISSION_DENIED, NotPrimaryError),
+        (grpc.StatusCode.UNAVAILABLE, ConnectionError),
+        (grpc.StatusCode.CANCELLED, AsyncOperationCancelledError),
+        (grpc.StatusCode.INVALID_ARGUMENT, PipelineError),
+        (grpc.StatusCode.FAILED_PRECONDITION, PipelineError),
+        (grpc.StatusCode.NOT_FOUND, EntryNotFoundError),
+        (grpc.StatusCode.ALREADY_EXISTS, DuplicateEntryError),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, P4RuntimeError),
+        (grpc.StatusCode.UNKNOWN, P4RuntimeError),
+        (grpc.StatusCode.UNIMPLEMENTED, P4RuntimeError),
+        (grpc.StatusCode.INTERNAL, P4RuntimeError),
+    ],
+)
+async def test_push_pipeline_preserves_rpc_error_type_and_index(
+    patched_aio: dict[str, Any],
+    code: grpc.StatusCode,
+    expected: type[P4RuntimeError],
+    empty_details: bool,
+) -> None:
+    client = await _connect(patched_aio)
+    details = "" if empty_details else "pipeline request failed"
+    error = grpc.aio.AioRpcError(code, (), (), details)
+    rpc = patched_aio["stub"].SetForwardingPipelineConfig
+    rpc.side_effect = error
+    index = client.info_index
+    channel = client._channel
+    stream = client._stream_call
+    try:
+        with pytest.raises(expected) as raised:
+            await client.push_pipeline(b"", b"{}")
+        assert type(raised.value) is expected
+        assert raised.value.__cause__ is error
+        if details:
+            assert details in str(raised.value)
+        assert client.info_index is index
+        assert client.is_connected
+        assert client._channel is channel
+        assert client._stream_call is stream
+        patched_aio["channel"].close.assert_not_awaited()
+
+        rpc.side_effect = None
+        await client.push_pipeline(b"", b"{}")
+        assert client.info_index is not index
+        assert client.info_index.table_names == []
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("ending", ["cancel", "timeout"])
+async def test_push_pipeline_cancel_or_timeout_preserves_index(
+    patched_aio: dict[str, Any], ending: str
+) -> None:
+    client = await _connect(patched_aio)
+    index = client.info_index
+    started = asyncio.Event()
+
+    async def hold_response(request: Any) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    rpc = patched_aio["stub"].SetForwardingPipelineConfig
+    rpc.side_effect = hold_response
+    task = asyncio.create_task(
+        client.push_pipeline(b"", b"{}", timeout=0.05 if ending == "timeout" else 30.0)
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        if ending == "cancel":
+            task.cancel()
+        with pytest.raises(
+            AsyncOperationCancelledError if ending == "cancel" else asyncio.TimeoutError
+        ):
+            await task
+        assert client.info_index is index
+        assert client.is_connected
+        rpc.side_effect = None
+        await client.push_pipeline(b"", b"{}")
+        assert client.info_index is not index
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["write", "read"])
+async def test_unavailable_rpc_raises_connection_error(
+    patched_aio: dict[str, Any], operation: str
+) -> None:
+    client = await _connect(patched_aio)
+    error = grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), "device unavailable")
+    if operation == "write":
+        patched_aio["stub"].Write.side_effect = error
+    else:
+        patched_aio["stub"].Read.side_effect = error
+    try:
+        with pytest.raises(ConnectionError, match="device unavailable") as raised:
+            if operation == "write":
+                await client.insert_table_entry(
+                    "MyIngress.ipv4_lpm",
+                    {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+                    "MyIngress.set_egress_port",
+                    {"port": 2},
+                )
+            else:
+                _ = [entry async for entry in client.list_table_entries()]
+        assert raised.value.__cause__ is error
+    finally:
+        await client.disconnect()
 
 
 # ---------------------------------------------------------------------------

@@ -488,6 +488,63 @@ async def test_mastership_secondary_rejects_writes(tmp_path: Path) -> None:
         await asyncio.to_thread(net.stop)
 
 
+async def test_push_pipeline_without_primary_preserves_index_and_can_retry(tmp_path: Path) -> None:
+    suffix = _suffix()
+    switch = f"s{suffix}"
+    host = f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await asyncio.to_thread(net.start)
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    info = sw.compile_result.p4info.read_bytes()
+    config = sw.compile_result.bmv2_json.read_bytes()
+    try:
+        await client.connect()
+        index = client.info_index
+        channel = client._channel
+        stream = client._stream_call
+        with pytest.raises(NotPrimaryError) as raised:
+            await client.push_pipeline(info, config)
+        assert isinstance(raised.value.__cause__, grpc.aio.AioRpcError)
+        assert raised.value.__cause__.code() == grpc.StatusCode.PERMISSION_DENIED
+        assert client.is_connected
+        assert client.info_index is index
+        assert [entry async for entry in client.list_table_entries()] == []
+
+        client._election_id = (sw.client.election_id[0] + 1, 0)
+        request = p4runtime_pb2.StreamMessageRequest()
+        request.arbitration.device_id = client.device_id
+        request.arbitration.election_id.high = client.election_id[0]
+        assert client._arbitration_event is not None
+        client._arbitration_event.clear()
+        assert client._outgoing is not None
+        await client._outgoing.put(request)
+        await asyncio.wait_for(client._arbitration_event.wait(), timeout=5.0)
+        assert client.is_primary
+        await client.push_pipeline(info, config)
+        assert client.info_index is not index
+        assert client._channel is channel
+        assert client._stream_call is stream
+        await client.insert_table_entry(
+            "MyIngress.ipv4_lpm",
+            {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+            "MyIngress.set_egress_port",
+            {"port": 2},
+        )
+        assert [entry["params"] async for entry in client.list_table_entries()] == [
+            {"port": b"\x02"}
+        ]
+    finally:
+        await net.astop()
+
+
 async def test_primary_state_tracks_competing_clients(tmp_path: Path) -> None:
     suffix = _suffix()
     switch = f"s{suffix}"

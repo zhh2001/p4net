@@ -760,7 +760,12 @@ class AsyncP4RuntimeClient:
     ) -> P4RuntimeError:
         code = exc.code()
         details = exc.details() or ""
-        if pipeline:
+        if code == grpc.StatusCode.UNAVAILABLE:
+            return ConnectionError(f"gRPC unavailable for {self.target!r}: {details}")
+        if pipeline and code in (
+            grpc.StatusCode.INVALID_ARGUMENT,
+            grpc.StatusCode.FAILED_PRECONDITION,
+        ):
             return PipelineError(f"pipeline rejected: {code} {details}")
         if code == grpc.StatusCode.ALREADY_EXISTS:
             return DuplicateEntryError(details)

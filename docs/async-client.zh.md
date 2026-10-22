@@ -94,6 +94,20 @@ asyncio.run(main())
 
 `grpc.aio` 把远端错误以 `grpc.aio.AioRpcError` 抛出；异步客户端把它们翻译成与同步客户端一致的异常体系（`DuplicateEntryError`、`EntryNotFoundError`、`NotPrimaryError`、`PipelineError`、`P4RuntimeError`）。
 
+`push_pipeline()` 根据 RPC 状态区分错误，并将原始 RPC 错误保留为异常原因：
+
+| RPC 状态 | 异常 |
+| --- | --- |
+| `PERMISSION_DENIED` | `NotPrimaryError` |
+| `UNAVAILABLE` | `ConnectionError` |
+| `CANCELLED` | `AsyncOperationCancelledError` |
+| `INVALID_ARGUMENT`、`FAILED_PRECONDITION` | `PipelineError` |
+| `NOT_FOUND` | `EntryNotFoundError` |
+| `ALREADY_EXISTS` | `DuplicateEntryError` |
+| 其他错误状态 | `P4RuntimeError` |
+
+更新失败或被取消时，保留当前 P4Info 索引，仅在收到成功响应后替换。取消调用任务会抛出 `AsyncOperationCancelledError`；`push_pipeline(timeout=...)` 超时会抛出 `asyncio.TimeoutError`。
+
 等待仲裁响应时取消 `connect()`，客户端会先关闭 gRPC 连接并停止后台消息接收任务，再传播 `asyncio.CancelledError`。外层 `asyncio.wait_for()` 超时导致的取消也会执行同样的清理。
 
 StreamChannel 结束或报错后，客户端会清除 `is_connected` 和 `is_primary`，并关闭 gRPC 连接。此时发起新操作会抛出 `ConnectionError`，可调用 `connect()` 在同一客户端上建立新的消息流。初次仲裁期间断流时，`connect()` 会直接报错，无需等到仲裁超时。清理旧连接期间调用 `connect()` 或 `disconnect()`，会等待清理完成。
@@ -110,8 +124,6 @@ except AsyncOperationCancelledError:
 except P4RuntimeError:
     ...  # 其它客户端故障
 ```
-
-`asyncio.CancelledError` 本身在调用方 task 层面取消时会原样向上传播，不会被客户端拦截。
 
 ## 稳定性
 

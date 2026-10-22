@@ -94,6 +94,20 @@ Each arbitration notification updates `client.is_primary`: status `OK` sets it t
 
 `grpc.aio` surfaces remote errors as `grpc.aio.AioRpcError`; the async client translates these into the same exception hierarchy as the sync client (`DuplicateEntryError`, `EntryNotFoundError`, `NotPrimaryError`, `PipelineError`, `P4RuntimeError`).
 
+`push_pipeline()` classifies RPC failures by status and preserves the original RPC error as the exception's cause:
+
+| RPC status | Exception |
+| --- | --- |
+| `PERMISSION_DENIED` | `NotPrimaryError` |
+| `UNAVAILABLE` | `ConnectionError` |
+| `CANCELLED` | `AsyncOperationCancelledError` |
+| `INVALID_ARGUMENT`, `FAILED_PRECONDITION` | `PipelineError` |
+| `NOT_FOUND` | `EntryNotFoundError` |
+| `ALREADY_EXISTS` | `DuplicateEntryError` |
+| Other error statuses | `P4RuntimeError` |
+
+Failed or cancelled updates retain the current P4Info index. The index is replaced only after a successful response. Cancelling the calling task raises `AsyncOperationCancelledError`; expiration of `push_pipeline(timeout=...)` raises `asyncio.TimeoutError`.
+
 If `connect()` is cancelled while waiting for arbitration, it closes its gRPC channel and stops its stream task before propagating `asyncio.CancelledError`. Cancellation by an outer `asyncio.wait_for()` follows the same cleanup path.
 
 When the StreamChannel ends or fails, the client clears `is_connected` and `is_primary` and closes the channel. New operations raise `ConnectionError`. Call `connect()` to establish a new stream on the same client. If the stream ends during the initial arbitration, `connect()` fails without waiting for the arbitration timeout. If cleanup is still running, `connect()` and `disconnect()` wait for it to finish.
@@ -110,8 +124,6 @@ except AsyncOperationCancelledError:
 except P4RuntimeError:
     ...  # any other client failure
 ```
-
-`asyncio.CancelledError` itself propagates through the client unchanged for tasks the caller cancels at the task level (rather than inside the RPC).
 
 ## Stability
 
