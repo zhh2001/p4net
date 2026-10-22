@@ -96,6 +96,8 @@ Each arbitration notification updates `client.is_primary`: status `OK` sets it t
 
 For an `UNKNOWN` response containing per-update P4Runtime errors, the client uses the first recognized failure code, just like the sync client. Duplicate entries raise `DuplicateEntryError`; missing entries raise `EntryNotFoundError`. Missing or malformed error details leave the error as `P4RuntimeError`. The original RPC error remains available as the exception's cause.
 
+Table and counter requests that return `FAILED_PRECONDITION` raise `P4RuntimeError` with the server's explanation. For example, this status can mean that no forwarding pipeline has been configured. `PERMISSION_DENIED` still raises `NotPrimaryError`.
+
 `push_pipeline()` classifies RPC failures by status and preserves the original RPC error as the exception's cause:
 
 | RPC status | Exception |

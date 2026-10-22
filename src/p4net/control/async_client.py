@@ -782,7 +782,7 @@ class AsyncP4RuntimeClient:
             return DuplicateEntryError(details)
         if code == grpc.StatusCode.NOT_FOUND:
             return EntryNotFoundError(details)
-        if code in (grpc.StatusCode.PERMISSION_DENIED, grpc.StatusCode.FAILED_PRECONDITION):
+        if code == grpc.StatusCode.PERMISSION_DENIED:
             return NotPrimaryError(details)
         if code == grpc.StatusCode.CANCELLED:
             return AsyncOperationCancelledError(details)

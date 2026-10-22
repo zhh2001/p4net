@@ -96,6 +96,8 @@ asyncio.run(main())
 
 当 `UNKNOWN` 响应包含逐条 P4Runtime 错误时，客户端与同步版一样，按第一个可识别的失败状态码选择异常。重复表项抛出 `DuplicateEntryError`，表项不存在时抛出 `EntryNotFoundError`。错误详情缺失或损坏时，保留为 `P4RuntimeError`。原始 RPC 错误保留为异常原因。
 
+表项或计数器请求返回 `FAILED_PRECONDITION` 时，抛出 `P4RuntimeError` 并保留服务器说明。例如，尚未配置转发流水线时就会返回该状态。`PERMISSION_DENIED` 仍抛出 `NotPrimaryError`。
+
 `push_pipeline()` 根据 RPC 状态区分错误，并将原始 RPC 错误保留为异常原因：
 
 | RPC 状态 | 异常 |

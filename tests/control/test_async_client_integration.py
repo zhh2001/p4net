@@ -26,6 +26,7 @@ from p4.v1 import p4runtime_pb2
 from pytest_mock import MockerFixture
 
 from p4net import Network
+from p4net.compiler import P4Compiler
 from p4net.control import (
     AsyncOperationCancelledError,  # noqa: F401  (exposed for tests if useful)
     AsyncP4RuntimeClient,
@@ -34,6 +35,8 @@ from p4net.control import (
     EntryNotFoundError,
     NoSuchRegisterError,
     NotPrimaryError,
+    P4InfoIndex,
+    P4RuntimeError,
 )
 from p4net.runtime import BMv2Switch
 from p4net.topo import Topology
@@ -545,6 +548,63 @@ async def test_push_pipeline_without_primary_preserves_index_and_can_retry(tmp_p
         ]
     finally:
         await net.astop()
+
+
+@pytest.mark.parametrize("operation", ["read", "write"])
+async def test_unconfigured_pipeline_does_not_imply_lost_primary(
+    tmp_path: Path, operation: str
+) -> None:
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler-cache")
+    compiled = await asyncio.to_thread(compiler.compile, _SIMPLE_ROUTING)
+    switch = BMv2Switch(
+        f"s{_suffix()}",
+        device_id=0,
+        grpc_port=_free_port(),
+        thrift_port=_free_port(),
+        bmv2_json=compiled.bmv2_json,
+        port_to_iface={},
+        log_dir=tmp_path / "logs",
+    )
+    client = AsyncP4RuntimeClient(
+        ("127.0.0.1", switch.grpc_port),
+        device_id=0,
+        election_id=(1, 0),
+        info_index=P4InfoIndex.from_file(compiled.p4info),
+    )
+    await asyncio.to_thread(switch.start)
+    try:
+        await asyncio.to_thread(switch.wait_until_ready)
+        await client.connect()
+        index, channel, stream = client.info_index, client._channel, client._stream_call
+        table, action = "MyIngress.ipv4_lpm", "MyIngress.set_egress_port"
+        match = {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+        assert client.is_connected and client.is_primary
+        with pytest.raises(P4RuntimeError) as raised:
+            if operation == "read":
+                _ = [entry async for entry in client.list_table_entries(table)]
+            else:
+                await client.insert_table_entry(table, match, action, {"port": 2})
+        assert type(raised.value) is P4RuntimeError
+        assert isinstance(raised.value.__cause__, grpc.aio.AioRpcError)
+        assert raised.value.__cause__.code() == grpc.StatusCode.FAILED_PRECONDITION
+        assert client.is_connected and client.is_primary
+        assert client.info_index is index
+        assert client._channel is channel and client._stream_call is stream
+
+        await client.push_pipeline(compiled.p4info.read_bytes(), compiled.bmv2_json.read_bytes())
+        assert client.info_index is not index
+        assert client._channel is channel and client._stream_call is stream
+        await client.insert_table_entry(table, match, action, {"port": 2})
+        assert [entry["params"] async for entry in client.list_table_entries(table)] == [
+            {"port": b"\x02"}
+        ]
+        await client.delete_table_entry(table, match)
+        assert [entry async for entry in client.list_table_entries(table)] == []
+    finally:
+        try:
+            await client.disconnect()
+        finally:
+            await asyncio.to_thread(switch.stop)
 
 
 @pytest.mark.parametrize(

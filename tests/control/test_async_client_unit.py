@@ -639,6 +639,75 @@ async def test_unavailable_rpc_raises_connection_error(
 
 
 @pytest.mark.parametrize("empty_details", [False, True])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    "operation", ["insert", "modify", "delete", "list", "counter-cell", "counter-all"]
+)
+async def test_failed_precondition_does_not_imply_lost_primary(
+    patched_aio: dict[str, Any], operation: str, wrapped: bool, empty_details: bool
+) -> None:
+    info = _make_p4info_index().raw
+    counter = info.counters.add()
+    counter.preamble.id = 0x12000001
+    counter.preamble.name = "MyIngress.test_counter"
+    counter.spec.unit = p4info_pb2.CounterSpec.PACKETS
+    counter.size = 16
+    client = await _connect(patched_aio, info_index=P4InfoIndex(info))
+    details = "" if empty_details else "forwarding pipeline is not configured"
+    error = (
+        _batch_error([code_pb2.OK, code_pb2.FAILED_PRECONDITION], details=details)
+        if wrapped
+        else grpc.aio.AioRpcError(grpc.StatusCode.FAILED_PRECONDITION, (), (), details)
+    )
+    reading = operation in ("list", "counter-cell", "counter-all")
+    rpc = patched_aio["stub"].Read if reading else patched_aio["stub"].Write
+    rpc.side_effect = error
+
+    async def perform() -> Any:
+        if operation == "list":
+            return [entry async for entry in client.list_table_entries()]
+        if operation.startswith("counter-"):
+            return await client.read_counter(
+                "MyIngress.test_counter", 0 if operation == "counter-cell" else None
+            )
+        if operation == "delete":
+            return await client.delete_table_entry(
+                "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+            )
+        method = client.insert_table_entry if operation == "insert" else client.modify_table_entry
+        return await method(
+            "MyIngress.ipv4_lpm",
+            {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+            "MyIngress.set_egress_port",
+            {"port": 2},
+        )
+
+    index, channel, stream = client.info_index, client._channel, client._stream_call
+    try:
+        with pytest.raises(P4RuntimeError) as raised:
+            await perform()
+        assert type(raised.value) is P4RuntimeError
+        assert raised.value.__cause__ is error
+        assert str(raised.value)
+        if details:
+            assert details in str(raised.value)
+        assert client.is_connected and client.is_primary
+        assert client.info_index is index
+        assert client._channel is channel and client._stream_call is stream
+        patched_aio["channel"].close.assert_not_awaited()
+
+        async def empty_read() -> AsyncIterator[Any]:
+            yield p4runtime_pb2.ReadResponse()
+
+        rpc.side_effect = None
+        if reading:
+            rpc.return_value = empty_read()
+        await perform()
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("empty_details", [False, True])
 @pytest.mark.parametrize(
     ("operation", "canonical", "expected"),
     [
