@@ -1,3 +1,8 @@
+:root {
+  --md-text-font: "Times New Roman", "SimSun", "宋体", serif;
+  --md-code-font: "JetBrains Mono";
+}
+
 /* Tighter code block padding for terminal output */
 .md-typeset pre > code {
   font-feature-settings: "calt" 0;

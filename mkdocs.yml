@@ -85,9 +85,7 @@ theme:
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
-  font:
-    text: Inter
-    code: JetBrains Mono
+  font: false
   icon:
     repo: fontawesome/brands/github
     edit: material/pencil
@@ -213,6 +211,7 @@ extra:
       lang: zh
 
 extra_css:
+  - https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400;1,700&display=fallback
   - assets/extra.css
 
 copyright: Copyright &copy; 2026 Henghua Zhang. Apache-2.0 licensed.
