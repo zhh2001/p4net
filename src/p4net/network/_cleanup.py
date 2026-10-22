@@ -6,6 +6,8 @@ and (only on the main thread) SIGINT/SIGTERM handlers that call
 installed handler. Idempotent installation: a single `_INSTALLED` flag
 prevents double-registration.
 
+Forked children start with their own empty registry and an unlocked mutex.
+
 The signal handler does NOT call `sys.exit` directly. After running
 cleanup it restores the previous handler and re-delivers the signal via
 `os.kill(os.getpid(), signum)`, so the parent process / interactive shell
@@ -31,6 +33,16 @@ _ACTIVE: set[Network] = set()
 _INSTALLED = False
 _PREV_HANDLERS: dict[int, Any] = {}
 _LOCK = threading.Lock()
+
+
+def _reset_after_fork() -> None:
+    """Discard parent-owned networks and the inherited registry lock."""
+    global _ACTIVE, _LOCK
+    _ACTIVE = set()
+    _LOCK = threading.Lock()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def register(net: Network) -> None:

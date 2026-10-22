@@ -90,6 +90,8 @@ The orchestrator. `Network(topology)` composes every layer:
 
 `stop()` (called from `__exit__`, atexit, signal, or explicitly) unwinds everything in reverse: spawned xterms, P4Runtime clients, BMv2 processes, veth pairs, namespaces, then unregisters from the cleanup registry. Each step is wrapped in a logged `try/except` so one failure can't leak the rest.
 
+After `fork()`, the child starts with an empty cleanup registry and a new registry lock. Child exit and signal handlers leave the parent's networks untouched. Networks registered in the child use its own cleanup registry.
+
 `Network` also owns the high-level helpers: `ping`, `pingall`, `pingall6`, `xterm`. They route through `RunningHost.ping` and `RunningHost.popen`.
 
 API: [`p4net.network`](api/network.md).
