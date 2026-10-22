@@ -93,9 +93,9 @@ with Network(topology) as net:
   只读。构造异步客户端时传 `election_id=(0, 0)` 强制为 secondary；
   读仍然可用，写会抛 `NotPrimaryError`。
 
-切勿用两个客户端同时往同一台交换机写 primary 操作。BMv2 会接受
-最近收到的那一方为 primary 而拒掉另一方；实际表现是难以排查的
-间歇失败。
+客户端每次收到仲裁通知都会更新 `is_primary`：状态码为 `OK` 时设为
+`True`，其他状态码设为 `False`。主控身份变化不会关闭连接。失去主控
+身份后仍可读取，写入会抛出 `NotPrimaryError`。
 
 ## 取消与错误处理
 

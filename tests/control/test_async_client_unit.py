@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from google.rpc import code_pb2
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2
 from pytest_mock import MockerFixture
@@ -19,6 +20,7 @@ from p4net.control import (
     ConnectionError,
     EncodingError,
     NoSuchRegisterError,
+    NotPrimaryError,
     P4InfoIndex,
     P4RuntimeError,
 )
@@ -243,6 +245,54 @@ async def test_explicit_secondary_stays_connected(patched_aio: dict[str, Any]) -
     assert client.is_connected
     assert not client.is_primary
     await client.disconnect()
+
+
+@pytest.mark.parametrize("initial_code", [code_pb2.OK, code_pb2.ALREADY_EXISTS])
+async def test_primary_state_tracks_arbitration_updates(
+    patched_aio: dict[str, Any], initial_code: int
+) -> None:
+    client = await _connect(patched_aio, election_id=(0, 0), status_code=initial_code)
+    states: asyncio.Queue[bool] = asyncio.Queue()
+
+    async def observe_state(_payload: bytes, _metadata: dict[str, int]) -> None:
+        states.put_nowait(client.is_primary)
+
+    try:
+        await client.on_packet_in(observe_state)
+        assert client.is_primary == (initial_code == code_pb2.OK)
+        for code in (
+            code_pb2.ALREADY_EXISTS,
+            code_pb2.NOT_FOUND,
+            code_pb2.OK,
+            code_pb2.OK,
+            code_pb2.ALREADY_EXISTS,
+            code_pb2.OK,
+        ):
+            await patched_aio["stream"].push_arbitration(code=code)
+            # PacketIn follows arbitration on the same stream, so its handler
+            # must observe the updated state without reconnecting.
+            await patched_aio["stream"].push_packet(b"state-check")
+            assert await asyncio.wait_for(states.get(), timeout=5.0) == (code == code_pb2.OK)
+            assert client.is_connected
+        assert patched_aio["stub"].StreamChannel.call_count == 1
+        patched_aio["channel"].close.assert_not_awaited()
+    finally:
+        await client.disconnect()
+    assert not client.is_primary
+
+
+@pytest.mark.parametrize("code", [code_pb2.ALREADY_EXISTS, code_pb2.NOT_FOUND])
+async def test_connect_rejects_non_primary(patched_aio: dict[str, Any], code: int) -> None:
+    await patched_aio["stream"].push_arbitration(code=code)
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0, election_id=(1, 0))
+    try:
+        with pytest.raises(NotPrimaryError):
+            await client.connect()
+        assert not client.is_connected
+        assert not client.is_primary
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        await client.disconnect()
 
 
 async def test_async_context_manager(patched_aio: dict[str, Any]) -> None:

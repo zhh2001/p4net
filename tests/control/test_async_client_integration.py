@@ -21,6 +21,8 @@ from typing import Any
 
 import grpc
 import pytest
+from google.rpc import code_pb2
+from p4.v1 import p4runtime_pb2
 from pytest_mock import MockerFixture
 
 from p4net import Network
@@ -318,3 +320,80 @@ async def test_mastership_secondary_rejects_writes(tmp_path: Path) -> None:
             await client.disconnect()
     finally:
         await asyncio.to_thread(net.stop)
+
+
+async def test_primary_state_tracks_competing_clients(tmp_path: Path) -> None:
+    suffix = _suffix()
+    switch = f"s{suffix}"
+    host = f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await asyncio.to_thread(net.start)
+    sw = net.switch(switch)
+    first = sw.async_client
+    election_high = sw.client.election_id[0]
+    first._election_id = (election_high + 1, 0)
+    second = AsyncP4RuntimeClient(
+        first.grpc_address,
+        device_id=first.device_id,
+        info_index=first.info_index,
+        election_id=(election_high + 2, 0),
+    )
+    table = "MyIngress.ipv4_lpm"
+    match = {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+    action = "MyIngress.set_egress_port"
+    try:
+        await first.connect()
+        assert first.is_primary
+        await first.insert_table_entry(table, match, action, {"port": 1})
+        assert first._arbitration_event is not None
+        first._arbitration_event.clear()
+
+        await second.connect()
+        await asyncio.wait_for(first._arbitration_event.wait(), timeout=5.0)
+        assert first._arbitration.status.code == code_pb2.ALREADY_EXISTS
+        assert not first.is_primary
+        assert first.is_connected
+        assert second.is_primary
+        with pytest.raises(NotPrimaryError):
+            await first.modify_table_entry(table, match, action, {"port": 2})
+        await second.modify_table_entry(table, match, action, {"port": 2})
+        assert [entry["params"] async for entry in first.list_table_entries(table)] == [
+            {"port": b"\x02"}
+        ]
+
+        # Renew arbitration on the existing stream with a higher election ID.
+        original_stream = first._stream_call
+        first._election_id = (election_high + 3, 0)
+        request = p4runtime_pb2.StreamMessageRequest()
+        request.arbitration.device_id = first.device_id
+        request.arbitration.election_id.high = first.election_id[0]
+        request.arbitration.election_id.low = first.election_id[1]
+        first._arbitration_event.clear()
+        assert second._arbitration_event is not None
+        second._arbitration_event.clear()
+        assert first._outgoing is not None
+        await first._outgoing.put(request)
+        await asyncio.wait_for(first._arbitration_event.wait(), timeout=5.0)
+        await asyncio.wait_for(second._arbitration_event.wait(), timeout=5.0)
+        assert first._arbitration.status.code == code_pb2.OK
+        assert first.is_primary
+        assert first.is_connected
+        assert first._stream_call is original_stream
+        assert second._arbitration.status.code == code_pb2.ALREADY_EXISTS
+        assert not second.is_primary
+        assert second.is_connected
+        with pytest.raises(NotPrimaryError):
+            await second.delete_table_entry(table, match)
+        await first.delete_table_entry(table, match)
+        assert [entry async for entry in first.list_table_entries(table)] == []
+    finally:
+        try:
+            await asyncio.gather(first.disconnect(), second.disconnect())
+        finally:
+            await asyncio.to_thread(net.stop)

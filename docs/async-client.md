@@ -108,10 +108,10 @@ Three usage patterns:
   `election_id=(0, 0)` to force it into secondary; reads still work,
   writes raise `NotPrimaryError`.
 
-Do not mix primary writes through both clients against the same
-switch. The BMv2 will accept whichever arrived most recently as
-primary and reject the other; in practice this produces confusing
-intermittent failures.
+Each arbitration notification updates `client.is_primary`: status `OK`
+sets it to `True`, and any other status sets it to `False`. The connection
+stays open when primary status changes. A client that loses primary
+status can still read, while writes raise `NotPrimaryError`.
 
 ## Cancellation and error handling
 

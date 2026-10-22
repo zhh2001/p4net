@@ -148,6 +148,7 @@ class AsyncP4RuntimeClient:
 
     @property
     def is_primary(self) -> bool:
+        """Whether the latest arbitration response grants primary status."""
         return self._is_primary
 
     @property
@@ -206,7 +207,6 @@ class AsyncP4RuntimeClient:
             await self._teardown()
             raise ConnectionError("no arbitration response received")
         status_code = int(self._arbitration.status.code)
-        self._is_primary = status_code == 0
         if status_code != 0 and self._election_id != (0, 0):
             # Explicit secondary (election_id=(0,0)) is allowed and stays connected.
             # Any other non-primary status is a failure.
@@ -290,6 +290,7 @@ class AsyncP4RuntimeClient:
             async for resp in self._stream_call:
                 if resp.HasField("arbitration"):
                     self._arbitration = resp.arbitration
+                    self._is_primary = int(resp.arbitration.status.code) == 0
                     assert self._arbitration_event is not None
                     self._arbitration_event.set()
                 elif resp.HasField("packet"):
