@@ -5,14 +5,15 @@ macro definitions. On a miss, ``p4c -e`` compiles that preprocessed snapshot
 into BMv2 JSON and P4Info. Both invocations use the same target, architecture,
 language version, and extra arguments.
 
-Concurrent compiles stage their outputs in separate directories and publish
-them with an atomic rename. If another writer has already published complete
-artifacts, its entry is reused. No file locking is performed.
+Concurrent compiles stage their outputs in separate directories. A directory
+lock protects the final cache check, replacement of incomplete entries, and
+atomic publication. Preprocessing and backend compilation run outside the lock.
 """
 
 from __future__ import annotations
 
 import errno
+import fcntl
 import hashlib
 import json
 import logging
@@ -236,11 +237,42 @@ class P4Compiler:
 
     @staticmethod
     def _cache_hit(final_dir: Path, json_path: Path, p4info_path: Path) -> bool:
-        if not final_dir.is_dir():
+        try:
+            if not final_dir.is_dir():
+                return False
+            if not json_path.is_file() or json_path.stat().st_size == 0:
+                return False
+            return p4info_path.is_file() and p4info_path.stat().st_size > 0
+        except FileNotFoundError:
+            # Another writer may be replacing an incomplete entry.
             return False
-        if not json_path.is_file() or json_path.stat().st_size == 0:
-            return False
-        return p4info_path.is_file() and p4info_path.stat().st_size > 0
+
+    def _publish_cache(self, staging_dir: Path, final_dir: Path) -> None:
+        """Replace incomplete entries once staged artifacts are ready."""
+        cache_fd = os.open(self._cache_dir, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(cache_fd, fcntl.LOCK_EX)
+            json_path = final_dir / "program.json"
+            p4info_path = final_dir / "program.p4info.txtpb"
+            if self._cache_hit(final_dir, json_path, p4info_path):
+                logger.debug("compiler cache populated by another writer: %s", final_dir)
+                return
+
+            if final_dir.is_symlink() or not final_dir.is_dir():
+                final_dir.unlink(missing_ok=True)
+            else:
+                shutil.rmtree(final_dir)
+
+            try:
+                os.rename(str(staging_dir), str(final_dir))
+            except OSError as exc:
+                if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY) or not self._cache_hit(
+                    final_dir, json_path, p4info_path
+                ):
+                    raise
+                logger.debug("compiler cache populated by another writer: %s", final_dir)
+        finally:
+            os.close(cache_fd)
 
     def _real_compile(
         self,
@@ -325,18 +357,7 @@ class P4Compiler:
                 with (staging_dir / "meta.json").open("w", encoding="utf-8") as fh:
                     json.dump(meta, fh, indent=2, sort_keys=True)
 
-                try:
-                    os.rename(str(staging_dir), str(final_dir))
-                except OSError as exc:
-                    if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY) or not self._cache_hit(
-                        final_dir, final_dir / "program.json", final_dir / "program.p4info.txtpb"
-                    ):
-                        raise
-                    logger.debug(
-                        "compiler cache race for %s: another writer populated %s",
-                        source,
-                        cache_key,
-                    )
+                self._publish_cache(staging_dir, final_dir)
 
             logger.debug(
                 "p4c compile of %s succeeded in %.3fs (cache key %s)",

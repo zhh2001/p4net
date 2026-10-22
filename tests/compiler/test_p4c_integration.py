@@ -172,9 +172,14 @@ def _compile_shared_source(source: Path, cache: Path) -> CompileResult:
 
 
 @pytest.mark.parametrize("executor_kind", ["threads", "processes"])
-def test_concurrent_compiles_publish_complete_cache(tmp_path: Path, executor_kind: str) -> None:
+@pytest.mark.parametrize("incomplete_cache", [False, True])
+def test_concurrent_compiles_publish_complete_cache(
+    tmp_path: Path, executor_kind: str, incomplete_cache: bool
+) -> None:
     source, _ = _write_include_program(tmp_path)
     cache = tmp_path / "cache"
+    if incomplete_cache:
+        P4Compiler(cache_dir=cache).compile(source).bmv2_json.write_bytes(b"")
     executor: ThreadPoolExecutor | ProcessPoolExecutor
     if executor_kind == "threads":
         executor = ThreadPoolExecutor(max_workers=4)

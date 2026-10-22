@@ -127,7 +127,7 @@ The cache key includes the compiler's preprocessed input, so changes to nested i
 
 Cache hits run preprocessing but skip backend compilation. Multiple topologies using the same source and arguments share the cached artifacts. The cache lives at `~/.cache/p4net/compiler/<hash>/`; pass `force=True` to `compile()` to rebuild an entry.
 
-Concurrent cache misses compile into separate staging directories. Each complete entry is published with an atomic directory rename. If another call has already published its artifacts, the later writer reuses them and removes its own staging directory.
+Missing or empty BMv2 JSON or P4Info files trigger a rebuild. Concurrent calls compile into separate staging directories. A short lock on the cache directory protects the final check and replacement of incomplete entries. Each writer either reuses complete artifacts from another call or publishes its own with an atomic directory rename.
 
 ### Cleanup is first-class
 

@@ -315,13 +315,16 @@ def test_force_bypasses_cache_hit(mocker: MockerFixture, tmp_path: Path) -> None
     assert fake.state["compile_calls"] == 2
 
 
+@pytest.mark.parametrize("incomplete_cache", [False, True])
 def test_concurrent_threads_keep_their_staged_artifacts(
-    mocker: MockerFixture, tmp_path: Path
+    mocker: MockerFixture, tmp_path: Path, incomplete_cache: bool
 ) -> None:
     source = tmp_path / "program.p4"
     _write_p4(source)
     cache = tmp_path / "cache"
     mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    if incomplete_cache:
+        P4Compiler(cache_dir=cache).compile(source).p4info.unlink()
     first_staged = threading.Event()
     second_finished = threading.Event()
     main_thread = threading.get_ident()
@@ -349,6 +352,90 @@ def test_concurrent_threads_keep_their_staged_artifacts(
     assert result.p4info.read_bytes() == b"fake p4info"
     assert list(cache.iterdir()) == [result.bmv2_json.parent]
     assert P4Compiler(cache_dir=cache).compile(source).cache_hit
+
+
+@pytest.mark.parametrize("artifact", ["bmv2_json", "p4info"])
+@pytest.mark.parametrize("damage", ["missing", "empty"])
+def test_incomplete_cache_is_rebuilt(
+    mocker: MockerFixture, tmp_path: Path, artifact: str, damage: str
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    compiler = P4Compiler(cache_dir=tmp_path / "cache")
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    first = compiler.compile(source)
+    path = getattr(first, artifact)
+    if damage == "missing":
+        path.unlink()
+    else:
+        path.write_bytes(b"")
+
+    rebuilt = compiler.compile(source)
+    assert not rebuilt.cache_hit
+    assert rebuilt.source_hash == first.source_hash
+    assert rebuilt.bmv2_json.read_bytes() == b'{"fake":"json"}'
+    assert rebuilt.p4info.read_bytes() == b"fake p4info"
+    assert compiler.compile(source).cache_hit
+    assert list(compiler.cache_dir.iterdir()) == [rebuilt.bmv2_json.parent]
+
+
+@pytest.mark.parametrize("entry_kind", ["file", "symlink"])
+def test_invalid_cache_entry_is_replaced(
+    mocker: MockerFixture, tmp_path: Path, entry_kind: str
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    compiler = P4Compiler(cache_dir=tmp_path / "cache")
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    first = compiler.compile(source)
+    entry = first.bmv2_json.parent
+    shutil.rmtree(entry)
+    unrelated = tmp_path / "other"
+    unrelated.mkdir()
+    sentinel = unrelated / "keep.txt"
+    sentinel.write_text("keep this file")
+    if entry_kind == "file":
+        entry.write_bytes(b"invalid cache entry")
+    else:
+        entry.symlink_to(unrelated, target_is_directory=True)
+
+    rebuilt = compiler.compile(source)
+    assert not rebuilt.cache_hit
+    assert rebuilt.source_hash == first.source_hash
+    assert rebuilt.bmv2_json.read_bytes() == b'{"fake":"json"}'
+    assert rebuilt.p4info.read_bytes() == b"fake p4info"
+    assert not entry.is_symlink()
+    assert sentinel.read_text() == "keep this file"
+    assert compiler.compile(source).cache_hit
+
+
+def test_cache_lookup_during_replacement_rebuilds(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    compiler = P4Compiler(cache_dir=tmp_path / "cache")
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    first = compiler.compile(source)
+    first.p4info.write_bytes(b"")
+    real_stat = Path.stat
+    removed = False
+
+    def remove_during_stat(path: Path, *args: Any, **kwargs: Any) -> os.stat_result:
+        nonlocal removed
+        result = real_stat(path, *args, **kwargs)
+        if path == first.bmv2_json and not removed:
+            removed = True
+            path.unlink()
+        return result
+
+    monkeypatch.setattr(Path, "stat", remove_during_stat)
+    rebuilt = compiler.compile(source)
+    assert removed
+    assert not rebuilt.cache_hit
+    assert rebuilt.bmv2_json.read_bytes() == b'{"fake":"json"}'
+    assert rebuilt.p4info.read_bytes() == b"fake p4info"
+    assert compiler.compile(source).cache_hit
 
 
 @pytest.mark.parametrize("error_number", [errno.EEXIST, errno.ENOTEMPTY])
