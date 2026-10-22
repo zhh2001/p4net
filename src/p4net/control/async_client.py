@@ -118,6 +118,7 @@ class AsyncP4RuntimeClient:
         self._packet_in_queue: asyncio.Queue[tuple[bytes, dict[str, int]]] | None = None
         self._packet_handlers: list[Callable[[bytes, dict[str, int]], Awaitable[None]]] = []
         self._handlers_lock = asyncio.Lock()
+        self._teardown_lock = asyncio.Lock()
         self._connected = False
         self._is_primary = False
         self._closed = False
@@ -165,6 +166,8 @@ class AsyncP4RuntimeClient:
         """Connect and await arbitration, releasing resources if setup is cancelled."""
         if self._connected:
             return
+        if self._channel is not None:
+            await self._teardown()
         self._closed = False
         self._channel = grpc.aio.insecure_channel(self.target)
         self._stub = p4runtime_pb2_grpc.P4RuntimeStub(self._channel)
@@ -202,6 +205,8 @@ class AsyncP4RuntimeClient:
         if self._stream_error is not None:
             err = self._stream_error
             await self._teardown()
+            if isinstance(err, ConnectionError):
+                raise err
             raise P4RuntimeError(f"async stream error: {err!r}") from err
         if self._arbitration is None:
             await self._teardown()
@@ -224,44 +229,47 @@ class AsyncP4RuntimeClient:
         )
 
     async def disconnect(self) -> None:
-        if self._closed:
-            return
         await self._teardown()
 
     async def _teardown(self) -> None:
-        self._closed = True
-        was_connected = self._connected
-        self._connected = False
-        self._is_primary = False
-        if self._outgoing is not None:
-            with self._suppress_queue_full():
-                self._outgoing.put_nowait(None)  # sentinel
-        if self._stream_call is not None:
-            try:
-                self._stream_call.cancel()
-            except Exception as exc:
-                logger.debug("async stream cancel raised: %r", exc)
-        if self._stream_task is not None and not self._stream_task.done():
-            self._stream_task.cancel()
-            try:
-                await asyncio.shield(asyncio.wait_for(self._stream_task, timeout=2.0))
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
-            except Exception as exc:
-                logger.debug("async stream task awaited with: %r", exc)
-        if self._channel is not None:
-            try:
-                await self._channel.close()
-            except Exception as exc:
-                logger.debug("async channel close raised: %r", exc)
-        self._channel = None
-        self._stub = None
-        self._stream_call = None
-        self._stream_task = None
-        self._outgoing = None
-        self._packet_in_queue = None
-        if was_connected:
-            logger.info("AsyncP4RuntimeClient %s disconnected", self.target)
+        async with self._teardown_lock:
+            self._closed = True
+            was_connected = self._connected
+            self._connected = False
+            self._is_primary = False
+            if self._outgoing is not None:
+                with self._suppress_queue_full():
+                    self._outgoing.put_nowait(None)  # sentinel
+            if self._stream_call is not None:
+                try:
+                    self._stream_call.cancel()
+                except Exception as exc:
+                    logger.debug("async stream cancel raised: %r", exc)
+            if (
+                self._stream_task is not None
+                and self._stream_task is not asyncio.current_task()
+                and not self._stream_task.done()
+            ):
+                self._stream_task.cancel()
+                try:
+                    await asyncio.shield(asyncio.wait_for(self._stream_task, timeout=2.0))
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except Exception as exc:
+                    logger.debug("async stream task awaited with: %r", exc)
+            if self._channel is not None:
+                try:
+                    await self._channel.close()
+                except Exception as exc:
+                    logger.debug("async channel close raised: %r", exc)
+            self._channel = None
+            self._stub = None
+            self._stream_call = None
+            self._stream_task = None
+            self._outgoing = None
+            self._packet_in_queue = None
+            if was_connected:
+                logger.info("AsyncP4RuntimeClient %s disconnected", self.target)
 
     @staticmethod
     def _suppress_queue_full() -> Any:
@@ -307,6 +315,15 @@ class AsyncP4RuntimeClient:
                 self._stream_error = exc
                 if self._arbitration_event is not None:
                     self._arbitration_event.set()
+        finally:
+            if not self._closed:
+                if self._stream_error is None:
+                    self._stream_error = ConnectionError(
+                        f"P4Runtime async stream ended for {self.target!r}"
+                    )
+                if self._arbitration_event is not None:
+                    self._arbitration_event.set()
+                await self._teardown()
 
     async def _dispatch_packet_in(self, packet: Any) -> None:
         payload = bytes(packet.payload)

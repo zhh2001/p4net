@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import grpc
 import pytest
 from google.rpc import code_pb2
 from p4.config.v1 import p4info_pb2
@@ -78,6 +79,9 @@ class _FakeStream:
         resp.packet.payload = payload
         await self._responses.put(resp)
 
+    async def finish(self, error: BaseException | None = None) -> None:
+        await self._responses.put(error if error is not None else StopAsyncIteration)
+
     def cancel(self) -> None:
         self._cancelled = True
         self._responses.put_nowait(StopAsyncIteration)
@@ -90,6 +94,8 @@ class _FakeStream:
         item = await self._responses.get()
         if item is StopAsyncIteration or self._cancelled:
             raise StopAsyncIteration
+        if isinstance(item, BaseException):
+            raise item
         return item
 
 
@@ -152,6 +158,171 @@ async def test_connect_then_disconnect_clean(patched_aio: dict[str, Any]) -> Non
     assert client.is_primary
     await client.disconnect()
     assert not client.is_connected
+
+
+@pytest.mark.parametrize("primary", [True, False])
+@pytest.mark.parametrize("ending", ["eof", "rpc-error", "exception", "cancelled"])
+async def test_stream_end_releases_resources_and_can_reconnect(
+    patched_aio: dict[str, Any], mocker: MockerFixture, primary: bool, ending: str
+) -> None:
+    client = await _connect(
+        patched_aio,
+        election_id=(1, 0) if primary else (0, 0),
+        status_code=code_pb2.OK if primary else code_pb2.ALREADY_EXISTS,
+    )
+    stream_task = client._stream_task
+    assert stream_task is not None
+    error: BaseException | None = None
+    if ending == "rpc-error":
+        error = grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), "server stopped")
+    elif ending == "exception":
+        error = RuntimeError("stream failed")
+    try:
+        if ending == "cancelled":
+            stream_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(stream_task), timeout=5.0)
+        else:
+            await patched_aio["stream"].finish(error)
+            await asyncio.wait_for(asyncio.shield(stream_task), timeout=5.0)
+        assert not client.is_connected
+        assert not client.is_primary
+        patched_aio["channel"].close.assert_awaited_once()
+        assert patched_aio["stream"]._cancelled
+        assert client._channel is None
+        assert client._stub is None
+        assert client._stream_call is None
+        assert client._stream_task is None
+        assert client._outgoing is None
+        assert client._packet_in_queue is None
+        if error is not None:
+            assert client._stream_error is error
+        with pytest.raises(ConnectionError):
+            await client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dstAddr": "10.0.0.0/24"},
+                "MyIngress.set_egress_port",
+                {"port": 2},
+            )
+        patched_aio["stub"].Write.assert_not_awaited()
+
+        retry_channel = MagicMock(name="retry-channel")
+        retry_channel.close = AsyncMock(return_value=None)
+        retry_stream = _FakeStream()
+        mocker.patch(
+            "p4net.control.async_client.grpc.aio.insecure_channel", return_value=retry_channel
+        )
+        patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+        await retry_stream.push_arbitration(code=code_pb2.OK)
+        await client.connect()
+        assert client.is_connected
+        assert client.is_primary
+        assert client._stream_error is None
+        assert client._stream_task is not stream_task
+        await client.disconnect()
+        retry_channel.close.assert_awaited_once()
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("arbitrated", [False, True])
+async def test_stream_end_during_connect_fails_promptly(
+    patched_aio: dict[str, Any], arbitrated: bool
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0, election_id=(1, 0))
+    if arbitrated:
+        await patched_aio["stream"].push_arbitration()
+    await patched_aio["stream"].finish()
+    try:
+        with pytest.raises(ConnectionError, match="stream ended"):
+            await asyncio.wait_for(client.connect(timeout=60.0), timeout=5.0)
+        assert not client.is_connected
+        assert not client.is_primary
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["disconnect", "reconnect"])
+async def test_lifecycle_waits_for_stream_cleanup(
+    patched_aio: dict[str, Any], mocker: MockerFixture, operation: str
+) -> None:
+    client = await _connect(patched_aio)
+    stream_task = client._stream_task
+    assert stream_task is not None
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+    operation_started = asyncio.Event()
+    next_task: asyncio.Task[None] | None = None
+
+    async def close() -> None:
+        close_started.set()
+        await release_close.wait()
+
+    patched_aio["channel"].close.side_effect = close
+    retry_channel = MagicMock(name="retry-channel")
+    retry_channel.close = AsyncMock(return_value=None)
+    retry_stream = _FakeStream()
+
+    async def run_operation() -> None:
+        operation_started.set()
+        if operation == "reconnect":
+            await client.connect()
+        else:
+            await client.disconnect()
+
+    try:
+        await patched_aio["stream"].finish()
+        await asyncio.wait_for(close_started.wait(), timeout=5.0)
+        assert not client.is_connected
+        assert not client.is_primary
+        mocker.patch(
+            "p4net.control.async_client.grpc.aio.insecure_channel", return_value=retry_channel
+        )
+        patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+        await retry_stream.push_arbitration()
+        next_task = asyncio.create_task(run_operation())
+        await asyncio.wait_for(operation_started.wait(), timeout=5.0)
+        assert not next_task.done()
+        assert patched_aio["stub"].StreamChannel.call_count == 1
+        release_close.set()
+        await asyncio.wait_for(asyncio.gather(stream_task, next_task), timeout=5.0)
+        patched_aio["channel"].close.assert_awaited_once()
+        if operation == "reconnect":
+            assert client.is_connected
+            assert client.is_primary
+            assert client._channel is retry_channel
+        else:
+            assert not client.is_connected
+            assert client._channel is None
+    finally:
+        release_close.set()
+        if next_task is not None:
+            await asyncio.gather(next_task, return_exceptions=True)
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("rpc_error", [True, False])
+async def test_stream_error_during_connect_preserves_cause(
+    patched_aio: dict[str, Any], rpc_error: bool
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0, election_id=(1, 0))
+    error = (
+        grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), "server stopped")
+        if rpc_error
+        else RuntimeError("stream failed")
+    )
+    await patched_aio["stream"].finish(error)
+    try:
+        with pytest.raises(P4RuntimeError, match="async stream error") as raised:
+            await asyncio.wait_for(client.connect(timeout=60.0), timeout=5.0)
+        assert raised.value.__cause__ is error
+        assert not client.is_connected
+        assert not client.is_primary
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        await client.disconnect()
 
 
 @pytest.mark.parametrize("cancel_mode", ["task", "wait-for", "context-manager"])

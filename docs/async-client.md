@@ -4,43 +4,21 @@ description: AsyncP4RuntimeClient is a parallel async P4Runtime client based on 
 
 # Async client
 
-`AsyncP4RuntimeClient` (added in 1.6) is the async parallel to the
-sync `P4RuntimeClient` shipped since 1.0. Same public method names,
-every method `async def`, backed by `grpc.aio` instead of the sync
-gRPC channel.
+`AsyncP4RuntimeClient` (added in 1.6) is the async parallel to the sync `P4RuntimeClient` shipped since 1.0. Same public method names, every method `async def`, backed by `grpc.aio` instead of the sync gRPC channel.
 
-The two clients are independent and can coexist. The sync API at
-`switch.client` remains the recommended starting point for new code;
-the async API at `switch.async_client` is the right choice when you
-need concurrency across switches, async PacketIn handlers, or want to
-avoid the sync client's threading-related caveats.
+The two clients are independent and can coexist. The sync API at `switch.client` remains the recommended starting point for new code; the async API at `switch.async_client` is the right choice when you need concurrency across switches, async PacketIn handlers, or want to avoid the sync client's threading-related caveats.
 
-`AsyncP4RuntimeClient` is **Stable** in p4net 1.x since version 1.7.0
-(promoted from Provisional after empirical user soak — see the
-[API Stability](api-stability.md) page for the contract).
+`AsyncP4RuntimeClient` is **Stable** in p4net 1.x since version 1.7.0 (promoted from Provisional after empirical user soak — see the [API Stability](api-stability.md) page for the contract).
 
 ## Why async
 
 Three reasons to reach for the async API:
 
-1. **Concurrent operations across switches.** Programming N switches'
-   forwarding tables sequentially is O(N × RTT); using
-   `asyncio.gather` collapses that to O(RTT) plus event-loop
-   overhead. The [`async_concurrent`](examples/async-concurrent.md)
-   example shows the speedup pattern in practice.
+1. **Concurrent operations across switches.** Programming N switches' forwarding tables sequentially is O(N × RTT); using `asyncio.gather` collapses that to O(RTT) plus event-loop overhead. The [`async_concurrent`](examples/async-concurrent.md) example shows the speedup pattern in practice.
 
-2. **Natural async PacketIn handlers.** Register an `async def`
-   callback with `client.on_packet_in(...)` and propagate values
-   through the rest of your async pipeline. The sync client's
-   handlers run on a background thread; the async client's run
-   on your event loop.
+2. **Natural async PacketIn handlers.** Register an `async def` callback with `client.on_packet_in(...)` and propagate values through the rest of your async pipeline. The sync client's handlers run on a background thread; the async client's run on your event loop.
 
-3. **Bypasses the sync client's multi-threaded-fork pathology.** The
-   sync `P4RuntimeClient` spawns gRPC background threads; combining
-   that with `subprocess.run` in the same Python process can
-   deadlock — see
-   [Known Limitations](known-limitations.md). `grpc.aio` doesn't
-   spawn background threads, so the trap doesn't apply.
+3. **Bypasses the sync client's multi-threaded-fork pathology.** The sync `P4RuntimeClient` spawns gRPC background threads; combining that with `subprocess.run` in the same Python process can deadlock — see [Known Limitations](known-limitations.md). `grpc.aio` doesn't spawn background threads, so the trap doesn't apply.
 
 ## Quick start
 
@@ -72,65 +50,33 @@ with Network(topology) as net:
 
 ## API reference
 
-See the generated docs for `p4net.control.AsyncP4RuntimeClient`:
-constructor, properties, lifecycle, table CRUD, counters, registers,
-packet I/O.
+See the generated docs for `p4net.control.AsyncP4RuntimeClient`: constructor, properties, lifecycle, table CRUD, counters, registers, packet I/O.
 
-The API mirror is exact at the method-name level. Where the sync API
-returns a `list[dict]` for streaming reads, the async API returns an
-`AsyncIterator[dict]` — `list_table_entries` is the canonical
-example. Where the sync API takes a `Callable[[bytes, dict], None]`
-for `on_packet_in`, the async API takes a
-`Callable[[bytes, dict], Awaitable[None]]`.
+The API mirror is exact at the method-name level. Where the sync API returns a `list[dict]` for streaming reads, the async API returns an `AsyncIterator[dict]` — `list_table_entries` is the canonical example. Where the sync API takes a `Callable[[bytes, dict], None]` for `on_packet_in`, the async API takes a `Callable[[bytes, dict], Awaitable[None]]`.
 
 ## Mastership and dual clients
 
-Each `P4Runtime` client owns an election ID. The BMv2 device accepts
-exactly one client as **primary** at any moment; others are
-secondary. The sync and async clients are **independent** — they
-each have their own election ID, even when they're hitting the same
-switch.
+Each `P4Runtime` client owns an election ID. The BMv2 device accepts exactly one client as **primary** at any moment; others are secondary. The sync and async clients are **independent** — they each have their own election ID, even when they're hitting the same switch.
 
 Three usage patterns:
 
-- **All sync (the v1.0 default).** Build a `Network`, use
-  `switch.client` for everything. The sync client's election ID is
-  the millisecond-time-since-epoch of `Network.start()`, so it's
-  primary by default.
+- **All sync (the v1.0 default).** Build a `Network`, use `switch.client` for everything. The sync client's election ID is the millisecond-time-since-epoch of `Network.start()`, so it's primary by default.
 
-- **All async.** Use `switch.async_client.connect()` for every
-  switch. Pass `election_id=(higher_value, 0)` if the sync client
-  is also connected somewhere; otherwise the async client takes
-  primary on first arbitration.
+- **All async.** Use `switch.async_client.connect()` for every switch. Pass `election_id=(higher_value, 0)` if the sync client is also connected somewhere; otherwise the async client takes primary on first arbitration.
 
-- **Mixed with explicit election IDs.** Sync primary (writes); async
-  secondary (reads only). Construct the async client with
-  `election_id=(0, 0)` to force it into secondary; reads still work,
-  writes raise `NotPrimaryError`.
+- **Mixed with explicit election IDs.** Sync primary (writes); async secondary (reads only). Construct the async client with `election_id=(0, 0)` to force it into secondary; reads still work, writes raise `NotPrimaryError`.
 
-Each arbitration notification updates `client.is_primary`: status `OK`
-sets it to `True`, and any other status sets it to `False`. The connection
-stays open when primary status changes. A client that loses primary
-status can still read, while writes raise `NotPrimaryError`.
+Each arbitration notification updates `client.is_primary`: status `OK` sets it to `True`, and any other status sets it to `False`. The connection stays open when primary status changes. A client that loses primary status can still read, while writes raise `NotPrimaryError`.
 
 ## Cancellation and error handling
 
-`grpc.aio` surfaces remote errors as `grpc.aio.AioRpcError`; the
-async client translates these into the same exception hierarchy as
-the sync client (`DuplicateEntryError`, `EntryNotFoundError`,
-`NotPrimaryError`, `PipelineError`, `P4RuntimeError`).
+`grpc.aio` surfaces remote errors as `grpc.aio.AioRpcError`; the async client translates these into the same exception hierarchy as the sync client (`DuplicateEntryError`, `EntryNotFoundError`, `NotPrimaryError`, `PipelineError`, `P4RuntimeError`).
 
-If `connect()` is cancelled while waiting for arbitration, it closes its
-gRPC channel and stops its stream task before propagating
-`asyncio.CancelledError`. Cancellation by an outer `asyncio.wait_for()`
-follows the same cleanup path.
+If `connect()` is cancelled while waiting for arbitration, it closes its gRPC channel and stops its stream task before propagating `asyncio.CancelledError`. Cancellation by an outer `asyncio.wait_for()` follows the same cleanup path.
 
-When an in-flight operation is cancelled — typically because the
-owning task was cancelled, or `disconnect()` was called concurrently
-— the async client raises
-[`AsyncOperationCancelledError`](api-stability.md#p4netcontrol),
-a subclass of `P4RuntimeError`. This lets cancellation sites
-distinguish a clean cancel from a connection failure:
+When the StreamChannel ends or fails, the client clears `is_connected` and `is_primary` and closes the channel. New operations raise `ConnectionError`. Call `connect()` to establish a new stream on the same client. If the stream ends during the initial arbitration, `connect()` fails without waiting for the arbitration timeout. If cleanup is still running, `connect()` and `disconnect()` wait for it to finish.
+
+When an in-flight operation is cancelled — typically because the owning task was cancelled, or `disconnect()` was called concurrently — the async client raises [`AsyncOperationCancelledError`](api-stability.md#p4netcontrol), a subclass of `P4RuntimeError`. This lets cancellation sites distinguish a clean cancel from a connection failure:
 
 ```python
 try:
@@ -143,14 +89,8 @@ except P4RuntimeError:
     ...  # any other client failure
 ```
 
-`asyncio.CancelledError` itself propagates through the client
-unchanged for tasks the caller cancels at the task level (rather
-than inside the RPC).
+`asyncio.CancelledError` itself propagates through the client unchanged for tasks the caller cancels at the task level (rather than inside the RPC).
 
 ## Stability
 
-The async API is **Stable** in p4net 1.x since version 1.7.0. It was
-introduced as Provisional in 1.6.0 and promoted after real-world user
-soak surfaced no need for backwards-incompatible adjustments — see the
-[API Stability](api-stability.md#provisional-tier-and-async-client)
-page for the full contract and promotion rationale.
+The async API is **Stable** in p4net 1.x since version 1.7.0. It was introduced as Provisional in 1.6.0 and promoted after real-world user soak surfaced no need for backwards-incompatible adjustments — see the [API Stability](api-stability.md#provisional-tier-and-async-client) page for the full contract and promotion rationale.

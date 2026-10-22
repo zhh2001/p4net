@@ -29,9 +29,11 @@ from p4net import Network
 from p4net.control import (
     AsyncOperationCancelledError,  # noqa: F401  (exposed for tests if useful)
     AsyncP4RuntimeClient,
+    ConnectionError,
     NoSuchRegisterError,
     NotPrimaryError,
 )
+from p4net.runtime import BMv2Switch
 from p4net.topo import Topology
 
 pytestmark = [
@@ -89,6 +91,75 @@ async def test_basic_lifecycle(tmp_path: Path) -> None:
         assert not client.is_connected
     finally:
         await asyncio.to_thread(net.stop)
+
+
+async def test_stream_end_clears_state_and_allows_reconnect(tmp_path: Path) -> None:
+    suffix = _suffix()
+    switch = f"s{suffix}"
+    host = f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await asyncio.to_thread(net.start)
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (sw.client.election_id[0] + 1, 0)
+    replacement = BMv2Switch(
+        f"{switch}-replacement",
+        device_id=client.device_id,
+        grpc_port=client.grpc_address[1],
+        thrift_port=sw.bmv2.thrift_port,
+        bmv2_json=sw.compile_result.bmv2_json,
+        port_to_iface={},
+        log_dir=tmp_path / "restart-logs",
+    )
+    try:
+        await client.connect()
+        assert client.is_connected
+        assert client.is_primary
+        channel = client._channel
+        stream_task = client._stream_task
+        assert stream_task is not None
+        await asyncio.to_thread(sw.bmv2.stop)
+        await asyncio.wait_for(asyncio.shield(stream_task), timeout=5.0)
+        assert not client.is_connected
+        assert not client.is_primary
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert client._channel is None
+        assert client._stream_task is None
+        with pytest.raises(ConnectionError):
+            client.list_table_entries("MyIngress.ipv4_lpm")
+
+        await asyncio.to_thread(replacement.start)
+        await asyncio.to_thread(replacement.wait_until_ready)
+        await client.connect()
+        assert client.is_connected
+        assert client.is_primary
+        assert client._channel is not channel
+        await client.push_pipeline(
+            sw.compile_result.p4info.read_bytes(), sw.compile_result.bmv2_json.read_bytes()
+        )
+        await client.insert_table_entry(
+            "MyIngress.ipv4_lpm",
+            {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+            "MyIngress.set_egress_port",
+            {"port": 2},
+        )
+        assert [entry["params"] async for entry in client.list_table_entries()] == [
+            {"port": b"\x02"}
+        ]
+    finally:
+        try:
+            await client.disconnect()
+        finally:
+            try:
+                await asyncio.to_thread(replacement.stop)
+            finally:
+                await asyncio.to_thread(net.stop)
 
 
 @pytest.mark.parametrize("cancel_mode", ["task", "wait-for"])
