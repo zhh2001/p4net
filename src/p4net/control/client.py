@@ -138,7 +138,12 @@ def _grpc_code_for(canonical: int) -> grpc.StatusCode | None:
 
 
 class P4RuntimeClient:
-    """gRPC client for a single P4Runtime device."""
+    """gRPC client for a single P4Runtime device.
+
+    When the StreamChannel ends or fails, the client closes its channel
+    and clears the connected state. Call :meth:`connect` to reconnect.
+    Lifecycle calls wait for any channel cleanup already in progress.
+    """
 
     def __init__(
         self,
@@ -170,6 +175,7 @@ class P4RuntimeClient:
         self._stream_error: BaseException | None = None
         self._connected = False
         self._closed = False
+        self._teardown_lock = threading.RLock()
         self._index: P4InfoIndex | None = None
         # Controller packet I/O. Handlers run on the stream-consumer thread.
         self._packet_in_handlers: list[Callable[[bytes, dict[str, int]], None]] = []
@@ -213,122 +219,151 @@ class P4RuntimeClient:
 
     def connect(self, *, timeout: float = 10.0) -> None:
         """Open the gRPC channel, start the StreamChannel, do master arbitration."""
-        if self._connected:
-            return
-        self._closed = False
-        self._channel = grpc.insecure_channel(self._target, options=self._channel_options)
-        self._stub = p4runtime_pb2_grpc.P4RuntimeStub(self._channel)
-        self._outgoing = queue.Queue()
-        self._stream_event.clear()
-        self._arbitration = None
-        self._stream_error = None
-        try:
-            self._stream_call = self._stub.StreamChannel(self._request_generator())
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
-        self._stream_thread = threading.Thread(
-            target=self._stream_consumer, name="p4rt-stream", daemon=True
-        )
-        self._stream_thread.start()
-
-        # Send the initial arbitration update.
-        req = p4runtime_pb2.StreamMessageRequest()
-        req.arbitration.device_id = self._device_id
-        req.arbitration.election_id.high = self._election_id_high
-        req.arbitration.election_id.low = self._election_id_low
-        if self._role_name:
-            req.arbitration.role.name = self._role_name
-        assert self._outgoing is not None
-        self._outgoing.put(req)
-
-        if not self._stream_event.wait(timeout):
+        if self._channel is not None and not self._connected:
             self._teardown()
+        with self._teardown_lock:
+            if self._connected:
+                return
+            self._closed = False
+            self._channel = grpc.insecure_channel(self._target, options=self._channel_options)
+            self._stub = p4runtime_pb2_grpc.P4RuntimeStub(self._channel)
+            outgoing = self._outgoing = queue.Queue()
+            stream_event = self._stream_event = threading.Event()
+            self._arbitration = None
+            self._stream_error = None
+            try:
+                stream_call = self._stream_call = self._stub.StreamChannel(
+                    self._request_generator(outgoing)
+                )
+            except grpc.RpcError as exc:
+                self._teardown()
+                raise self._translate_rpc_error(exc) from exc
+            self._stream_thread = threading.Thread(
+                target=self._stream_consumer, args=(stream_call,), name="p4rt-stream", daemon=True
+            )
+            self._stream_thread.start()
+
+            # Send the initial arbitration update.
+            req = p4runtime_pb2.StreamMessageRequest()
+            req.arbitration.device_id = self._device_id
+            req.arbitration.election_id.high = self._election_id_high
+            req.arbitration.election_id.low = self._election_id_low
+            if self._role_name:
+                req.arbitration.role.name = self._role_name
+            outgoing.put(req)
+
+        if not stream_event.wait(timeout):
+            self._teardown(expected_stream=stream_call)
             raise ConnectionError(
                 f"P4Runtime arbitration timed out after {timeout}s for {self._target!r}"
             )
-        if self._stream_error is not None:
+        with self._teardown_lock:
             err = self._stream_error
-            self._teardown()
+            arbitration = self._arbitration
+            active = stream_call is self._stream_call and not self._closed
+            if active and err is None and arbitration is not None and arbitration.status.code == 0:
+                self._connected = True
+                logger.debug(
+                    "P4Runtime client %r connected, election_id=(%d, %d)",
+                    self._target,
+                    self._election_id_high,
+                    self._election_id_low,
+                )
+                return
+        self._teardown(expected_stream=stream_call)
+        if err is not None:
             if isinstance(err, grpc.RpcError):
                 raise self._translate_rpc_error(err) from err
+            if isinstance(err, ConnectionError):
+                raise err
             raise P4RuntimeError(f"stream error: {err!r}") from err
-        if self._arbitration is None:
-            self._teardown()
+        if not active:
+            raise ConnectionError("P4Runtime connection closed during arbitration")
+        if arbitration is None:
             raise ConnectionError("no arbitration response received")
-        status_code = int(self._arbitration.status.code)
-        if status_code != 0:
-            self._teardown()
-            raise NotPrimaryError(
-                f"client is not primary for device {self._device_id} "
-                f"(status code {status_code}, message {self._arbitration.status.message!r})"
-            )
-        self._connected = True
-        logger.debug(
-            "P4Runtime client %r connected, election_id=(%d, %d)",
-            self._target,
-            self._election_id_high,
-            self._election_id_low,
+        raise NotPrimaryError(
+            f"client is not primary for device {self._device_id} "
+            f"(status code {int(arbitration.status.code)}, message {arbitration.status.message!r})"
         )
 
     def disconnect(self) -> None:
         """Close the stream channel and the gRPC channel. Idempotent."""
-        if self._closed:
-            return
         self._teardown()
 
-    def _teardown(self) -> None:
-        self._closed = True
-        was_connected = self._connected
-        self._connected = False
-        if self._outgoing is not None:
-            with contextlib.suppress(queue.Full):
-                self._outgoing.put_nowait(_SENTINEL)
-        if self._stream_call is not None:
-            try:
-                self._stream_call.cancel()
-            except Exception as exc:
-                logger.debug("stream cancel raised: %r", exc)
-        if self._stream_thread is not None and self._stream_thread.is_alive():
-            self._stream_thread.join(timeout=2.0)
-        if self._channel is not None:
-            try:
-                self._channel.close()
-            except Exception as exc:
-                logger.debug("channel close raised: %r", exc)
-        self._channel = None
-        self._stub = None
-        self._stream_call = None
-        self._stream_thread = None
-        self._outgoing = None
+    def _teardown(self, *, expected_stream: Any = None) -> None:
+        with self._teardown_lock:
+            if expected_stream is not None and expected_stream is not self._stream_call:
+                return
+            self._closed = True
+            was_connected = self._connected
+            self._connected = False
+            if self._channel is not None and not was_connected:
+                if self._stream_error is None:
+                    self._stream_error = ConnectionError(
+                        f"P4Runtime connection closed before arbitration for {self._target!r}"
+                    )
+                self._stream_event.set()
+            if self._outgoing is not None:
+                with contextlib.suppress(queue.Full):
+                    self._outgoing.put_nowait(_SENTINEL)
+            if self._stream_call is not None:
+                try:
+                    self._stream_call.cancel()
+                except Exception as exc:
+                    logger.debug("stream cancel raised: %r", exc)
+            stream_thread = self._stream_thread
+            if self._channel is not None:
+                try:
+                    self._channel.close()
+                except Exception as exc:
+                    logger.debug("channel close raised: %r", exc)
+            self._channel = None
+            self._stub = None
+            self._stream_call = None
+            self._stream_thread = None
+            self._outgoing = None
+        # The consumer also takes the lock when it exits. Join after releasing it.
+        if (
+            stream_thread is not None
+            and stream_thread is not threading.current_thread()
+            and stream_thread.is_alive()
+        ):
+            stream_thread.join(timeout=2.0)
         if was_connected:
             logger.debug("P4Runtime client %r disconnected", self._target)
 
-    def _request_generator(self) -> Iterator[Any]:
-        assert self._outgoing is not None
+    def _request_generator(self, outgoing: queue.Queue[Any]) -> Iterator[Any]:
         while True:
-            msg = self._outgoing.get()
+            msg = outgoing.get()
             if msg is _SENTINEL:
                 return
             yield msg
 
-    def _stream_consumer(self) -> None:
+    def _stream_consumer(self, stream_call: Any) -> None:
         try:
-            assert self._stream_call is not None
-            for resp in self._stream_call:
-                if resp.HasField("arbitration"):
-                    self._arbitration = resp.arbitration
-                    self._stream_event.set()
-                elif resp.HasField("packet"):
+            for resp in stream_call:
+                with self._teardown_lock:
+                    if self._closed or stream_call is not self._stream_call:
+                        return
+                    if resp.HasField("arbitration"):
+                        self._arbitration = resp.arbitration
+                        self._stream_event.set()
+                if resp.HasField("packet"):
                     self._dispatch_packet_in(resp.packet)
                 # Future: digest / idle-notification / etc.
-        except grpc.RpcError as exc:
-            if not self._closed:
-                self._stream_error = exc
-                self._stream_event.set()
         except Exception as exc:
-            if not self._closed:
-                self._stream_error = exc
-                self._stream_event.set()
+            with self._teardown_lock:
+                if not self._closed and stream_call is self._stream_call:
+                    self._stream_error = exc
+        finally:
+            with self._teardown_lock:
+                if not self._closed and stream_call is self._stream_call:
+                    if self._stream_error is None:
+                        self._stream_error = ConnectionError(
+                            f"P4Runtime stream ended for {self._target!r}"
+                        )
+                    self._stream_event.set()
+                    self._teardown(expected_stream=stream_call)
 
     def _dispatch_packet_in(self, packet: Any) -> None:
         """Decode a PacketIn and fan out to registered handlers."""

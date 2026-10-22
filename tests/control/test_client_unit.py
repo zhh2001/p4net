@@ -5,9 +5,10 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import grpc
 import pytest
@@ -42,6 +43,7 @@ class FakeStreamCall:
         self._cancelled = False
         self._reader: threading.Thread | None = None
         self._request_iter: Iterator[Any] | None = None
+        self.read_started = threading.Event()
 
     def attach_request_iter(self, request_iter: Iterator[Any]) -> None:
         self._request_iter = request_iter
@@ -60,9 +62,12 @@ class FakeStreamCall:
         return self
 
     def __next__(self) -> Any:
+        self.read_started.set()
         item = self.responses.get()
         if item is StopIteration or self._cancelled:
             raise StopIteration
+        if isinstance(item, BaseException):
+            raise item
         return item
 
     def cancel(self) -> None:
@@ -221,6 +226,273 @@ def test_connect_arbitration_timeout(patched_grpc: dict[str, Any]) -> None:
     with pytest.raises(ConnectionError, match="timed out"):
         client.connect(timeout=0.2)
     assert not client.is_connected()
+
+
+@pytest.mark.parametrize("ending", ["eof", "rpc-error", "exception"])
+def test_stream_end_releases_resources_and_allows_reconnect(
+    patched_grpc: dict[str, Any], mocker: MockerFixture, ending: str
+) -> None:
+    stream: FakeStreamCall = patched_grpc["stream"]
+    stream.responses.put(_make_arbitration_response(1, (1, 0)))
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    client.connect(timeout=2.0)
+    consumer = client._stream_thread
+    assert consumer is not None
+    error = None
+    if ending == "rpc-error":
+        error = _grpc_error(grpc.StatusCode.UNAVAILABLE, "server stopped")
+    elif ending == "exception":
+        error = RuntimeError("stream failed")
+    try:
+        stream.responses.put(error if error is not None else StopIteration)
+        consumer.join(timeout=2.0)
+        assert not consumer.is_alive()
+        assert not client.is_connected()
+        patched_grpc["channel"].close.assert_called_once()
+        assert stream._cancelled
+        assert client._channel is None
+        assert client._stub is None
+        assert client._stream_call is None
+        assert client._stream_thread is None
+        assert client._outgoing is None
+        if error is not None:
+            assert client._stream_error is error
+        with pytest.raises(ConnectionError):
+            client.get_pipeline_config()
+
+        replacement = FakeStreamCall()
+        replacement.responses.put(_make_arbitration_response(1, (1, 0)))
+        channel = MagicMock(name="replacement-channel")
+        mocker.patch("p4net.control.client.grpc.insecure_channel", return_value=channel)
+
+        def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+            replacement.attach_request_iter(requests)
+            return replacement
+
+        patched_grpc["stub"].StreamChannel.side_effect = open_stream
+        client.connect(timeout=2.0)
+        assert client.is_connected()
+        assert client._channel is channel
+        assert client._stream_call is replacement
+        assert client._stream_error is None
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("arbitrated", [False, True])
+def test_stream_end_during_connect_fails_promptly(
+    patched_grpc: dict[str, Any], mocker: MockerFixture, arbitrated: bool
+) -> None:
+    stream: FakeStreamCall = patched_grpc["stream"]
+    if arbitrated:
+        stream.responses.put(_make_arbitration_response(1, (1, 0)))
+    stream.responses.put(StopIteration)
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    if arbitrated:
+        open_stream = patched_grpc["stub"].StreamChannel.side_effect
+
+        def wait_for_consumer_before_returning(requests: Iterator[Any]) -> FakeStreamCall:
+            event = client._stream_event
+            wait = event.wait
+
+            def wait_for_end(timeout: float | None = None) -> bool:
+                signalled = wait(timeout)
+                consumer = client._stream_thread
+                if consumer is not None:
+                    consumer.join(timeout=2.0)
+                    assert not consumer.is_alive()
+                return signalled
+
+            mocker.patch.object(event, "wait", side_effect=wait_for_end)
+            return open_stream(requests)
+
+        patched_grpc["stub"].StreamChannel.side_effect = wait_for_consumer_before_returning
+    try:
+        with pytest.raises(ConnectionError, match="stream ended"):
+            client.connect(timeout=2.0)
+        assert not client.is_connected()
+        patched_grpc["channel"].close.assert_called_once()
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("rpc_error", [False, True])
+def test_initial_stream_error_preserves_cause(
+    patched_grpc: dict[str, Any], rpc_error: bool
+) -> None:
+    error = (
+        _grpc_error(grpc.StatusCode.UNAVAILABLE, "server stopped")
+        if rpc_error
+        else RuntimeError("stream failed")
+    )
+    patched_grpc["stream"].responses.put(error)
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    try:
+        with pytest.raises(ConnectionError if rpc_error else P4RuntimeError) as raised:
+            client.connect(timeout=2.0)
+        assert raised.value.__cause__ is error
+        assert not client.is_connected()
+        patched_grpc["channel"].close.assert_called_once()
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["disconnect", "reconnect"])
+def test_lifecycle_waits_for_stream_cleanup(
+    patched_grpc: dict[str, Any], mocker: MockerFixture, operation: str
+) -> None:
+    stream: FakeStreamCall = patched_grpc["stream"]
+    stream.responses.put(_make_arbitration_response(1, (1, 0)))
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    client.connect(timeout=2.0)
+    close_started = threading.Event()
+    release_close = threading.Event()
+    operation_started = threading.Event()
+
+    def close() -> None:
+        close_started.set()
+        assert release_close.wait(timeout=5.0)
+
+    patched_grpc["channel"].close.side_effect = close
+    replacement = FakeStreamCall()
+    replacement.responses.put(_make_arbitration_response(1, (1, 0)))
+    channel = MagicMock(name="replacement-channel")
+
+    def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+        replacement.attach_request_iter(requests)
+        return replacement
+
+    def run_operation() -> None:
+        operation_started.set()
+        if operation == "reconnect":
+            client.connect(timeout=2.0)
+        else:
+            client.disconnect()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            stream.responses.put(StopIteration)
+            assert close_started.wait(timeout=1.0)
+            assert not client.is_connected()
+            mocker.patch("p4net.control.client.grpc.insecure_channel", return_value=channel)
+            patched_grpc["stub"].StreamChannel.side_effect = open_stream
+            task = pool.submit(run_operation)
+            assert operation_started.wait(timeout=1.0)
+            assert not task.done()
+            release_close.set()
+            task.result(timeout=2.0)
+            patched_grpc["channel"].close.assert_called_once()
+            assert client.is_connected() == (operation == "reconnect")
+            if operation == "reconnect":
+                assert client._channel is channel
+        finally:
+            release_close.set()
+            client.disconnect()
+
+
+def test_disconnect_wakes_pending_connect(patched_grpc: dict[str, Any]) -> None:
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        attempt = pool.submit(client.connect, timeout=5.0)
+        try:
+            assert patched_grpc["stream"].read_started.wait(timeout=1.0)
+            client.disconnect()
+            with pytest.raises(ConnectionError, match="closed"):
+                attempt.result(timeout=1.0)
+            assert not client.is_connected()
+        finally:
+            client.disconnect()
+
+
+def test_packet_handler_can_disconnect(patched_grpc: dict[str, Any]) -> None:
+    stream: FakeStreamCall = patched_grpc["stream"]
+    stream.responses.put(_make_arbitration_response(1, (1, 0)))
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    client.connect(timeout=2.0)
+    handled = threading.Event()
+    errors: list[Exception] = []
+
+    def handler(payload: bytes, metadata: dict[str, int]) -> None:
+        try:
+            client.disconnect()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            handled.set()
+
+    client.on_packet_in(handler)
+    packet = p4runtime_pb2.StreamMessageResponse()
+    packet.packet.payload = b"test"
+    try:
+        stream.responses.put(packet)
+        assert handled.wait(timeout=2.0)
+        assert not errors
+        assert not client.is_connected()
+        patched_grpc["channel"].close.assert_called_once()
+    finally:
+        client._teardown()
+
+
+@pytest.mark.parametrize("ending", ["eof", "exception"])
+def test_old_consumer_does_not_close_reconnected_client(
+    patched_grpc: dict[str, Any], mocker: MockerFixture, ending: str
+) -> None:
+    class DelayedStream(FakeStreamCall):
+        def __next__(self) -> Any:
+            try:
+                return super().__next__()
+            except StopIteration:
+                if ending == "exception":
+                    raise RuntimeError("old stream failed") from None
+                raise
+
+    stream = DelayedStream()
+    replacement = FakeStreamCall()
+    streams = iter([stream, replacement])
+
+    def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+        current = next(streams)
+        current.attach_request_iter(requests)
+        return current
+
+    patched_grpc["stub"].StreamChannel.side_effect = open_stream
+    stream.responses.put(_make_arbitration_response(1, (1, 0)))
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    client.connect(timeout=2.0)
+    consumer = client._stream_thread
+    assert consumer is not None
+    entered_handler = threading.Event()
+    release_handler = threading.Event()
+
+    def handler(payload: bytes, metadata: dict[str, int]) -> None:
+        entered_handler.set()
+        assert release_handler.wait(timeout=5.0)
+
+    client.on_packet_in(handler)
+    packet = p4runtime_pb2.StreamMessageResponse()
+    packet.packet.payload = b"old packet"
+    try:
+        stream.responses.put(packet)
+        assert entered_handler.wait(timeout=1.0)
+        # Model a callback that outlives disconnect()'s bounded join.
+        with patch.object(consumer, "join", return_value=None):
+            client.disconnect()
+        channel = MagicMock(name="replacement-channel")
+        mocker.patch("p4net.control.client.grpc.insecure_channel", return_value=channel)
+        replacement.responses.put(_make_arbitration_response(1, (1, 0)))
+        client.connect(timeout=2.0)
+        release_handler.set()
+        consumer.join(timeout=1.0)
+        assert not consumer.is_alive()
+        assert client.is_connected()
+        assert client._channel is channel
+        assert client._stream_call is replacement
+        assert client._stream_error is None
+        channel.close.assert_not_called()
+        assert not replacement._cancelled
+    finally:
+        release_handler.set()
+        client.disconnect()
 
 
 def test_disconnect_is_idempotent(patched_grpc: dict[str, Any]) -> None:

@@ -71,6 +71,8 @@ P4Runtime gRPC client and codec helpers:
 - **`P4InfoIndex`** — name → ID lookups, match-field bitwidth and match-type resolution, `encode_match`, `decode_match` (renders raw P4Runtime canonical bytes back into IPv4/IPv6/MAC/decimal human strings), `encode_action`, controller-header schemas (`packet_in_metadata_schema`, `packet_out_metadata_schema`).
 - **codec helpers** — `encode_int`, `encode_ipv4`, `encode_mac`, `encode_value` (auto-dispatch), `decode_int`, `decode_ipv4`, `decode_ipv6`, `decode_mac`, `parse_lpm`, `parse_ternary`, `parse_range`, `format_exact`, `format_lpm`, `format_ternary`, `format_range`, `canonicalize`. Width-aware formatting selects IPv4 for 32-bit fields, MAC for 48-bit, IPv6 for 128-bit, decimal for everything else.
 
+When the synchronous client's StreamChannel ends or fails, it clears its connected state and closes the gRPC channel. New operations raise `ConnectionError`. Call `connect()` to establish a new stream on the same client. `connect()` and `disconnect()` wait for channel cleanup already in progress. If the stream ends during the initial arbitration, `connect()` fails immediately.
+
 API: [`p4net.control`](api/control.md).
 
 ### `p4net.network`

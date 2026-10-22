@@ -71,6 +71,8 @@ P4Runtime gRPC 客户端与 codec 帮助函数：
 - **`P4InfoIndex`** —— 名称到 ID 的查询、匹配字段位宽与类型解析、`encode_match`、`decode_match`（把 P4Runtime 规范字节渲染为 IPv4/IPv6/MAC/十进制人类可读字符串）、`encode_action`、控制器报头 schema（`packet_in_metadata_schema`、`packet_out_metadata_schema`）。
 - **codec 帮助函数** —— `encode_int`、`encode_ipv4`、`encode_mac`、`encode_value`（自动分发）、`decode_int`、`decode_ipv4`、`decode_ipv6`、`decode_mac`、`parse_lpm`、`parse_ternary`、`parse_range`、`format_exact`、`format_lpm`、`format_ternary`、`format_range`、`canonicalize`。位宽感知的格式化器对 32 位字段渲染为 IPv4，48 位为 MAC，128 位为 IPv6，其余位宽为十进制。
 
+同步客户端的 StreamChannel 结束或报错后，会清除连接状态并关闭 gRPC 通道。此后发起新操作会抛出 `ConnectionError`，可调用 `connect()` 在同一客户端上重新连接。旧通道正在清理时，`connect()` 和 `disconnect()` 会等待清理完成。初次仲裁期间断流时，`connect()` 会立即报错。
+
 API：[`p4net.control`](api/control.md)。
 
 ### `p4net.network`

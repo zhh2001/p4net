@@ -16,6 +16,7 @@ import pytest
 
 from p4net.compiler import P4Compiler
 from p4net.control import (
+    ConnectionError,
     CounterData,
     DuplicateEntryError,
     EntryNotFoundError,
@@ -103,6 +104,54 @@ def test_connect_and_set_get_pipeline(
         assert len(bmv2_data) > 0
     finally:
         c.disconnect()
+
+
+def test_stream_end_clears_state_and_allows_reconnect(
+    bmv2: BMv2Switch,
+    client: P4RuntimeClient,
+    tmp_path: Path,
+    compiled_artifacts: dict[str, Path],
+) -> None:
+    channel = client._channel
+    consumer = client._stream_thread
+    assert consumer is not None
+    replacement = BMv2Switch(
+        "s_p4rt_replacement",
+        device_id=0,
+        grpc_port=int(bmv2.grpc_address.rsplit(":", 1)[1]),
+        thrift_port=bmv2.thrift_port,
+        bmv2_json=compiled_artifacts["bmv2_json"],
+        port_to_iface={},
+        log_dir=tmp_path / "restart-logs",
+    )
+    try:
+        bmv2.stop()
+        consumer.join(timeout=5.0)
+        assert not consumer.is_alive()
+        assert not client.is_connected()
+        assert client._channel is None
+        assert client._stream_call is None
+        with pytest.raises(ConnectionError):
+            client.get_pipeline_config()
+
+        replacement.start()
+        replacement.wait_until_ready()
+        client.connect(timeout=5.0)
+        assert client.is_connected()
+        assert client._channel is not channel
+        client.set_pipeline_config(**compiled_artifacts)
+        client.insert_table_entry(
+            "MyIngress.ipv4_lpm",
+            {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+            "MyIngress.set_egress_port",
+            {"port": 2},
+        )
+        assert [entry["params"] for entry in client.list_table_entries()] == [{"port": b"\x02"}]
+    finally:
+        try:
+            client.disconnect()
+        finally:
+            replacement.stop()
 
 
 # ---------------------------------------------------------------------------
