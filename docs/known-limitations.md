@@ -1,41 +1,48 @@
 ---
-description: What p4net does not support in the 1.x line, with workarounds where they exist.
+description: p4net's deployment and architecture limits, topology lifecycle, gRPC process constraints, and performance considerations.
 ---
 
 # Known limitations
 
-The 1.x line of p4net intentionally scopes out several capabilities, either because they require breaking changes (planned for 2.0+) or because they're inherent to the underlying BMv2 software dataplane. This page enumerates them so users encounter the boundary before hitting it in their own code.
+p4net runs P4 experiments with Linux network namespaces, veth interfaces, and BMv2. The following limits apply to its current interfaces. The [roadmap](roadmap.md) lists possible extensions.
 
-## 1. gRPC connections and process creation
+## gRPC and worker processes { #1-grpc-connections-and-process-creation }
 
-Both sync gRPC and `grpc.aio` use background threads. Forking after opening connections can leave a child process with locks held by threads that no longer exist there. Switching to the async client does not remove this constraint.
+Both sync gRPC and `grpc.aio` use background threads. Forking a process with active gRPC resources can leave the child with locks held by threads that no longer exist there. Create worker processes first, then create and connect clients inside each worker. Async clients also need to run and close on the event loop where they connected.
 
-Create worker processes before opening gRPC connections in those processes. For batch topology runs, a parent that has not opened gRPC connections can start a fresh Python interpreter for each run, for example with `subprocess.run([sys.executable, "topology.py"], check=True)`. Close network resources with `net.stop()` or, inside an event loop, `await net.astop()`. See [gRPC's fork documentation](https://github.com/grpc/grpc/blob/master/doc/fork_support.md) and the [async client guide](async-client.md).
+For batch experiments, a parent that has not opened gRPC connections can start a fresh Python interpreter for each topology script:
 
-## 2. Single-host operation only
+```python
+import subprocess
+import sys
 
-- **Symptom**: `Network` only spawns hosts, switches and links on the current machine.
-- **Why**: design choice. Cross-host coordination needs a distributed control plane and L2 tunneling, neither of which is in scope.
-- **Workaround**: none within p4net 1.x. For multi-host topologies, run separate `Network` instances per machine and bridge externally with the tunnel of your choice.
-- **Status**: 2.0 candidate.
+subprocess.run([sys.executable, "topology.py"], check=True)
+```
 
-## 3. PSA architecture not supported
+Let each script close its network with `net.stop()` or, inside an event loop, `await net.astop()`. The p4net cleanup registry resets in forked children; that does not repair inherited gRPC resources. See [gRPC's fork documentation](https://github.com/grpc/grpc/blob/master/doc/fork_support.md) and the [async client guide](async-client.md).
 
-- **Symptom**: P4 programs targeting `psa.p4` fail compilation through `P4Compiler`, or produce a `P4Info` the runtime can't drive.
-- **Why**: parser / deparser conventions, metadata layout, and the `P4Info` schema differ from v1model. Full support requires architecture-aware tooling on the compiler wrapper and possibly a different switch binary.
-- **Workaround**: use v1model. Almost all P4 tutorials and educational pipelines target v1model anyway.
-- **Status**: 2.0 candidate.
+## Local deployment { #2-single-host-operation-only }
 
-## 4. Live topology mutation not supported
+`Network` creates namespaces, interfaces, and BMv2 processes on the local Linux system. It has no remote deployment or cross-machine coordination interface.
 
-- **Symptom**: calling `topology.add_host(...)` or `topology.add_link(...)` after `network.start()` has no effect on the running network.
-- **Why**: BMv2 doesn't support dynamic port reconfiguration cleanly, and veth pair changes mid-run would race with running P4 pipelines.
-- **Workaround**: stop the `Network`, modify the `Topology`, start a new `Network`.
-- **Status**: 2.0 candidate.
+Multi-machine experiments need additional resource management and links between machines. Running separate `Network` instances alone does not provide that coordination.
 
-## 5. BMv2 throughput is bounded
+## P4 architecture { #3-psa-architecture-not-supported }
 
-- **Symptom**: aggregate throughput across a topology rarely exceeds 1–10 Mbps; latency typically 1–10 ms per hop.
-- **Why**: BMv2 is a software switch designed for correctness and debuggability, not for performance. Its instruction-level interpreter loop is the bottleneck.
-- **Workaround**: none — this is BMv2's design. For production workloads, target real P4 ASICs (Tofino, dpdk-bmv2 variants).
-- **Status**: inherent; not on the p4net roadmap.
+`Network` uses the `v1model` architecture and `simple_switch_grpc`. Passing `arch="psa"` to `Topology.add_switch()` raises `TopologyError` while constructing the switch descriptor, before compilation.
+
+PSA support would require integration with a matching compiler and switch target. BMv2 provides separate [target implementations](https://github.com/p4lang/behavioral-model/blob/main/targets/README.md); selecting a different architecture in a standalone compiler call does not add that integration to `Network`.
+
+## Topology changes { #4-live-topology-mutation-not-supported }
+
+`Topology` remains a mutable description. `Network.start()` creates resources from that description, but later calls to `Topology.add_host()` or `Topology.add_link()` do not create corresponding namespaces, interfaces, or running-node handles. `Network` has no interface for adding or removing running nodes and links.
+
+To change the topology, stop the current network, edit the description, and create and start a new `Network`. Inside an event loop, await `net.astop()` before creating the replacement. Changes through lower-level runtime interfaces are managed separately from the network description.
+
+## Software-switch performance { #5-bmv2-throughput-is-bounded }
+
+BMv2 is intended for P4 development, testing, and debugging. Its throughput and latency depend on the P4 program, compiler and BMv2 builds, table contents, packet sizes and traffic patterns, and host resources. Logging, packet capture, and virtualization also affect the result. See [BMv2's performance notes](https://github.com/p4lang/behavioral-model/blob/main/docs/performance.md).
+
+`Link.bandwidth` configures Linux `tc` traffic shaping. The achieved throughput also depends on packet processing and the traffic source. Configured link delay adds to switch processing and system scheduling time.
+
+Report forwarding measurements with their topology, program, traffic, and environment. Network startup and shutdown time, end-to-end ping round-trip time, forwarding throughput, and per-switch processing latency are separate measurements.
