@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -179,7 +180,9 @@ async def test_cancelled_connect_releases_resources_and_can_retry(
                 await asyncio.wait_for(attempt, timeout=0)
         else:
             attempt.cancel("connection cancelled")
-            with pytest.raises(asyncio.CancelledError, match="connection cancelled"):
+            # Python 3.11 added cancellation message propagation to awaiters.
+            message = "connection cancelled" if sys.version_info >= (3, 11) else None
+            with pytest.raises(asyncio.CancelledError, match=message):
                 await attempt
 
         assert attempt.cancelled()
