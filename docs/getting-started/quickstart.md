@@ -1,30 +1,31 @@
 ---
-description: A two-host p4net topology end to end, with the matching P4 program, in under 100 lines.
+description: Create one switch and two hosts, then verify bidirectional connectivity with a port-swap P4 program.
 ---
 
 # Quick Start
 
-This page walks through the smallest useful p4net program — two hosts on a single switch, a port-swap dataplane, a successful ping. If you have not yet installed p4net and its external dependencies, start with [Installation](installation.md).
+This example creates two Linux hosts and one BMv2 switch, then checks both directions with `pingall`. Complete [Installation](installation.md) first, and run the commands below in the Python environment where p4net is installed.
 
-## What you'll build
-
-```
-+----+         +----+         +----+
-| h1 |--eth0---| s1 |---eth0--| h2 |
-+----+    1    +----+    2    +----+
+```text
+h1 (10.0.0.1/24) ---- 1 [ s1 ] 2 ---- h2 (10.0.0.2/24)
 ```
 
-`h1` and `h2` are Linux hosts in private network namespaces. `s1` is a `simple_switch_grpc` process running a port-swap pipeline: any packet arriving on port 1 leaves on port 2, and vice versa. No runtime table programming is needed; the dataplane is hardcoded.
+The switch forwards frames from port 1 to port 2 and vice versa. ARP and ICMP follow this path, so the hosts learn each other's MAC addresses without static neighbors or runtime table entries.
 
-## The Python topology
+## Create two files
 
-Save as `quickstart.py`:
+Create a working directory:
+
+```bash
+mkdir -p p4net-demo
+cd p4net-demo
+```
+
+Save the following Python code as `quickstart.py`:
 
 ```python
-"""Minimal two-host p4net topology."""
 from pathlib import Path
 
-from p4net import Network
 from p4net.topo import Topology
 
 HERE = Path(__file__).resolve().parent
@@ -35,24 +36,11 @@ h2 = topology.add_host("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
 s1 = topology.add_switch("s1", p4_src=HERE / "port_swap.p4")
 topology.add_link(h1, s1, port_b=1)
 topology.add_link(h2, s1, port_b=2)
-
-
-def setup(net: Network) -> None:
-    """Pre-seed static ARP so the first ICMP doesn't have to resolve."""
-    h1, h2 = net.host("h1"), net.host("h2")
-    h1.exec(["ip", "neigh", "replace", "10.0.0.2",
-             "lladdr", "00:00:00:00:00:02",
-             "dev", "h1-eth0", "nud", "permanent"])
-    h2.exec(["ip", "neigh", "replace", "10.0.0.1",
-             "lladdr", "00:00:00:00:00:01",
-             "dev", "h2-eth0", "nud", "permanent"])
 ```
 
-The `topology = Topology()` and `def setup(net)` shape is what the `p4net` console script looks for: a module-level `topology` and an optional `setup(net)` invoked after the network is up. Plain Python scripts that build a `Network` directly work too.
+`port_b=1` and `port_b=2` select the switch-side port of each link. The host interfaces are `h1-eth0` and `h2-eth0`. `HERE` locates the P4 source relative to `quickstart.py`.
 
-## The P4 program
-
-Save as `port_swap.p4` next to `quickstart.py`:
+Save the following P4 program as `port_swap.p4` in the same directory:
 
 ```p4
 #include <core.p4>
@@ -64,12 +52,18 @@ header ethernet_t {
     bit<16> etherType;
 }
 
-struct headers { ethernet_t ethernet; }
+struct headers {
+    ethernet_t ethernet;
+}
+
 struct metadata {}
 
 parser MyParser(packet_in pkt, out headers hdr, inout metadata meta,
                 inout standard_metadata_t std) {
-    state start { pkt.extract(hdr.ethernet); transition accept; }
+    state start {
+        pkt.extract(hdr.ethernet);
+        transition accept;
+    }
 }
 
 control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply {} }
@@ -77,9 +71,13 @@ control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply {} }
 control MyIngress(inout headers hdr, inout metadata meta,
                   inout standard_metadata_t std) {
     apply {
-        if (std.ingress_port == 1) { std.egress_spec = 2; }
-        else if (std.ingress_port == 2) { std.egress_spec = 1; }
-        else { mark_to_drop(std); }
+        if (std.ingress_port == 1) {
+            std.egress_spec = 2;
+        } else if (std.ingress_port == 2) {
+            std.egress_spec = 1;
+        } else {
+            mark_to_drop(std);
+        }
     }
 }
 
@@ -89,55 +87,56 @@ control MyEgress(inout headers hdr, inout metadata meta,
 control MyComputeChecksum(inout headers hdr, inout metadata meta) { apply {} }
 
 control MyDeparser(packet_out pkt, in headers hdr) {
-    apply { pkt.emit(hdr.ethernet); }
+    apply {
+        pkt.emit(hdr.ethernet);
+    }
 }
 
 V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
          MyComputeChecksum(), MyDeparser()) main;
 ```
 
-## Run it
+`MyIngress` selects the output from the ingress port and drops frames arriving on other ports. This program has no match tables; startup only needs to install the pipeline.
 
+## Start the network
+
+Run from the directory containing both files:
+
+```bash
+sudo "$(command -v p4net)" quickstart.py
 ```
-sudo p4net quickstart.py
-```
 
-The orchestrator will validate the topology, compile `port_swap.p4`, create namespaces, wire veth pairs, configure addresses, start `simple_switch_grpc` in the root namespace, push the compiled pipeline via P4Runtime, run `setup(net)` to seed ARP, and drop you into the interactive shell.
+This uses the `p4net` executable from the current environment, including a virtual environment. The CLI loads the module-level `topology`, compiles the P4 program, creates host namespaces and links, starts BMv2, and installs the pipeline through P4Runtime. It then displays the `p4net>` prompt.
 
-In the shell:
+If the topology file defines `setup(net)`, the CLI calls it after startup and before opening the shell. This example needs no extra initialization.
 
-```
+## Check connectivity
+
+At the `p4net>` prompt, enter `hosts` followed by `pingall`:
+
+```text
 p4net> hosts
 name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  -            h1-eth0
-h2    10.0.0.2/24  -            h2-eth0
+h1    10.0.0.1/24  -           h1-eth0
+h2    10.0.0.2/24  -           h2-eth0
 
 p4net> pingall
-H \ H   h1   h2
-   h1    -    1
-   h2    1    -
+H \ H h1  h2
+h1  -   1
+h2  1   -
 2/2 succeeded
 ```
 
-Press `Ctrl-D` (or type `exit`) to tear the network down.
+`hosts` lists the host addresses and interfaces. Matrix rows are senders and columns are receivers: `1` means success, `X` means failure, and `-` identifies the same host. `2/2 succeeded` means both `h1` to `h2` and `h2` to `h1` work.
 
-## What just happened
+## Exit and cleanup
 
-In order:
+Enter `exit`, or press `Ctrl-D` at an empty prompt. p4net closes the control connections, stops BMv2, and removes the namespaces and links it created.
 
-1. `Topology.validate()` ran (interface name length, IP collisions, asymmetric/symmetric impairment conflicts).
-2. `P4Compiler` preprocessed the source and its includes, then checked its content-addressed cache. On a miss it compiled that input into BMv2 JSON and P4Info.
-3. Network namespaces `h1` and `h2` were created.
-4. veth pairs `h1-eth0 ↔ s1-eth1` and `h2-eth0 ↔ s1-eth2` were created in the root namespace, and the host-side ends were moved into their respective namespaces.
-5. IPv4 addresses, MAC overrides, and per-interface IPv6 sysctls were applied; the interfaces were brought up.
-6. `simple_switch_grpc` was launched with `--grpc-server-addr 127.0.0.1:50051`, the orchestrator polled the gRPC port until it accepted connections, then pushed the pipeline config via `SetForwardingPipelineConfig`.
-7. `setup(net)` ran static ARP entries.
-8. The CLI took over. On exit, every step above was unwound in reverse — explicitly via the context manager, or as a fallback via the atexit hook.
-
-The depth on each step lives on the [Architecture page](../architecture.md).
+See [Troubleshooting](../troubleshooting.md) if compilation, startup, or the connectivity check fails.
 
 ## Next steps
 
-- The [Tutorial](../tutorial.md) walks through a 4-host, 2-switch, dual-stack topology with runtime table programming, asymmetric link impairment, and CPU-port packet I/O.
-- The [Examples directory](../examples/index.md) ships six runnable topologies covering every v0.2.0 feature.
-- The [CLI reference](../cli.md) documents every shell command.
+- [Tutorial](../tutorial.md): program runtime table entries and build a larger topology.
+- [CLI reference](../cli.md): explore shell commands, parameters, and packet operations.
+- [Examples](../examples/index.md): run more topologies with different dataplane features.

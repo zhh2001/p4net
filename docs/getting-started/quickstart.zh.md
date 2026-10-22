@@ -1,30 +1,31 @@
 ---
-description: 用不到 100 行代码完成一个端到端的双主机 p4net 拓扑，配套 P4 程序、运行命令和成功 ping 的输出。
+description: 创建一台交换机和两台主机，用端口互换 P4 程序验证双向连通。
 ---
 
 # 快速上手
 
-本页演示最小的可用 p4net 程序——一台交换机、两台主机、一个端口互换的数据平面，最终成功 ping 通。如果你尚未安装 p4net 及其外部依赖，请先阅读[安装](installation.md)。
+本例创建两台 Linux 主机和一台 BMv2 交换机，最终用 `pingall` 验证双向连通。请先完成[安装](installation.md)，并在已安装 p4net 的 Python 环境中执行下面的命令。
 
-## 你将构建的内容
-
-```
-+----+         +----+         +----+
-| h1 |--eth0---| s1 |---eth0--| h2 |
-+----+    1    +----+    2    +----+
+```text
+h1 (10.0.0.1/24) ---- 1 [ s1 ] 2 ---- h2 (10.0.0.2/24)
 ```
 
-`h1` 与 `h2` 是位于私有网络命名空间中的 Linux 主机；`s1` 是一个运行端口互换流水线的 `simple_switch_grpc` 进程：从端口 1 进来的数据包从端口 2 出去，反之亦然。不需要运行时表项编程——数据平面逻辑是写死在 P4 程序里的。
+交换机把端口 1 收到的帧转发到端口 2，反向同理。ARP 和 ICMP 都经过这条路径，因此主机会自动学习对方的 MAC 地址，无需静态邻居表或运行时表项。
 
-## Python 拓扑
+## 创建两个文件
 
-保存为 `quickstart.py`：
+先创建一个工作目录：
+
+```bash
+mkdir -p p4net-demo
+cd p4net-demo
+```
+
+将下面的 Python 代码保存为 `quickstart.py`：
 
 ```python
-"""Minimal two-host p4net topology."""
 from pathlib import Path
 
-from p4net import Network
 from p4net.topo import Topology
 
 HERE = Path(__file__).resolve().parent
@@ -35,24 +36,11 @@ h2 = topology.add_host("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
 s1 = topology.add_switch("s1", p4_src=HERE / "port_swap.p4")
 topology.add_link(h1, s1, port_b=1)
 topology.add_link(h2, s1, port_b=2)
-
-
-def setup(net: Network) -> None:
-    """Pre-seed static ARP so the first ICMP doesn't have to resolve."""
-    h1, h2 = net.host("h1"), net.host("h2")
-    h1.exec(["ip", "neigh", "replace", "10.0.0.2",
-             "lladdr", "00:00:00:00:00:02",
-             "dev", "h1-eth0", "nud", "permanent"])
-    h2.exec(["ip", "neigh", "replace", "10.0.0.1",
-             "lladdr", "00:00:00:00:00:01",
-             "dev", "h2-eth0", "nud", "permanent"])
 ```
 
-`topology = Topology()` 加上 `def setup(net)` 是 `p4net` 控制台脚本约定的形态：模块级的 `topology` 变量加上可选的 `setup(net)`，后者会在网络启动后被调用。直接构造 `Network` 对象的纯 Python 脚本同样可以。
+`port_b=1` 和 `port_b=2` 分别指定两条链路在交换机上的端口号。主机侧使用接口 `h1-eth0` 和 `h2-eth0`。`HERE` 让 P4 源文件相对于 `quickstart.py` 定位。
 
-## P4 程序
-
-保存为 `port_swap.p4`，与 `quickstart.py` 放在同一目录：
+将下面的 P4 程序保存为同一目录下的 `port_swap.p4`：
 
 ```p4
 #include <core.p4>
@@ -64,12 +52,18 @@ header ethernet_t {
     bit<16> etherType;
 }
 
-struct headers { ethernet_t ethernet; }
+struct headers {
+    ethernet_t ethernet;
+}
+
 struct metadata {}
 
 parser MyParser(packet_in pkt, out headers hdr, inout metadata meta,
                 inout standard_metadata_t std) {
-    state start { pkt.extract(hdr.ethernet); transition accept; }
+    state start {
+        pkt.extract(hdr.ethernet);
+        transition accept;
+    }
 }
 
 control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply {} }
@@ -77,9 +71,13 @@ control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply {} }
 control MyIngress(inout headers hdr, inout metadata meta,
                   inout standard_metadata_t std) {
     apply {
-        if (std.ingress_port == 1) { std.egress_spec = 2; }
-        else if (std.ingress_port == 2) { std.egress_spec = 1; }
-        else { mark_to_drop(std); }
+        if (std.ingress_port == 1) {
+            std.egress_spec = 2;
+        } else if (std.ingress_port == 2) {
+            std.egress_spec = 1;
+        } else {
+            mark_to_drop(std);
+        }
     }
 }
 
@@ -89,55 +87,56 @@ control MyEgress(inout headers hdr, inout metadata meta,
 control MyComputeChecksum(inout headers hdr, inout metadata meta) { apply {} }
 
 control MyDeparser(packet_out pkt, in headers hdr) {
-    apply { pkt.emit(hdr.ethernet); }
+    apply {
+        pkt.emit(hdr.ethernet);
+    }
 }
 
 V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
          MyComputeChecksum(), MyDeparser()) main;
 ```
 
-## 运行
+`MyIngress` 按入口端口决定出口，其他端口收到的帧被丢弃。这个程序没有匹配表，启动时只需下发流水线。
 
+## 启动网络
+
+在两个文件所在的目录执行：
+
+```bash
+sudo "$(command -v p4net)" quickstart.py
 ```
-sudo p4net quickstart.py
-```
 
-编排器会校验拓扑、编译 `port_swap.p4`、创建命名空间、连通 veth 对、配置地址、在 root 命名空间启动 `simple_switch_grpc`、通过 P4Runtime 推送编译好的流水线、运行 `setup(net)` 注入 ARP，然后进入交互式 Shell。
+该命令使用当前环境中 `p4net` 的路径，适用于虚拟环境安装。CLI 读取模块级的 `topology` 变量，编译 P4 程序、创建主机命名空间和链路、启动 BMv2，并通过 P4Runtime 下发流水线。完成后显示 `p4net>` 提示符。
 
-在 Shell 中：
+若拓扑文件定义了 `setup(net)`，CLI 会在网络启动后、进入 Shell 前调用它。本例不需要额外初始化。
 
-```
+## 验证连通
+
+在 `p4net>` 后依次输入 `hosts` 和 `pingall`：
+
+```text
 p4net> hosts
 name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  -            h1-eth0
-h2    10.0.0.2/24  -            h2-eth0
+h1    10.0.0.1/24  -           h1-eth0
+h2    10.0.0.2/24  -           h2-eth0
 
 p4net> pingall
-H \ H   h1   h2
-   h1    -    1
-   h2    1    -
+H \ H h1  h2
+h1  -   1
+h2  1   -
 2/2 succeeded
 ```
 
-按 `Ctrl-D`（或输入 `exit`）即可拆掉整个网络。
+`hosts` 列出主机地址和接口。矩阵中的行是发送方、列是接收方，`1` 表示成功，`X` 表示失败，`-` 表示同一台主机。`2/2 succeeded` 表示 `h1` 到 `h2`、`h2` 到 `h1` 都已连通。
 
-## 刚才发生了什么
+## 退出与清理
 
-按顺序：
+输入 `exit` 或在空提示符处按 `Ctrl-D`。p4net 会关闭控制连接、停止 BMv2，并删除本次创建的命名空间和链路。
 
-1. `Topology.validate()` 运行（接口名长度、IP 冲突、对称/非对称损伤的相容性等）。
-2. `P4Compiler` 预处理源码及其引用文件，再检查内容寻址缓存。未命中时，将预处理结果编译为 BMv2 JSON 和 P4Info。
-3. 创建网络命名空间 `h1` 与 `h2`。
-4. 在 root 命名空间创建两对 veth：`h1-eth0 ↔ s1-eth1` 与 `h2-eth0 ↔ s1-eth2`，再把主机侧的一端搬入对应命名空间。
-5. 应用 IPv4 地址、MAC 覆盖、按接口的 IPv6 sysctl 门控；接口拉起。
-6. 启动 `simple_switch_grpc`，参数 `--grpc-server-addr 127.0.0.1:50051`；编排器轮询 gRPC 端口直到可连，然后通过 `SetForwardingPipelineConfig` 推送流水线。
-7. `setup(net)` 注入静态 ARP。
-8. CLI 接管。退出时，上面每一步按相反顺序回卷——通过上下文管理器显式触发，或在异常路径上由 atexit 兜底处理。
+如果编译、启动或连通验证失败，参见[故障排查](../troubleshooting.md)。
 
-每一步的细节见[架构](../architecture.md)。
+## 继续学习
 
-## 接下来读什么
-
-- [教程](../tutorial.md)演示一个 4 主机、2 交换机的双栈拓扑，包含运行时表项编程、非对称链路损伤、CPU 端口数据包 I/O。
-- [示例目录](../examples/index.md)收录了六个可运行的拓扑，分别覆盖每一项 v0.2.0 特性。
-- [CLI 参考](../cli.md)记录了每条 Shell 命令。
+- [教程](../tutorial.md)：学习运行时表项编程和更复杂的拓扑。
+- [CLI 参考](../cli.md)：查看交互命令、参数和数据包操作。
+- [示例目录](../examples/index.md)：运行更多拓扑，了解不同的数据平面功能。
