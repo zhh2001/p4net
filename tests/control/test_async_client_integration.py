@@ -30,6 +30,8 @@ from p4net.control import (
     AsyncOperationCancelledError,  # noqa: F401  (exposed for tests if useful)
     AsyncP4RuntimeClient,
     ConnectionError,
+    DuplicateEntryError,
+    EntryNotFoundError,
     NoSuchRegisterError,
     NotPrimaryError,
 )
@@ -541,6 +543,62 @@ async def test_push_pipeline_without_primary_preserves_index_and_can_retry(tmp_p
         assert [entry["params"] async for entry in client.list_table_entries()] == [
             {"port": b"\x02"}
         ]
+    finally:
+        await net.astop()
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        ("duplicate", DuplicateEntryError),
+        ("modify-missing", EntryNotFoundError),
+        ("delete-missing", EntryNotFoundError),
+    ],
+)
+async def test_table_write_decodes_batch_errors_and_remains_usable(
+    tmp_path: Path, operation: str, expected: type[Exception]
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await asyncio.to_thread(net.start)
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (sw.client.election_id[0] + 1, 0)
+    table, action = "MyIngress.ipv4_lpm", "MyIngress.set_egress_port"
+    match = {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+    missing = {"hdr.ipv4.dstAddr": "10.0.2.0/24"}
+    try:
+        await client.connect()
+        index, channel, stream = client.info_index, client._channel, client._stream_call
+        await client.insert_table_entry(table, match, action, {"port": 1})
+        with pytest.raises(expected) as raised:
+            if operation == "duplicate":
+                await client.insert_table_entry(table, match, action, {"port": 1})
+            elif operation == "modify-missing":
+                await client.modify_table_entry(table, missing, action, {"port": 2})
+            else:
+                await client.delete_table_entry(table, missing)
+        assert isinstance(raised.value.__cause__, grpc.aio.AioRpcError)
+        assert raised.value.__cause__.code() == grpc.StatusCode.UNKNOWN
+        assert client.is_connected and client.is_primary
+        assert client.info_index is index
+        assert client._channel is channel and client._stream_call is stream
+        assert [entry["params"] async for entry in client.list_table_entries()] == [
+            {"port": b"\x01"}
+        ]
+        await client.modify_table_entry(table, match, action, {"port": 2})
+        assert [entry["params"] async for entry in client.list_table_entries()] == [
+            {"port": b"\x02"}
+        ]
+        await client.delete_table_entry(table, match)
+        assert [entry async for entry in client.list_table_entries()] == []
     finally:
         await net.astop()
 

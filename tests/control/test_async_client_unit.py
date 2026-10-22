@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import grpc
 import pytest
-from google.rpc import code_pb2
+from google.rpc import code_pb2, status_pb2
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2
 from pytest_mock import MockerFixture
@@ -148,6 +148,18 @@ async def _connect(
     await client.connect(timeout=2.0)
     await _arb_task
     return client
+
+
+def _batch_error(codes: list[int], *, details: str = "batch write failed") -> grpc.aio.AioRpcError:
+    status = status_pb2.Status(code=code_pb2.UNKNOWN, message=details)
+    for code in codes:
+        status.details.add().Pack(p4runtime_pb2.Error(canonical_code=code))
+    return grpc.aio.AioRpcError(
+        grpc.StatusCode.UNKNOWN,
+        (),
+        (("grpc-status-details-bin", status.SerializeToString()),),
+        details,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +636,148 @@ async def test_unavailable_rpc_raises_connection_error(
 # ---------------------------------------------------------------------------
 # Table CRUD
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("empty_details", [False, True])
+@pytest.mark.parametrize(
+    ("operation", "canonical", "expected"),
+    [
+        ("insert", code_pb2.ALREADY_EXISTS, DuplicateEntryError),
+        ("modify", code_pb2.NOT_FOUND, EntryNotFoundError),
+        ("delete", code_pb2.NOT_FOUND, EntryNotFoundError),
+        ("insert", code_pb2.PERMISSION_DENIED, NotPrimaryError),
+        ("modify", code_pb2.PERMISSION_DENIED, NotPrimaryError),
+        ("delete", code_pb2.PERMISSION_DENIED, NotPrimaryError),
+    ],
+)
+async def test_write_decodes_batch_error(
+    patched_aio: dict[str, Any],
+    operation: str,
+    canonical: int,
+    expected: type[P4RuntimeError],
+    empty_details: bool,
+) -> None:
+    client = await _connect(patched_aio)
+    error = _batch_error(
+        [code_pb2.OK, canonical], details="" if empty_details else "batch write failed"
+    )
+    rpc = patched_aio["stub"].Write
+    rpc.side_effect = error
+    index, channel, stream = client.info_index, client._channel, client._stream_call
+    try:
+        with pytest.raises(expected) as raised:
+            if operation == "delete":
+                await client.delete_table_entry(
+                    "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+                )
+            else:
+                method = (
+                    client.insert_table_entry
+                    if operation == "insert"
+                    else client.modify_table_entry
+                )
+                await method(
+                    "MyIngress.ipv4_lpm",
+                    {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+                    "MyIngress.set_egress_port",
+                    {"port": 2},
+                )
+        assert type(raised.value) is expected
+        assert raised.value.__cause__ is error
+        assert str(raised.value)
+        if not empty_details:
+            assert "batch write failed" in str(raised.value)
+        assert client.info_index is index
+        assert client.is_connected
+        assert client._channel is channel and client._stream_call is stream
+        rpc.side_effect = None
+        await client.insert_table_entry(
+            "MyIngress.ipv4_lpm",
+            {"hdr.ipv4.dstAddr": "10.0.2.0/24"},
+            "MyIngress.set_egress_port",
+            {"port": 1},
+        )
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("codes", "expected"),
+    [
+        ([code_pb2.OK, code_pb2.ALREADY_EXISTS, code_pb2.NOT_FOUND], DuplicateEntryError),
+        ([code_pb2.OK, code_pb2.NOT_FOUND, code_pb2.ALREADY_EXISTS], EntryNotFoundError),
+        ([999, code_pb2.OK, code_pb2.ALREADY_EXISTS], DuplicateEntryError),
+        ([code_pb2.OK, code_pb2.UNAVAILABLE], ConnectionError),
+        ([code_pb2.OK, code_pb2.CANCELLED], AsyncOperationCancelledError),
+        ([code_pb2.OK, code_pb2.UNKNOWN, code_pb2.ALREADY_EXISTS], P4RuntimeError),
+    ],
+)
+async def test_batch_error_uses_first_recognized_failure(
+    patched_aio: dict[str, Any], codes: list[int], expected: type[P4RuntimeError]
+) -> None:
+    client = await _connect(patched_aio)
+    error = _batch_error(codes)
+    patched_aio["stub"].Write.side_effect = error
+    try:
+        with pytest.raises(expected) as raised:
+            await client.delete_table_entry(
+                "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+            )
+        assert type(raised.value) is expected
+        assert raised.value.__cause__ is error
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize(
+    "payload", ["missing", "corrupt", "unrelated", "all-ok", "unknown-code", "bad-detail"]
+)
+async def test_invalid_batch_details_preserve_unknown_error(
+    patched_aio: dict[str, Any], payload: str
+) -> None:
+    status = status_pb2.Status(code=code_pb2.UNKNOWN)
+    if payload == "unrelated":
+        status.details.add().Pack(p4info_pb2.P4Info())
+    elif payload == "all-ok":
+        status.details.add().Pack(p4runtime_pb2.Error(canonical_code=code_pb2.OK))
+    elif payload == "unknown-code":
+        status.details.add().Pack(p4runtime_pb2.Error(canonical_code=999))
+    elif payload == "bad-detail":
+        status.details.add().Pack(p4runtime_pb2.Error())
+        status.details[0].value = b"\xff"
+    encoded = b"\xff" if payload == "corrupt" else status.SerializeToString()
+    metadata = () if payload == "missing" else (("grpc-status-details-bin", encoded),)
+    error = grpc.aio.AioRpcError(grpc.StatusCode.UNKNOWN, (), metadata, "batch write failed")
+    client = await _connect(patched_aio)
+    patched_aio["stub"].Write.side_effect = error
+    try:
+        with pytest.raises(P4RuntimeError, match="batch write failed") as raised:
+            await client.delete_table_entry(
+                "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+            )
+        assert type(raised.value) is P4RuntimeError
+        assert raised.value.__cause__ is error
+    finally:
+        await client.disconnect()
+
+
+async def test_explicit_rpc_status_takes_precedence_over_batch_details(
+    patched_aio: dict[str, Any],
+) -> None:
+    batch = _batch_error([code_pb2.ALREADY_EXISTS])
+    error = grpc.aio.AioRpcError(
+        grpc.StatusCode.PERMISSION_DENIED, (), batch.trailing_metadata(), "not primary"
+    )
+    client = await _connect(patched_aio)
+    patched_aio["stub"].Write.side_effect = error
+    try:
+        with pytest.raises(NotPrimaryError) as raised:
+            await client.delete_table_entry(
+                "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+            )
+        assert raised.value.__cause__ is error
+    finally:
+        await client.disconnect()
 
 
 async def test_insert_table_entry_builds_write_request(

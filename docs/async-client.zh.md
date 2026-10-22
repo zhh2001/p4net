@@ -94,6 +94,8 @@ asyncio.run(main())
 
 `grpc.aio` 把远端错误以 `grpc.aio.AioRpcError` 抛出；异步客户端把它们翻译成与同步客户端一致的异常体系（`DuplicateEntryError`、`EntryNotFoundError`、`NotPrimaryError`、`PipelineError`、`P4RuntimeError`）。
 
+当 `UNKNOWN` 响应包含逐条 P4Runtime 错误时，客户端与同步版一样，按第一个可识别的失败状态码选择异常。重复表项抛出 `DuplicateEntryError`，表项不存在时抛出 `EntryNotFoundError`。错误详情缺失或损坏时，保留为 `P4RuntimeError`。原始 RPC 错误保留为异常原因。
+
 `push_pipeline()` 根据 RPC 状态区分错误，并将原始 RPC 错误保留为异常原因：
 
 | RPC 状态 | 异常 |

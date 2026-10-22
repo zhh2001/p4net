@@ -94,6 +94,8 @@ Each arbitration notification updates `client.is_primary`: status `OK` sets it t
 
 `grpc.aio` surfaces remote errors as `grpc.aio.AioRpcError`; the async client translates these into the same exception hierarchy as the sync client (`DuplicateEntryError`, `EntryNotFoundError`, `NotPrimaryError`, `PipelineError`, `P4RuntimeError`).
 
+For an `UNKNOWN` response containing per-update P4Runtime errors, the client uses the first recognized failure code, just like the sync client. Duplicate entries raise `DuplicateEntryError`; missing entries raise `EntryNotFoundError`. Missing or malformed error details leave the error as `P4RuntimeError`. The original RPC error remains available as the exception's cause.
+
 `push_pipeline()` classifies RPC failures by status and preserves the original RPC error as the exception's cause:
 
 | RPC status | Exception |

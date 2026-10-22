@@ -31,6 +31,7 @@ from google.protobuf import text_format
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2, p4runtime_pb2_grpc
 
+from p4net.control._rpc_errors import _extract_p4_canonical_codes, _grpc_code_for
 from p4net.control.codec import encode_value
 from p4net.control.exceptions import (
     AsyncOperationCancelledError,
@@ -760,6 +761,16 @@ class AsyncP4RuntimeClient:
     ) -> P4RuntimeError:
         code = exc.code()
         details = exc.details() or ""
+        if code == grpc.StatusCode.UNKNOWN:
+            for canonical in _extract_p4_canonical_codes(exc):
+                if canonical == 0:
+                    continue
+                resolved = _grpc_code_for(canonical)
+                if resolved is not None:
+                    code = resolved
+                    if not details:
+                        details = f"P4Runtime canonical_code={canonical}"
+                    break
         if code == grpc.StatusCode.UNAVAILABLE:
             return ConnectionError(f"gRPC unavailable for {self.target!r}: {details}")
         if pipeline and code in (
