@@ -49,7 +49,7 @@ command -v p4c simple_switch_grpc ip tc ping sysctl
 
 ## BMv2 提前退出或 gRPC 端口未就绪
 
-`BMv2StartupError` 会区分进程提前退出（`exited before becoming ready`）和端口等待超时（`did not open gRPC port within 10.0s`）。先查看异常指出的交换机日志，检查 BMv2 参数、接口错误和端口冲突。
+`BMv2StartupError` 会报告进程提前退出（`exited before becoming ready`）、端口被其他进程占用（`already in use by another process`）或等待超时（`did not open its gRPC and Thrift ports within 10.0s`）。先查看异常指出的交换机日志，检查 BMv2 参数、接口错误和端口冲突。
 
 BMv2 同时使用 gRPC 和 Thrift 端口。第一个交换机默认使用 50051 和 9090，后续交换机的端口依次加一。分别检查两个监听端口：
 
@@ -60,13 +60,13 @@ sudo ss -ltnp 'sport = :9090'
 
 将监听进程的 PID 与 `switches` 中的交换机 PID 对应起来。gRPC 绑定失败后，BMv2 仍可能继续运行 Thrift 服务，进程存活时也需检查日志中的 `Address already in use`。
 
-根据 PID 确认端口所属的实验，关闭对应实验，或选择其他端口。新拓扑可在 `add_switch()` 中通过 `grpc_port` 和 `thrift_port` 指定端口。p4net 按交换机添加顺序分配默认端口，不会探测其他进程是否已占用。
+根据 PID 确认端口所属的实验，关闭对应实验，或选择其他端口。新拓扑可在 `add_switch()` 中通过 `grpc_port` 和 `thrift_port` 指定端口。p4net 按交换机添加顺序分配默认端口，并在启动时核对监听进程。端口被占用时会启动失败，需要另选端口。
 
 如果交换机确实需要更长的启动时间，直接使用底层 `BMv2Switch` 时可设置 `startup_timeout`，或调用 `wait_until_ready(timeout=...)`。`Network` 使用默认的 10 秒等待时间。
 
 ## P4Runtime 连接或写入失败
 
-TCP 端口可连接只是启动检查的第一步。P4Runtime 客户端还需使用正确的 `device_id` 和角色完成仲裁。遇到 `ConnectionError` 或 gRPC `UNAVAILABLE`，先核对 `switches` 中的地址、BMv2 进程及其日志，排除原因后再连接。
+启动检查会确认两个端口都由新启动的 BMv2 进程监听。P4Runtime 客户端还需使用正确的 `device_id` 和角色完成仲裁。遇到 `ConnectionError` 或 gRPC `UNAVAILABLE`，先核对 `switches` 中的地址、BMv2 进程及其日志，排除原因后再连接。
 
 p4net 通过 `p4net.control.exceptions` 中的异常报告控制操作失败：
 

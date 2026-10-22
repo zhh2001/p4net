@@ -49,7 +49,7 @@ Install missing tools using [Installation](getting-started/installation.md#requi
 
 ## BMv2 exits or its gRPC port does not become ready
 
-`BMv2StartupError` distinguishes an early process exit (`exited before becoming ready`) from a port timeout (`did not open gRPC port within 10.0s`). Check the reported switch log for the cause, such as an invalid BMv2 argument, an interface error or a port conflict.
+`BMv2StartupError` reports an early process exit (`exited before becoming ready`), a port owned by another process (`already in use by another process`), or a timeout (`did not open its gRPC and Thrift ports within 10.0s`). Check the reported switch log for the cause, such as an invalid BMv2 argument, an interface error or a port conflict.
 
 BMv2 uses both a gRPC port and a Thrift port. For the first switch, the defaults are 50051 and 9090; subsequent switches increment each port by one. Check both listeners:
 
@@ -60,13 +60,13 @@ sudo ss -ltnp 'sport = :9090'
 
 Compare the listener PID with the switch PID from `switches`. BMv2 may continue running its Thrift service after a gRPC bind failure, so check the log for `Address already in use` even while the process is alive.
 
-Match the PID to the experiment that owns it, then stop that experiment or choose other ports. Set `grpc_port` and `thrift_port` in `add_switch()` to select ports for a new topology. p4net assigns default ports by switch order without checking whether another process already uses them.
+Match the PID to the experiment that owns it, then stop that experiment or choose other ports. Set `grpc_port` and `thrift_port` in `add_switch()` to select ports for a new topology. p4net assigns default ports by switch order and checks listener ownership during startup. An occupied port causes startup to fail; select other ports explicitly.
 
 For a switch that takes longer to start, the lower-level `BMv2Switch` interface accepts `startup_timeout` or `wait_until_ready(timeout=...)`. `Network` uses the default 10-second wait.
 
 ## P4Runtime connection or write failures
 
-A reachable TCP port is only the first startup check. The P4Runtime client must also complete arbitration with the correct `device_id` and role. For `ConnectionError` or gRPC `UNAVAILABLE`, check the address from `switches`, the BMv2 process and its log, then reconnect after resolving the cause.
+Startup checks that the new BMv2 process owns both listeners. The P4Runtime client must also complete arbitration with the correct `device_id` and role. For `ConnectionError` or gRPC `UNAVAILABLE`, check the address from `switches`, the BMv2 process and its log, then reconnect after resolving the cause.
 
 p4net reports control failures through exceptions from `p4net.control.exceptions`:
 

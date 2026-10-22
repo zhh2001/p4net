@@ -1,4 +1,4 @@
-"""Unit tests for `p4net.runtime.bmv2`. All subprocess + socket calls mocked."""
+"""Unit tests for `p4net.runtime.bmv2` with mocked child processes."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from pyroute2.netlink.exceptions import NetlinkError
 from pytest_mock import MockerFixture
 
 from p4net.runtime import (
@@ -266,19 +267,16 @@ def test_pid_reflects_popen_pid(tmp_path: Path, mocker: MockerFixture) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_wait_until_ready_succeeds_on_socket_connect(tmp_path: Path, mocker: MockerFixture) -> None:
+def test_wait_until_ready_succeeds_with_owned_listeners(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
     _patch_which(mocker)
     proc = MagicMock()
     proc.pid = 1
     proc.poll.return_value = None
     _patch_popen(mocker, proc=proc)
-    fake_sock = MagicMock()
-    fake_sock.__enter__.return_value = fake_sock
-    fake_sock.__exit__.return_value = None
-    mocker.patch(
-        "p4net.runtime.bmv2.socket.create_connection",
-        return_value=fake_sock,
-    )
+    mocker.patch.object(BMv2Switch, "_listening_inodes", return_value=({"grpc"}, {"thrift"}))
+    mocker.patch.object(BMv2Switch, "_socket_inodes", return_value={"grpc", "thrift"})
     sw = _make_switch(tmp_path)
     sw.start()
     sw.wait_until_ready(timeout=1.0)
@@ -324,6 +322,48 @@ def test_wait_until_ready_requires_start_first(tmp_path: Path) -> None:
     sw = _make_switch(tmp_path)
     with pytest.raises(BMv2StartupError, match="has not been started"):
         sw.wait_until_ready(timeout=0.1)
+
+
+@pytest.mark.parametrize("error", [PermissionError("access denied"), NetlinkError(1)])
+def test_wait_until_ready_reports_listener_inspection_failure(
+    tmp_path: Path, mocker: MockerFixture, error: Exception
+) -> None:
+    _patch_which(mocker)
+    _patch_popen(mocker)
+    mocker.patch.object(BMv2Switch, "_listening_inodes", side_effect=error)
+    sw = _make_switch(tmp_path)
+    sw.start()
+    with pytest.raises(BMv2StartupError, match="cannot inspect") as caught:
+        sw.wait_until_ready(timeout=1.0)
+    assert caught.value.__cause__ is error
+
+
+def test_wait_until_ready_reports_address_resolution_failure(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    _patch_which(mocker)
+    _patch_popen(mocker)
+    error = OSError("name resolution failed")
+    mocker.patch("p4net.runtime.bmv2.socket.getaddrinfo", side_effect=error)
+    sw = _make_switch(tmp_path)
+    sw.start()
+    with pytest.raises(BMv2StartupError, match="cannot resolve") as caught:
+        sw.wait_until_ready(timeout=1.0)
+    assert caught.value.__cause__ is error
+
+
+def test_wait_until_ready_reports_exit_during_descriptor_scan(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    _patch_which(mocker)
+    proc = _patch_popen(mocker).return_value
+    proc.poll.side_effect = [None, 7, 7, 7]
+    mocker.patch.object(BMv2Switch, "_listening_inodes", return_value=(set(), set()))
+    mocker.patch.object(BMv2Switch, "_socket_inodes", side_effect=FileNotFoundError())
+    sw = _make_switch(tmp_path)
+    sw.start()
+    with pytest.raises(BMv2StartupError, match="returncode=7"):
+        sw.wait_until_ready(timeout=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -425,13 +465,8 @@ def test_context_manager_starts_waits_and_stops(tmp_path: Path, mocker: MockerFi
     proc.pid = 1
     proc.poll.return_value = None
     _patch_popen(mocker, proc=proc)
-    fake_sock = MagicMock()
-    fake_sock.__enter__.return_value = fake_sock
-    fake_sock.__exit__.return_value = None
-    mocker.patch(
-        "p4net.runtime.bmv2.socket.create_connection",
-        return_value=fake_sock,
-    )
+    mocker.patch.object(BMv2Switch, "_listening_inodes", return_value=({"grpc"}, {"thrift"}))
+    mocker.patch.object(BMv2Switch, "_socket_inodes", return_value={"grpc", "thrift"})
     with _make_switch(tmp_path) as sw:
         assert isinstance(sw, BMv2Switch)
         assert sw.pid == 1
@@ -444,13 +479,8 @@ def test_context_manager_stops_on_body_exception(tmp_path: Path, mocker: MockerF
     proc.pid = 1
     proc.poll.return_value = None
     _patch_popen(mocker, proc=proc)
-    fake_sock = MagicMock()
-    fake_sock.__enter__.return_value = fake_sock
-    fake_sock.__exit__.return_value = None
-    mocker.patch(
-        "p4net.runtime.bmv2.socket.create_connection",
-        return_value=fake_sock,
-    )
+    mocker.patch.object(BMv2Switch, "_listening_inodes", return_value=({"grpc"}, {"thrift"}))
+    mocker.patch.object(BMv2Switch, "_socket_inodes", return_value={"grpc", "thrift"})
     with pytest.raises(ValueError, match="from body"), _make_switch(tmp_path):
         raise ValueError("from body")
     proc.terminate.assert_called_once()

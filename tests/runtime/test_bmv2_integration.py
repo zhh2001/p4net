@@ -12,7 +12,6 @@ implicitly need `p4c` on PATH; that's the same toolchain story as
 
 from __future__ import annotations
 
-import contextlib
 import shutil
 import socket
 import time
@@ -146,15 +145,9 @@ def test_bad_json_path_raises_startup_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.requires_p4c
-def test_grpc_port_collision_raises(compiled_json: Path, tmp_path: Path) -> None:
-    """When BMv2 cannot bind its gRPC port, the process dies and `is_running`
-    eventually becomes False.
-
-    Note: the held listener also accepts TCP probes on the same port, so the
-    readiness check can briefly see a 'ready' port before BMv2 itself crashes.
-    We therefore tolerate either outcome from `wait_until_ready` and assert
-    only on the final process state.
-    """
+@pytest.mark.parametrize("service", ["gRPC", "Thrift"])
+def test_port_collision_raises(compiled_json: Path, tmp_path: Path, service: str) -> None:
+    """Reject occupied ports whether BMv2 exits or keeps running."""
     holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     holder.bind(("127.0.0.1", 0))
     holder.listen(1)
@@ -163,8 +156,8 @@ def test_grpc_port_collision_raises(compiled_json: Path, tmp_path: Path) -> None
         sw = BMv2Switch(
             "s_collide",
             device_id=3,
-            grpc_port=held_port,
-            thrift_port=_free_port(),
+            grpc_port=held_port if service == "gRPC" else _free_port(),
+            thrift_port=held_port if service == "Thrift" else _free_port(),
             bmv2_json=compiled_json,
             port_to_iface={},
             log_dir=tmp_path / "logs",
@@ -172,20 +165,45 @@ def test_grpc_port_collision_raises(compiled_json: Path, tmp_path: Path) -> None
         )
         sw.start()
         try:
-            with contextlib.suppress(BMv2StartupError):
+            with pytest.raises(BMv2StartupError, match=f"{service}.*another process|returncode"):
                 sw.wait_until_ready()
-            deadline = time.monotonic() + 8.0
-            while time.monotonic() < deadline and sw.is_running():
-                time.sleep(0.1)
-            assert not sw.is_running(), (
-                f"BMv2 should have exited due to port collision; pid={sw.pid}"
-            )
-            rc = sw.returncode()
-            assert rc is not None and rc != 0, f"unexpected returncode={rc}"
         finally:
             sw.stop()
+        assert not sw.is_running()
+        with socket.create_connection(("127.0.0.1", held_port), timeout=1.0):
+            pass
     finally:
         holder.close()
+
+
+@pytest.mark.requires_p4c
+def test_collision_with_running_bmv2_preserves_original(
+    compiled_json: Path, tmp_path: Path
+) -> None:
+    port = _free_port()
+    with BMv2Switch(
+        "s_original",
+        device_id=0,
+        grpc_port=port,
+        thrift_port=_free_port(),
+        bmv2_json=compiled_json,
+        port_to_iface={},
+        log_dir=tmp_path / "logs",
+    ) as original:
+        replacement = BMv2Switch(
+            "s_replacement",
+            device_id=0,
+            grpc_port=port,
+            thrift_port=_free_port(),
+            bmv2_json=compiled_json,
+            port_to_iface={},
+            log_dir=tmp_path / "logs",
+        )
+        with pytest.raises(BMv2StartupError, match=r"gRPC.*another process"), replacement:
+            pytest.fail("A second BMv2 must not become ready on the original's gRPC port")
+        assert not replacement.is_running()
+        assert original.is_running()
+        original.wait_until_ready(timeout=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +239,6 @@ def test_stop_idempotent_on_real_process(compiled_json: Path, tmp_path: Path) ->
 
 @pytest.mark.requires_p4c
 def test_boot_timestamp_us_real_wall_clock(compiled_json: Path, tmp_path: Path) -> None:
-    import time
 
     sw = BMv2Switch(
         "s_boot",

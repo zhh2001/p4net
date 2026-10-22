@@ -35,8 +35,13 @@ import socket
 import subprocess
 import time
 from collections.abc import Mapping
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from pathlib import Path
 from types import TracebackType
+
+from pyroute2 import DiagSocket
+from pyroute2.netlink.diag import SS_LISTEN
+from pyroute2.netlink.exceptions import NetlinkError
 
 from p4net.runtime.exceptions import BMv2NotFoundError, BMv2StartupError
 
@@ -44,6 +49,23 @@ logger = logging.getLogger(__name__)
 
 _VALID_LOG_LEVELS: frozenset[str] = frozenset({"trace", "debug", "info", "warn", "error"})
 _READY_POLL_INTERVAL = 0.1
+
+
+def _listener_matches(
+    host: str, addresses: set[IPv4Address | IPv6Address], *, ipv6_only: bool
+) -> bool:
+    listener = ip_address(host)
+    if isinstance(listener, IPv6Address) and listener.ipv4_mapped is not None:
+        listener = listener.ipv4_mapped
+    for address in addresses:
+        if listener == address:
+            return True
+        if listener.version == address.version:
+            if listener.is_unspecified or address.is_unspecified:
+                return True
+        elif isinstance(listener, IPv6Address) and listener.is_unspecified and not ipv6_only:
+            return True
+    return False
 
 
 class BMv2Switch:
@@ -219,12 +241,28 @@ class BMv2Switch:
         logger.debug("BMv2 %r started (pid=%d, log=%s)", self._name, self._proc.pid, log_path)
 
     def wait_until_ready(self, *, timeout: float | None = None) -> None:
-        """Block until the gRPC port accepts a connection, or fail."""
+        """Wait until this process owns its gRPC and Thrift listeners, or fail.
+
+        A listener owned by another process, including a shared gRPC port,
+        raises ``BMv2StartupError``. The caller remains responsible for stopping
+        the child after failure; the context manager handles this automatically.
+        """
         if not self._started or self._proc is None:
             raise BMv2StartupError(f"BMv2 {self._name!r} has not been started; call start() first")
         effective_timeout = self._startup_timeout if timeout is None else timeout
         deadline = time.monotonic() + effective_timeout
         start_time = time.monotonic()
+        try:
+            addresses = {
+                ip_address(info[4][0])
+                for info in socket.getaddrinfo(
+                    self._grpc_bind_addr, self._grpc_port, type=socket.SOCK_STREAM
+                )
+            }
+        except OSError as exc:
+            raise BMv2StartupError(
+                f"cannot resolve BMv2 gRPC address {self.grpc_address}: {exc}"
+            ) from exc
         while time.monotonic() < deadline:
             if not self.is_running():
                 rc = self.returncode()
@@ -233,19 +271,70 @@ class BMv2Switch:
                     f"(returncode={rc}); see {self.log_file}"
                 )
             try:
-                with socket.create_connection(
-                    (self._grpc_bind_addr, self._grpc_port),
-                    timeout=_READY_POLL_INTERVAL,
-                ):
-                    elapsed = time.monotonic() - start_time
-                    logger.debug("BMv2 %r became ready after %.3fs", self._name, elapsed)
-                    return
-            except OSError:
-                time.sleep(_READY_POLL_INTERVAL)
+                grpc_inodes, thrift_inodes = self._listening_inodes(addresses)
+                # Read descriptors after the listener snapshot so a newly opened
+                # socket is not mistaken for a socket owned by another process.
+                owned_inodes = self._socket_inodes()
+            except (OSError, NetlinkError) as exc:
+                if not self.is_running():
+                    continue
+                raise BMv2StartupError(
+                    f"cannot inspect BMv2 {self._name!r} listeners (pid={self.pid}): {exc}"
+                ) from exc
+            for service, port, inodes in (
+                ("gRPC", self._grpc_port, grpc_inodes),
+                ("Thrift", self._thrift_port, thrift_inodes),
+            ):
+                if inodes - owned_inodes:
+                    raise BMv2StartupError(
+                        f"BMv2 {self._name!r} {service} port {port} is already in use "
+                        f"by another process; see {self.log_file}"
+                    )
+            if grpc_inodes and thrift_inodes and self.is_running():
+                elapsed = time.monotonic() - start_time
+                logger.debug("BMv2 %r became ready after %.3fs", self._name, elapsed)
+                return
+            time.sleep(_READY_POLL_INTERVAL)
         raise BMv2StartupError(
-            f"BMv2 {self._name!r} did not open gRPC port within "
+            f"BMv2 {self._name!r} did not open its gRPC and Thrift ports within "
             f"{effective_timeout}s; see {self.log_file}"
         )
+
+    def _listening_inodes(
+        self, addresses: set[IPv4Address | IPv6Address]
+    ) -> tuple[set[str], set[str]]:
+        grpc_inodes: set[str] = set()
+        thrift_inodes: set[str] = set()
+        with DiagSocket() as diag:
+            diag.bind()
+            families = [socket.AF_INET]
+            if socket.has_ipv6:
+                families.append(socket.AF_INET6)
+            for family in families:
+                for listener in diag.get_sock_stats(family=family, states=1 << SS_LISTEN):
+                    port = listener["idiag_sport"]
+                    inode = f"socket:[{listener['idiag_inode']}]"
+                    if port == self._grpc_port and _listener_matches(
+                        listener["idiag_src"],
+                        addresses,
+                        ipv6_only=bool(listener.get_attr("INET_DIAG_SKV6ONLY")),
+                    ):
+                        grpc_inodes.add(inode)
+                    # BMv2's Thrift server binds a wildcard address.
+                    if port == self._thrift_port:
+                        thrift_inodes.add(inode)
+        return grpc_inodes, thrift_inodes
+
+    def _socket_inodes(self) -> set[str]:
+        inodes: set[str] = set()
+        for fd in Path(f"/proc/{self.pid}/fd").iterdir():
+            try:
+                target = str(fd.readlink())
+            except FileNotFoundError:
+                continue  # The child may close a descriptor during the scan.
+            if target.startswith("socket:["):
+                inodes.add(target)
+        return inodes
 
     def stop(self, *, timeout: float = 5.0) -> None:
         """Send SIGTERM, escalate to SIGKILL on timeout. Idempotent."""

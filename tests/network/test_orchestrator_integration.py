@@ -25,7 +25,9 @@ from pathlib import Path
 import pytest
 
 from p4net import Network
+from p4net.compiler import P4Compiler
 from p4net.network import RunningHost
+from p4net.runtime import BMv2StartupError
 from p4net.topo import Topology
 
 pytestmark = [
@@ -391,3 +393,52 @@ def test_context_manager_cleans_up_on_exception(tmp_path: Path) -> None:
     assert iface_a not in iface_after
     assert iface_b not in iface_after
     assert iface_after - iface_before == set()
+
+
+@pytest.mark.parametrize("service", ["gRPC", "Thrift"])
+def test_port_collision_rolls_back_without_changing_original_network(
+    tmp_path: Path, service: str
+) -> None:
+    suffix = _suffix()
+    h1, h2, s1, s2 = f"h{suffix}a", f"h{suffix}b", f"s{suffix}a", f"s{suffix}b"
+    grpc_port, thrift_port = _free_port(), _free_port()
+    original = Topology()
+    original.add_host(h1, ip="10.0.0.1/24")
+    original.add_switch(s1, p4_src=_SIMPLE_ROUTING, grpc_port=grpc_port, thrift_port=thrift_port)
+    original.add_link(h1, s1)
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler-cache")
+    with Network(original, compiler=compiler, log_dir=tmp_path / "original") as net:
+        client = net.switch(s1).client
+        client.insert_table_entry(
+            "MyIngress.ipv4_lpm",
+            {"hdr.ipv4.dstAddr": "10.0.1.0/24"},
+            "MyIngress.set_egress_port",
+            {"port": 1},
+        )
+        entries = client.list_table_entries()
+        namespaces = set(_list_netns())
+        interfaces = set(_list_iface_names_root())
+        conflicting = Topology()
+        conflicting.add_host(h2, ip="10.0.0.2/24")
+        conflicting.add_switch(
+            s2,
+            p4_src=_SIMPLE_ROUTING,
+            grpc_port=grpc_port if service == "gRPC" else _free_port(),
+            thrift_port=thrift_port if service == "Thrift" else _free_port(),
+        )
+        conflicting.add_link(h2, s2)
+        failed = Network(conflicting, compiler=compiler, log_dir=tmp_path / "conflicting")
+        try:
+            with pytest.raises(BMv2StartupError, match=f"{service}.*another process|returncode"):
+                failed.start()
+            assert not failed.is_running
+            assert not failed.hosts and not failed.switches
+            assert set(_list_netns()) == namespaces
+            assert set(_list_iface_names_root()) == interfaces
+            assert net.is_running
+            assert net.host(h1).ping("127.0.0.1")
+            assert client.list_table_entries() == entries
+            client.delete_table_entry("MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.1.0/24"})
+            assert client.list_table_entries() == []
+        finally:
+            failed.stop()
