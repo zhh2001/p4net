@@ -167,19 +167,46 @@ def test_real_compile_force_rebuilds_cache(tmp_path: Path) -> None:
     assert second.p4info.is_file()
 
 
-def _compile_shared_source(source: Path, cache: Path) -> CompileResult:
-    return P4Compiler(cache_dir=cache).compile(source)
+def test_force_backend_failure_preserves_cached_artifacts(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    compiler = P4Compiler(cache_dir=tmp_path / "cache")
+    first = compiler.compile(_FORWARD)
+    entry = first.bmv2_json.parent
+    original = {path.name: path.read_bytes() for path in entry.iterdir()}
+    real_run = subprocess.run
+
+    def fail_backend(argv: list[str], **kwargs: Any) -> Any:
+        if "--p4runtime-files" in argv:
+            # Make the real backend fail without changing the cache key.
+            output = Path(argv[argv.index("-o") + 1])
+            (output / f"{_FORWARD.stem}.p4i").write_text("this is not a P4 program;")
+        return real_run(argv, **kwargs)
+
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=fail_backend)
+    with pytest.raises(CompileError):
+        compiler.compile(_FORWARD, force=True)
+    assert {path.name: path.read_bytes() for path in entry.iterdir()} == original
+    assert list(compiler.cache_dir.iterdir()) == [entry]
+    assert compiler.compile(_FORWARD).cache_hit
+
+
+def _compile_shared_source(source: Path, cache: Path, force: bool = False) -> CompileResult:
+    return P4Compiler(cache_dir=cache).compile(source, force=force)
 
 
 @pytest.mark.parametrize("executor_kind", ["threads", "processes"])
 @pytest.mark.parametrize("incomplete_cache", [False, True])
+@pytest.mark.parametrize("force", [False, True])
 def test_concurrent_compiles_publish_complete_cache(
-    tmp_path: Path, executor_kind: str, incomplete_cache: bool
+    tmp_path: Path, executor_kind: str, incomplete_cache: bool, force: bool
 ) -> None:
     source, _ = _write_include_program(tmp_path)
     cache = tmp_path / "cache"
-    if incomplete_cache:
-        P4Compiler(cache_dir=cache).compile(source).bmv2_json.write_bytes(b"")
+    if force or incomplete_cache:
+        initial = P4Compiler(cache_dir=cache).compile(source)
+        if incomplete_cache:
+            initial.bmv2_json.write_bytes(b"")
     executor: ThreadPoolExecutor | ProcessPoolExecutor
     if executor_kind == "threads":
         executor = ThreadPoolExecutor(max_workers=4)
@@ -188,10 +215,12 @@ def test_concurrent_compiles_publish_complete_cache(
             max_workers=4, mp_context=multiprocessing.get_context("spawn")
         )
     with executor:
-        futures = [executor.submit(_compile_shared_source, source, cache) for _ in range(4)]
+        futures = [executor.submit(_compile_shared_source, source, cache, force) for _ in range(4)]
         results = [future.result(timeout=30) for future in futures]
 
     assert len({result.source_hash for result in results}) == 1
+    if force:
+        assert all(not result.cache_hit for result in results)
     for result in results:
         assert _compiled_egress_port(result.bmv2_json) == 1
         assert result.p4info.stat().st_size > 0

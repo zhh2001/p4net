@@ -8,6 +8,8 @@ language version, and extra arguments.
 Concurrent compiles stage their outputs in separate directories. A directory
 lock protects the final cache check, replacement of incomplete entries, and
 atomic publication. Preprocessing and backend compilation run outside the lock.
+Forced builds retain the previous entry until fresh artifacts are ready and
+restore it if publication fails.
 """
 
 from __future__ import annotations
@@ -152,6 +154,7 @@ class P4Compiler:
 
         Preprocessing resolves includes and macros on every call. Cache misses
         compile the same preprocessed snapshot used to calculate the key.
+        Forced builds retain the previous entry until fresh artifacts are ready.
         """
         source = Path(source)
         if not source.is_file():
@@ -170,9 +173,7 @@ class P4Compiler:
         final_json = final_dir / "program.json"
         final_p4info = final_dir / "program.p4info.txtpb"
 
-        if force and final_dir.exists():
-            shutil.rmtree(final_dir, ignore_errors=False)
-        elif self._cache_hit(final_dir, final_json, final_p4info):
+        if not force and self._cache_hit(final_dir, final_json, final_p4info):
             logger.debug("compiler cache hit: %s -> %s", source, cache_key)
             return CompileResult(
                 source=source,
@@ -192,6 +193,7 @@ class P4Compiler:
             cache_key=cache_key,
             version=version,
             preprocessed=preprocessed,
+            force=force,
         )
 
     # Internal helpers ---------------------------------------------------
@@ -247,15 +249,19 @@ class P4Compiler:
             # Another writer may be replacing an incomplete entry.
             return False
 
-    def _publish_cache(self, staging_dir: Path, final_dir: Path) -> None:
-        """Replace incomplete entries once staged artifacts are ready."""
+    def _publish_cache(self, staging_dir: Path, final_dir: Path, *, force: bool = False) -> None:
+        """Publish staged artifacts, replacing complete entries when forced."""
         cache_fd = os.open(self._cache_dir, os.O_RDONLY | os.O_DIRECTORY)
         try:
             fcntl.flock(cache_fd, fcntl.LOCK_EX)
             json_path = final_dir / "program.json"
             p4info_path = final_dir / "program.p4info.txtpb"
-            if self._cache_hit(final_dir, json_path, p4info_path):
+            if not force and self._cache_hit(final_dir, json_path, p4info_path):
                 logger.debug("compiler cache populated by another writer: %s", final_dir)
+                return
+
+            if force and (final_dir.exists() or final_dir.is_symlink()):
+                self._replace_cached_entry(staging_dir, final_dir)
                 return
 
             if final_dir.is_symlink() or not final_dir.is_dir():
@@ -274,6 +280,23 @@ class P4Compiler:
         finally:
             os.close(cache_fd)
 
+    def _replace_cached_entry(self, staging_dir: Path, final_dir: Path) -> None:
+        """Replace an entry while holding the cache lock, restoring it on failure."""
+        backup_dir = Path(tempfile.mkdtemp(prefix=f"{final_dir.name}.old-", dir=self._cache_dir))
+        previous = backup_dir / "previous"
+        try:
+            os.rename(str(final_dir), str(previous))
+        except BaseException:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+            raise
+        try:
+            os.rename(str(staging_dir), str(final_dir))
+        except BaseException:
+            os.rename(str(previous), str(final_dir))
+            shutil.rmtree(backup_dir, ignore_errors=True)
+            raise
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
     def _real_compile(
         self,
         *,
@@ -283,6 +306,7 @@ class P4Compiler:
         cache_key: str,
         version: str,
         preprocessed: bytes,
+        force: bool = False,
     ) -> CompileResult:
         with tempfile.TemporaryDirectory(prefix="p4net-p4c-") as tmp:
             tmp_path = Path(tmp)
@@ -357,7 +381,7 @@ class P4Compiler:
                 with (staging_dir / "meta.json").open("w", encoding="utf-8") as fh:
                     json.dump(meta, fh, indent=2, sort_keys=True)
 
-                self._publish_cache(staging_dir, final_dir)
+                self._publish_cache(staging_dir, final_dir, force=force)
 
             logger.debug(
                 "p4c compile of %s succeeded in %.3fs (cache key %s)",

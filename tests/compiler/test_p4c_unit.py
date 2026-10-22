@@ -309,10 +309,99 @@ def test_force_bypasses_cache_hit(mocker: MockerFixture, tmp_path: Path) -> None
     assert r2.cache_hit is True
     assert fake.state["compile_calls"] == 1
 
-    # force=True should re-run.
+    fresh = _make_smart_run(bmv2_json_payload=b'{"fresh":true}', p4info_payload=b"fresh p4info")
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=fresh)
     r3 = c.compile(src, force=True)
     assert r3.cache_hit is False
-    assert fake.state["compile_calls"] == 2
+    assert fake.state["compile_calls"] == fresh.state["compile_calls"] == 1
+    assert r3.source_hash == r1.source_hash
+    assert r3.bmv2_json.read_bytes() == b'{"fresh":true}'
+    assert r3.p4info.read_bytes() == b"fresh p4info"
+
+
+@pytest.mark.parametrize("failure", ["backend", "json", "p4info", "move", "backup", "publish"])
+def test_failed_force_preserves_cached_artifacts(
+    mocker: MockerFixture, tmp_path: Path, failure: str
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    cache = tmp_path / "cache"
+    compiler = P4Compiler(cache_dir=cache)
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    first = compiler.compile(source)
+    entry = first.bmv2_json.parent
+    original = {path.name: path.read_bytes() for path in entry.iterdir()}
+    mocker.patch(
+        "p4net.compiler.p4c.subprocess.run",
+        side_effect=_make_smart_run(
+            rc=1 if failure == "backend" else 0,
+            stderr=b"backend failed",
+            bmv2_json_payload=b"" if failure == "json" else b'{"fresh":true}',
+            p4info_payload=b"" if failure == "p4info" else b"fresh p4info",
+        ),
+    )
+    real_move = shutil.move
+    real_rename = os.rename
+
+    def fail_move(src: str, dst: str) -> str:
+        if failure == "move" and Path(dst).name == "program.p4info.txtpb":
+            raise OSError(errno.EIO, "staging write failed")
+        return real_move(src, dst)
+
+    def fail_rename(src: str, dst: str) -> None:
+        if failure == "backup" and Path(src) == entry:
+            raise OSError(errno.EIO, "backup failed")
+        if (
+            failure == "publish"
+            and Path(src).name.startswith(first.source_hash + ".tmp-")
+            and Path(dst) == entry
+        ):
+            raise OSError(errno.EIO, "publishing failed")
+        real_rename(src, dst)
+
+    mocker.patch("p4net.compiler.p4c.shutil.move", side_effect=fail_move)
+    mocker.patch("p4net.compiler.p4c.os.rename", side_effect=fail_rename)
+    expected_error = CompileError if failure in ("backend", "json", "p4info") else OSError
+    with pytest.raises(expected_error):
+        compiler.compile(source, force=True)
+    assert {path.name: path.read_bytes() for path in entry.iterdir()} == original
+    assert list(cache.iterdir()) == [entry]
+    assert compiler.compile(source).cache_hit
+
+
+def test_cached_artifacts_remain_available_during_forced_compile(
+    mocker: MockerFixture, tmp_path: Path
+) -> None:
+    source = tmp_path / "program.p4"
+    _write_p4(source)
+    compiler = P4Compiler(cache_dir=tmp_path / "cache")
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=_make_smart_run())
+    first = compiler.compile(source)
+    backend_started = threading.Event()
+    finish_backend = threading.Event()
+    fresh_run = _make_smart_run(bmv2_json_payload=b'{"fresh":true}', p4info_payload=b"fresh p4info")
+
+    def pause_backend(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if "--p4runtime-files" in argv:
+            backend_started.set()
+            assert finish_backend.wait(10), "backend was not released"
+        return fresh_run(argv, **kwargs)
+
+    mocker.patch("p4net.compiler.p4c.subprocess.run", side_effect=pause_backend)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        forced = executor.submit(compiler.compile, source, force=True)
+        try:
+            assert backend_started.wait(10), "forced compile did not start"
+            assert first.bmv2_json.read_bytes() == b'{"fake":"json"}'
+            assert first.p4info.read_bytes() == b"fake p4info"
+            assert compiler.compile(source).cache_hit
+            assert not forced.done()
+        finally:
+            finish_backend.set()
+        result = forced.result(timeout=10)
+    assert not result.cache_hit
+    assert result.bmv2_json.read_bytes() == b'{"fresh":true}'
+    assert result.p4info.read_bytes() == b"fresh p4info"
 
 
 @pytest.mark.parametrize("incomplete_cache", [False, True])
@@ -560,8 +649,9 @@ def test_relative_source_paths_in_different_directories_have_separate_cache_entr
     assert not results[1].cache_hit
 
 
+@pytest.mark.parametrize("force", [False, True])
 def test_preprocessing_failure_does_not_return_cached_artifacts(
-    mocker: MockerFixture, tmp_path: Path
+    mocker: MockerFixture, tmp_path: Path, force: bool
 ) -> None:
     source = tmp_path / "program.p4"
     _write_p4(source)
@@ -573,7 +663,7 @@ def test_preprocessing_failure_does_not_return_cached_artifacts(
         return_value=_bad_proc(1, stderr=b"settings.p4: No such file or directory"),
     )
     with pytest.raises(CompileError, match="No such file"):
-        compiler.compile(source)
+        compiler.compile(source, force=force)
     assert first.bmv2_json.is_file()
     assert first.p4info.is_file()
 
