@@ -93,6 +93,101 @@ async def test_basic_lifecycle(tmp_path: Path) -> None:
         await asyncio.to_thread(net.stop)
 
 
+@pytest.mark.parametrize("mode", ["async", "worker", "owner"])
+async def test_network_stop_closes_async_connection(
+    tmp_path: Path, mocker: MockerFixture, mode: str
+) -> None:
+    suffix = _suffix()
+    switch = f"s{suffix}"
+    host = f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await asyncio.to_thread(net.start)
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    try:
+        await client.connect()
+        owner = asyncio.get_running_loop()
+        channel = client._channel
+        stream_task = client._stream_task
+        close = channel.close
+        closed_on: list[asyncio.AbstractEventLoop] = []
+
+        async def close_on_owner() -> None:
+            closed_on.append(asyncio.get_running_loop())
+            await close()
+
+        mocker.patch.object(channel, "close", side_effect=close_on_owner)
+        if mode == "worker":
+            await asyncio.to_thread(net.stop)
+        elif mode == "owner":
+            net.stop()
+            await net.astop()
+        else:
+            await net.astop()
+        assert closed_on == [owner]
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert stream_task is not None and stream_task.done()
+        assert client._channel is None
+        assert client._stream_task is None
+        assert client._loop is None
+        assert not client.is_connected
+        assert not client.is_primary
+        assert sw._async_client is None
+        assert not sw.bmv2.is_running()
+        assert not net.is_running
+        await net.astop()
+    finally:
+        await client.disconnect()
+        await asyncio.to_thread(net.stop)
+
+
+async def test_network_astop_during_async_connect(tmp_path: Path, mocker: MockerFixture) -> None:
+    suffix = _suffix()
+    switch = f"s{suffix}"
+    host = f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await asyncio.to_thread(net.start)
+    client = net.switch(switch).async_client
+    started = asyncio.Event()
+
+    async def hold_arbitration() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    mocker.patch.object(client, "_stream_consumer", side_effect=hold_arbitration)
+    connecting = asyncio.create_task(client.connect(timeout=30.0))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        channel = client._channel
+        stream_task = client._stream_task
+        await net.astop()
+        with pytest.raises(ConnectionError, match="closed"):
+            await asyncio.wait_for(asyncio.shield(connecting), timeout=0.5)
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert stream_task is not None and stream_task.done()
+        assert client._channel is None
+        assert not client.is_connected
+        assert not net.is_running
+    finally:
+        connecting.cancel()
+        await asyncio.gather(connecting, return_exceptions=True)
+        await client.disconnect()
+        await asyncio.to_thread(net.stop)
+
+
 async def test_stream_end_clears_state_and_allows_reconnect(tmp_path: Path) -> None:
     suffix = _suffix()
     switch = f"s{suffix}"

@@ -12,13 +12,17 @@ every running `Network` before re-delivering the signal.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import os
 import re
 import tempfile
+import threading
 import time
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from types import TracebackType
 
@@ -142,6 +146,10 @@ class Network:
         self._host_iface_ip: dict[str, dict[str, str | None]] = {}
         self._host_iface_ip6: dict[str, dict[str, str | None]] = {}
         self._spawned_processes: list[NSProcess] = []
+        self._async_disconnects: list[tuple[str, asyncio.AbstractEventLoop, Future[None]]] = []
+        self._stop_lock = threading.RLock()
+        self._stop_future: Future[None] | None = None
+        self._stop_thread_id: int | None = None
 
     # Read-only views ----------------------------------------------------
 
@@ -236,6 +244,10 @@ class Network:
         """
         if self._running:
             raise NetworkAlreadyRunningError("Network is already running")
+        with self._stop_lock:
+            if self._stop_future is not None and not self._stop_future.done():
+                raise NetworkError("Network shutdown is still running")
+            self._stop_future = None
         try:
             self._do_start()
             self._running = True
@@ -244,8 +256,65 @@ class Network:
             raise
 
     def stop(self) -> None:
-        """Tear the network down. Idempotent — safe to call from any state."""
-        self._do_stop()
+        """Tear the network down. Repeated calls are safe.
+
+        Async clients close on their owning event loops. Inside an event
+        loop, shutdown runs in a background thread; use :meth:`astop` to
+        wait for it. Outside an event loop, this method waits for cleanup.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            in_event_loop = False
+        else:
+            in_event_loop = True
+
+        with self._stop_lock:
+            if self._stop_future is None or (self._stop_future.done() and self._async_disconnects):
+                self._stop_future = Future()
+                initiate = True
+            else:
+                initiate = False
+            future = self._stop_future
+        if initiate:
+            if in_event_loop:
+                threading.Thread(
+                    target=self._finish_stop, args=(future,), name="p4net-stop", daemon=True
+                ).start()
+            else:
+                self._finish_stop(future)
+        if not in_event_loop and self._stop_thread_id != threading.get_ident():
+            future.result()
+
+    def _finish_stop(self, future: Future[None]) -> None:
+        self._stop_thread_id = threading.get_ident()
+        try:
+            self._do_stop()
+        except BaseException as exc:
+            future.set_exception(exc)
+        else:
+            future.set_result(None)
+        finally:
+            self._stop_thread_id = None
+
+    async def astop(self) -> None:
+        """Wait for async clients and network resources to finish shutting down.
+
+        Client event loops must remain running until shutdown completes.
+        Cancellation is propagated after cleanup finishes.
+        """
+        shutdown = asyncio.create_task(asyncio.to_thread(self.stop))
+        cancelled = False
+        while not shutdown.done():
+            try:
+                await asyncio.shield(shutdown)
+            except asyncio.CancelledError:
+                cancelled = True
+        shutdown.result()
+        if self._async_disconnects:
+            raise NetworkError("async client shutdown did not finish")
+        if cancelled:
+            raise asyncio.CancelledError
 
     # Ping helpers -------------------------------------------------------
 
@@ -633,22 +702,44 @@ class Network:
                 logger.warning("spawned process reap (pid=%s): %r", getattr(proc, "pid", "?"), exc)
         self._spawned_processes.clear()
 
-        # 1a. Async P4Runtime clients (if any were lazily constructed and
-        # connected). We run a fresh event loop per client to avoid
-        # interfering with the caller's loop; a failure here is logged
-        # and does not block shutdown.
+        # 1a. Submit disconnects to the loops that own the gRPC resources.
         for sw_name, rs in list(self._running_switches.items()):
             ac = rs._async_client
             if ac is None:
                 continue
             try:
-                if ac.is_connected:
-                    import asyncio as _asyncio
-
-                    _asyncio.run(ac.disconnect())
+                loop = ac._loop
+                if loop is not None:
+                    if not loop.is_running():
+                        raise RuntimeError("async client event loop is not running")
+                    disconnect = ac.disconnect()
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(disconnect, loop)
+                    except BaseException:
+                        disconnect.close()
+                        raise
+                    self._async_disconnects.append((sw_name, loop, future))
             except Exception as exc:
                 logger.warning("async client disconnect %r: %r", sw_name, exc)
             rs._reset_async_client()
+
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        pending = []
+        for sw_name, loop, future in self._async_disconnects:
+            if loop is current_loop and not future.done():
+                pending.append((sw_name, loop, future))
+                continue
+            try:
+                future.result(timeout=5.0)
+            except FutureTimeoutError:
+                pending.append((sw_name, loop, future))
+                logger.warning("async client disconnect %r timed out", sw_name)
+            except Exception as exc:
+                logger.warning("async client disconnect %r: %r", sw_name, exc)
+        self._async_disconnects = pending
 
         # 1. P4Runtime clients
         for sw_name, client in list(self._clients.items()):

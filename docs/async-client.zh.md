@@ -48,6 +48,28 @@ with Network(topology) as net:
     asyncio.run(main(net))
 ```
 
+## 关闭网络
+
+在事件循环中管理网络时，使用 `await net.astop()` 关闭：
+
+```python
+async def main() -> None:
+    net = Network(topology)
+    await asyncio.to_thread(net.start)
+    try:
+        client = net.switch("s1").async_client
+        await client.connect()
+        # ... 使用网络 ...
+    finally:
+        await net.astop()
+
+asyncio.run(main())
+```
+
+`astop()` 在各异步客户端建立连接时使用的事件循环中关闭连接，然后释放网络资源。仍在等待仲裁的连接也会关闭。在 `astop()` 完成前，保持这些事件循环运行。关闭任务被取消时，会先完成清理，再传播 `CancelledError`。
+
+同步接口 `net.stop()` 继续保留。在事件循环之外调用时，它会等待清理完成。在事件循环内调用时，它会启动后台线程执行清理，然后返回。此时可再调用 `await net.astop()` 等待清理完成。两个接口均可重复调用。
+
 ## API 参考
 
 请参见 `p4net.control.AsyncP4RuntimeClient` 的自动生成文档：构造器、属性、生命周期、表 CRUD、计数器、寄存器、数据包 I/O。

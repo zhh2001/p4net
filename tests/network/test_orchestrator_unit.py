@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import signal
 import threading
 from pathlib import Path
@@ -1127,3 +1128,187 @@ def test_running_switch_async_client_reset_after_stop(
     # The orchestrator clears the running-switches dict on stop AND zeroes
     # the per-RunningSwitch async cache via _reset_async_client.
     assert sw._async_client is None
+
+
+class _LoopBoundClient:
+    def __init__(self, *, connected: bool = True) -> None:
+        self._loop = asyncio.get_running_loop()
+        self.is_connected = connected
+        self.disconnect_started = asyncio.Event()
+        self.allow_disconnect = asyncio.Event()
+        self.allow_disconnect.set()
+        self.closed = False
+        self.disconnect_count = 0
+
+    async def disconnect(self) -> None:
+        assert asyncio.get_running_loop() is self._loop
+        self.disconnect_started.set()
+        await self.allow_disconnect.wait()
+        self.disconnect_count += 1
+        self.is_connected = False
+        self.closed = True
+
+
+@pytest.mark.parametrize("mode", ["async", "worker", "owner"])
+@pytest.mark.parametrize("connected", [True, False])
+async def test_network_closes_async_client_on_owner_loop(
+    patched: dict[str, Any], tmp_path: Path, mode: str, connected: bool
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    sw = net.switch("s1")
+    client = _LoopBoundClient(connected=connected)
+    sw._async_client = client  # type: ignore[assignment]
+    try:
+        if mode == "worker":
+            await asyncio.to_thread(net.stop)
+        elif mode == "owner":
+            net.stop()
+            await net.astop()
+        else:
+            await net.astop()
+        assert client.closed
+        assert client.disconnect_count == 1
+        assert sw._async_client is None
+        assert not net.is_running
+        patched["clients"][0].disconnect.assert_called_once()
+        patched["bmv2s"][0].stop.assert_called_once()
+        for veth in patched["veths"]:
+            veth.destroy.assert_called_once()
+        await net.astop()
+        net.stop()
+        assert client.disconnect_count == 1
+    finally:
+        await client.disconnect()
+        net.stop()
+
+
+async def test_astop_waits_for_client_before_stopping_switch(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    client = _LoopBoundClient()
+    client.allow_disconnect.clear()
+    net.switch("s1")._async_client = client  # type: ignore[assignment]
+    task = asyncio.create_task(net.astop())
+    try:
+        await asyncio.wait_for(client.disconnect_started.wait(), timeout=2.0)
+        assert not task.done()
+        patched["bmv2s"][0].stop.assert_not_called()
+        client.allow_disconnect.set()
+        await asyncio.wait_for(task, timeout=2.0)
+        assert client.closed
+        patched["bmv2s"][0].stop.assert_called_once()
+    finally:
+        client.allow_disconnect.set()
+        await asyncio.gather(task, return_exceptions=True)
+        net.stop()
+
+
+async def test_cancelled_astop_finishes_cleanup(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    client = _LoopBoundClient()
+    client.allow_disconnect.clear()
+    net.switch("s1")._async_client = client  # type: ignore[assignment]
+    task = asyncio.create_task(net.astop())
+    try:
+        await asyncio.wait_for(client.disconnect_started.wait(), timeout=2.0)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        client.allow_disconnect.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2.0)
+        assert client.closed
+        assert not net.is_running
+        patched["bmv2s"][0].stop.assert_called_once()
+    finally:
+        client.allow_disconnect.set()
+        await asyncio.gather(task, return_exceptions=True)
+        net.stop()
+
+
+def test_stop_closes_client_owned_by_background_loop(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever)
+    thread.start()
+
+    async def make_client() -> _LoopBoundClient:
+        return _LoopBoundClient()
+
+    client = asyncio.run_coroutine_threadsafe(make_client(), loop).result(timeout=2.0)
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    try:
+        net.start()
+        net.switch("s1")._async_client = client  # type: ignore[assignment]
+        net.stop()
+        assert client.closed
+        assert client.disconnect_count == 1
+        assert not net.is_running
+    finally:
+        net.stop()
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+        loop.close()
+
+
+async def test_astop_continues_cleanup_after_client_error(
+    patched: dict[str, Any], tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    class FailingClient(_LoopBoundClient):
+        async def disconnect(self) -> None:
+            assert asyncio.get_running_loop() is self._loop
+            raise RuntimeError("disconnect failed")
+
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    net.switch("s1")._async_client = FailingClient()  # type: ignore[assignment]
+    await net.astop()
+    assert "disconnect failed" in caplog.text
+    assert not net.is_running
+    patched["clients"][0].disconnect.assert_called_once()
+    patched["bmv2s"][0].stop.assert_called_once()
+    patched["unregister"].assert_called_once_with(net)
+
+
+async def test_concurrent_astop_only_cleans_up_once(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    client = _LoopBoundClient()
+    net.switch("s1")._async_client = client  # type: ignore[assignment]
+    await asyncio.gather(net.astop(), net.astop(), net.astop())
+    assert client.closed
+    assert client.disconnect_count == 1
+    patched["bmv2s"][0].stop.assert_called_once()
+    patched["unregister"].assert_called_once_with(net)
+
+
+def test_stop_allows_reentrant_cleanup(patched: dict[str, Any], tmp_path: Path) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    patched["clients"][0].disconnect.side_effect = net.stop
+    net.stop()
+    assert not net.is_running
+    patched["clients"][0].disconnect.assert_called_once()
+    patched["bmv2s"][0].stop.assert_called_once()
+
+
+async def test_start_after_astop_can_be_stopped_again(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    for _ in range(2):
+        net.start()
+        client = _LoopBoundClient()
+        net.switch("s1")._async_client = client  # type: ignore[assignment]
+        await net.astop()
+        assert client.closed
+        assert not net.is_running
+    for bmv2 in patched["bmv2s"]:
+        bmv2.stop.assert_called_once()

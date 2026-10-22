@@ -108,6 +108,7 @@ class AsyncP4RuntimeClient:
         self._election_id = election_id  # resolved at connect() if None
 
         self._channel: Any = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._stub: Any = None
         self._outgoing: asyncio.Queue[Any] | None = None
         self._stream_call: Any = None
@@ -169,6 +170,7 @@ class AsyncP4RuntimeClient:
         if self._channel is not None:
             await self._teardown()
         self._closed = False
+        self._loop = asyncio.get_running_loop()
         self._channel = grpc.aio.insecure_channel(self.target)
         self._stub = p4runtime_pb2_grpc.P4RuntimeStub(self._channel)
         self._outgoing = asyncio.Queue()
@@ -237,6 +239,13 @@ class AsyncP4RuntimeClient:
             was_connected = self._connected
             self._connected = False
             self._is_primary = False
+            if self._channel is not None and not was_connected:
+                if self._stream_error is None:
+                    self._stream_error = ConnectionError(
+                        f"P4Runtime async connection closed before arbitration for {self.target!r}"
+                    )
+                if self._arbitration_event is not None:
+                    self._arbitration_event.set()
             if self._outgoing is not None:
                 with self._suppress_queue_full():
                     self._outgoing.put_nowait(None)  # sentinel
@@ -263,6 +272,7 @@ class AsyncP4RuntimeClient:
                 except Exception as exc:
                     logger.debug("async channel close raised: %r", exc)
             self._channel = None
+            self._loop = None
             self._stub = None
             self._stream_call = None
             self._stream_task = None

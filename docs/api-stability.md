@@ -4,50 +4,28 @@ description: API stability classification per public symbol — what 1.0 means, 
 
 # API stability
 
-p4net's 1.x line commits to a stable public API. This page defines
-what "stable" means in practice, classifies every public symbol by
-stability tier, and documents the deprecation cycle.
+p4net's 1.x line commits to a stable public API. This page defines what "stable" means in practice, classifies every public symbol by stability tier, and documents the deprecation cycle.
 
 ## What "1.0" means for p4net
 
-The 1.x line will not introduce breaking changes to **stable** APIs
-without a deprecation cycle. Some APIs are explicitly marked
-**provisional** — they may evolve through a deprecation cycle within
-1.x. Some APIs are explicitly marked **experimental** — they may
-change without warning within 1.x and should not be relied on for
-anything you can't easily refactor. Anything not exported in
-`__all__` is **internal** regardless of name; do not import it.
+The 1.x line will not introduce breaking changes to **stable** APIs without a deprecation cycle. Some APIs are explicitly marked **provisional** — they may evolve through a deprecation cycle within 1.x. Some APIs are explicitly marked **experimental** — they may change without warning within 1.x and should not be relied on for anything you can't easily refactor. Anything not exported in `__all__` is **internal** regardless of name; do not import it.
 
 ## Stability tiers
 
-**Stable.** Backwards-compatible across the entire 1.x line. Behavior
-changes only in 2.0+. Bug-fix changes that preserve the documented
-contract are always permitted.
+**Stable.** Backwards-compatible across the entire 1.x line. Behavior changes only in 2.0+. Bug-fix changes that preserve the documented contract are always permitted.
 
-**Provisional.** May change in a 1.x minor release, but only after a
-deprecation warning has been visible for at least two consecutive
-minor versions. New keyword-only arguments may be added without a
-deprecation cycle (default-valued additions are not breaking).
+**Provisional.** May change in a 1.x minor release, but only after a deprecation warning has been visible for at least two consecutive minor versions. New keyword-only arguments may be added without a deprecation cycle (default-valued additions are not breaking).
 
-**Experimental.** May change without notice within 1.x. Do not rely
-on the precise interface; pin to a specific version if you need
-reproducibility.
+**Experimental.** May change without notice within 1.x. Do not rely on the precise interface; pin to a specific version if you need reproducibility.
 
-**Internal.** Not part of the public API regardless of language
-semantics. Do not import directly. Anything not exported in a
-package's `__all__` is internal even when nominally accessible.
+**Internal.** Not part of the public API regardless of language semantics. Do not import directly. Anything not exported in a package's `__all__` is internal even when nominally accessible.
 
 ## Deprecation policy
 
 - Deprecated APIs emit a `DeprecationWarning` from the call site.
-- Deprecated APIs survive at least two consecutive minor releases
-  (e.g. deprecated in 1.2 → still works in 1.3 → removed earliest
-  in 2.0; or earlier than 2.0 only for **provisional** /
-  **experimental** APIs after the deprecation cycle has elapsed).
-- Removal in a minor release is permitted ONLY for provisional and
-  experimental APIs after the cycle.
-- Stable APIs can only be removed in a major release (2.0+), and
-  only after one full minor cycle of deprecation in the prior major.
+- Deprecated APIs survive at least two consecutive minor releases (e.g. deprecated in 1.2 → still works in 1.3 → removed earliest in 2.0; or earlier than 2.0 only for **provisional** / **experimental** APIs after the deprecation cycle has elapsed).
+- Removal in a minor release is permitted ONLY for provisional and experimental APIs after the cycle.
+- Stable APIs can only be removed in a major release (2.0+), and only after one full minor cycle of deprecation in the prior major.
 
 ## Per-package classification
 
@@ -70,7 +48,7 @@ Stable user-facing surface; some lower-level details provisional.
 
 | Symbol | Tier | Note |
 | --- | --- | --- |
-| `Network` | Stable | `start`, `stop`, `host`, `switch`, `pingall`, `pingall6`, `boot_timestamps`, `__enter__`, `__exit__` are stable. |
+| `Network` | Stable | `start`, `stop`, `astop`, `host`, `switch`, `pingall`, `pingall6`, `boot_timestamps`, `__enter__`, `__exit__` are stable. `await astop()` waits for async client and network cleanup. |
 | `Network.boot_timestamps` | Stable | Read-only dict mapping switch name to wall-clock μs since Unix epoch when that switch's BMv2 process started. Convenience helper over per-switch `RunningSwitch.boot_timestamp_us`. Returns a fresh dict on each call. Raises `NetworkNotRunningError` if accessed before `start` or after `stop`. |
 | `Network.xterm` | Experimental | Depends on `$DISPLAY`; behavior may evolve as we refine the spawned-process tracking. |
 | `RunningHost` | Stable | `name`, `primary_ip`, `primary_ip6`, `interfaces`, `interfaces6`, `ping`, `exec`, `popen` are stable. |
@@ -81,33 +59,17 @@ Stable user-facing surface; some lower-level details provisional.
 
 ## Provisional tier and async client
 
-`AsyncP4RuntimeClient` and its companion exports
-(`AsyncOperationCancelledError`, `RunningSwitch.async_client`) were
-introduced as **Provisional** in p4net 1.6.0 to allow real-world soak
-before locking the API surface. The motivation was that async APIs in
-Python have a richer surface than sync (cancellation semantics, context
-manager behavior, async iteration ergonomics, exception propagation
-through `gather` / `wait_for`) that benefits from empirical validation
-before being locked in for the rest of 1.x.
+`AsyncP4RuntimeClient` and its companion exports (`AsyncOperationCancelledError`, `RunningSwitch.async_client`) were introduced as **Provisional** in p4net 1.6.0 to allow real-world soak before locking the API surface. The motivation was that async APIs in Python have a richer surface than sync (cancellation semantics, context manager behavior, async iteration ergonomics, exception propagation through `gather` / `wait_for`) that benefits from empirical validation before being locked in for the rest of 1.x.
 
-In p4net 1.7.0 all three symbols were **promoted to Stable** following
-real-world user soak in which no backwards-incompatible adjustments
-surfaced. This honors the two-minor-release upper bound on Provisional
-status that 1.6.0 committed to (promotion occurred at one minor release
-in, within the commitment window).
+In p4net 1.7.0 all three symbols were **promoted to Stable** following real-world user soak in which no backwards-incompatible adjustments surfaced. This honors the two-minor-release upper bound on Provisional status that 1.6.0 committed to (promotion occurred at one minor release in, within the commitment window).
 
 Stable means the same contract as every other Stable symbol in p4net 1.x:
 
 - The class will not be removed within 1.x.
-- Method names, signatures, and documented behavior will not change
-  incompatibly within 1.x.
-- Bug fixes that align behavior with documentation are allowed and
-  expected.
+- Method names, signatures, and documented behavior will not change incompatibly within 1.x.
+- Bug fixes that align behavior with documentation are allowed and expected.
 
-The Provisional tier remains available in this document and may be used
-for future additions that need empirical soak before lock-in. The
-async-client experience validates the tier's utility as a real
-engineering mechanism, not decoration.
+The Provisional tier remains available in this document and may be used for future additions that need empirical soak before lock-in. The async-client experience validates the tier's utility as a real engineering mechanism, not decoration.
 
 ### `p4net.control`
 
@@ -131,8 +93,7 @@ Stable client API; provisional codec edge cases; async client now Stable.
 
 ### `p4net.runtime`
 
-Provisional. These are intentionally low-level escape hatches; the
-higher-level `Network` orchestrator covers most use cases.
+Provisional. These are intentionally low-level escape hatches; the higher-level `Network` orchestrator covers most use cases.
 
 | Symbol | Tier | Note |
 | --- | --- | --- |
@@ -156,11 +117,7 @@ Provisional internals; stable compiler interface.
 
 ### `p4net.cli`
 
-The CLI command grammar (what users type at the prompt) is **stable**
-as a user-facing contract — every command in the
-[CLI Reference](cli.md) will work the same way across 1.x. The
-Python class structure used to implement it is **experimental**;
-external code should not subclass `CommandDispatcher` or `P4NetShell`.
+The CLI command grammar (what users type at the prompt) is **stable** as a user-facing contract — every command in the [CLI Reference](cli.md) will work the same way across 1.x. The Python class structure used to implement it is **experimental**; external code should not subclass `CommandDispatcher` or `P4NetShell`.
 
 | Symbol | Tier | Note |
 | --- | --- | --- |
@@ -172,33 +129,17 @@ external code should not subclass `CommandDispatcher` or `P4NetShell`.
 
 ## What's explicitly NOT supported in 1.x
 
-- **PSA architecture.** Only v1model is supported. PSA support is
-  planned for 2.0; track in [Roadmap](roadmap.md).
-- **Live topology mutation.** Build a `Topology`, hand it to
-  `Network`, do work, then `stop`. Adding or removing hosts,
-  switches, or links at runtime is not supported in 1.x; planned
-  for 2.0.
-- **Async P4Runtime client.** The client is synchronous (blocking
-  gRPC). An asyncio + `grpc.aio` variant is post-1.x.
-- **Distributed simulation across multiple machines.** Single-host
-  only.
+- **PSA architecture.** Only v1model is supported. PSA support is planned for 2.0; track in [Roadmap](roadmap.md).
+- **Live topology mutation.** Build a `Topology`, hand it to `Network`, do work, then `stop`. Adding or removing hosts, switches, or links at runtime is not supported in 1.x; planned for 2.0.
+- **Async P4Runtime client.** The client is synchronous (blocking gRPC). An asyncio + `grpc.aio` variant is post-1.x.
+- **Distributed simulation across multiple machines.** Single-host only.
 
 ## Logger namespace
 
-The `p4net.*` logger namespace structure is **Stable** in 1.x.
-Code that reaches into the namespace via
-`logging.getLogger("p4net")` or any documented subpackage logger
-(`p4net.network`, `p4net.runtime`, `p4net.control`, `p4net.compiler`,
-`p4net.topo`, `p4net.cli`) will continue to work. New submodule
-loggers may be added; existing ones won't be renamed.
+The `p4net.*` logger namespace structure is **Stable** in 1.x. Code that reaches into the namespace via `logging.getLogger("p4net")` or any documented subpackage logger (`p4net.network`, `p4net.runtime`, `p4net.control`, `p4net.compiler`, `p4net.topo`, `p4net.cli`) will continue to work. New submodule loggers may be added; existing ones won't be renamed.
 
-Log **message text** and the **level chosen for any specific
-event** are **not** part of the stable contract — see
-[Logging](logging.md) for the level taxonomy and rationale.
+Log **message text** and the **level chosen for any specific event** are **not** part of the stable contract — see [Logging](logging.md) for the level taxonomy and rationale.
 
 ## Reporting incompatibilities
 
-We treat compatibility regressions in stable APIs as bugs to fix in
-a patch release. If a 1.x version breaks code that worked on a
-prior 1.x version using only stable APIs, please file an issue at
-<https://github.com/zhh2001/p4net/issues> with a minimal reproducer.
+We treat compatibility regressions in stable APIs as bugs to fix in a patch release. If a 1.x version breaks code that worked on a prior 1.x version using only stable APIs, please file an issue at <https://github.com/zhh2001/p4net/issues> with a minimal reproducer.

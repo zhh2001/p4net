@@ -90,6 +90,8 @@ API：[`p4net.control`](api/control.md)。
 
 `stop()`（由 `__exit__`、atexit、信号或显式调用触发）按相反顺序回卷：用户启动的 xterm、P4Runtime 客户端、BMv2 进程、veth 对、命名空间，最后把自己从清理注册表中移除。每一步都包在带日志的 `try/except` 中——任一步失败都不会泄漏其余资源。
 
+异步 P4Runtime 连接在客户端所属的事件循环中关闭。`await net.astop()` 等待连接关闭后，再由工作线程释放其余网络资源。在事件循环中调用同步 `stop()` 时，会启动后台清理并返回。用法见[关闭网络](async-client.md#关闭网络)。
+
 `fork()` 后，子进程使用空的网络清理注册表和新的锁。子进程退出或收到信号时，不会清理父进程的网络。子进程中新登记的网络由它自己的注册表管理。
 
 `Network` 还托管高层帮助方法：`ping`、`pingall`、`pingall6`、`xterm`，它们走 `RunningHost.ping` 与 `RunningHost.popen` 路径。

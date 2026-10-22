@@ -48,6 +48,28 @@ with Network(topology) as net:
     asyncio.run(main(net))
 ```
 
+## Shutting down a network
+
+Use `await net.astop()` when the network is managed inside an event loop:
+
+```python
+async def main() -> None:
+    net = Network(topology)
+    await asyncio.to_thread(net.start)
+    try:
+        client = net.switch("s1").async_client
+        await client.connect()
+        # ... use the network ...
+    finally:
+        await net.astop()
+
+asyncio.run(main())
+```
+
+`astop()` closes each cached async client on the event loop where it connected, then tears down the network resources. It also closes clients still waiting for arbitration. Keep those event loops running until `astop()` finishes. If the shutdown task is cancelled, cleanup finishes before `CancelledError` propagates.
+
+The synchronous `net.stop()` remains available. Outside an event loop, it waits for cleanup to finish. Inside an event loop, it starts cleanup in a background thread and returns. Use `await net.astop()` to wait for that cleanup. Both methods support repeated calls.
+
 ## API reference
 
 See the generated docs for `p4net.control.AsyncP4RuntimeClient`: constructor, properties, lifecycle, table CRUD, counters, registers, packet I/O.

@@ -160,6 +160,22 @@ async def test_connect_then_disconnect_clean(patched_aio: dict[str, Any]) -> Non
     assert not client.is_connected
 
 
+async def test_disconnect_wakes_pending_connect(patched_aio: dict[str, Any]) -> None:
+    client = AsyncP4RuntimeClient(grpc_address=("127.0.0.1", 50051), device_id=0)
+    task = asyncio.create_task(client.connect(timeout=30.0))
+    try:
+        await asyncio.wait_for(patched_aio["stream"].read_started.wait(), timeout=2.0)
+        await client.disconnect()
+        with pytest.raises(ConnectionError, match="closed"):
+            await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
+        assert not client.is_connected
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("primary", [True, False])
 @pytest.mark.parametrize("ending", ["eof", "rpc-error", "exception", "cancelled"])
 async def test_stream_end_releases_resources_and_can_reconnect(
