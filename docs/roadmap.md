@@ -1,114 +1,91 @@
 ---
-description: Released milestones and forward-looking 2.0 candidates for p4net.
+description: p4net release milestones, candidate extensions, and the current behavior behind each proposal.
 ---
 
 # Roadmap
 
 ## About this document
 
-This is a living roadmap, not a commitment. Items are listed in rough
-priority order within each release; relative ordering can change as
-issues are filed and trade-offs become clearer. PRs for any item are
-welcome — please comment on (or open) the linked issue first so that
-design discussion happens once, in public, before the code lands.
+This page records released milestones and candidate extensions. Discuss designs
+and release scope in the [issue tracker](https://github.com/zhh2001/p4net/issues)
+or a pull request. Public interfaces follow the [API stability policy](api-stability.md).
 
 ## Released milestones
 
-- **v0.1.0** (2026-05-10) — initial public release. Topology DSL,
-  P4Runtime control plane, BMv2 orchestration, interactive CLI. See
-  [Changelog](changelog.md).
-- **v0.2.0** (2026-05-10) — controller packet I/O, IPv6 host addressing,
-  asymmetric link impairment, topology visualizer, `xterm` helper. See
-  [Changelog](changelog.md).
-- **v1.0.0** (2026-05-10) — public API stability commitment, OQ
-  backlog cleanup (phase-13 #1/#2/#4, phase-16 #1), CI hardening
-  (Ubuntu 22.04 + 24.04 matrix, wheel-install smoke job), expanded
-  SECURITY.md, performance baseline, Unicode-aware doc anchors. See
-  [API Stability](api-stability.md), [Performance](performance.md),
-  and [Changelog](changelog.md).
-- **v1.1.0** (2026-05-11) — polish minor: INT example, unified
-  `p4net.*` logger hierarchy with CLI verbosity control, per-direction
-  additive link impairment, known-limitations catalogue, custom 404
-  page. See [Logging](logging.md),
-  [Known Limitations](known-limitations.md), and
-  [Changelog](changelog.md).
-- **v1.2.0** (2026-05-11) — register API
-  (`P4RuntimeClient.read_register` / `write_register`), INT example now
-  uses a register-backed `switch_id` instead of a hard-coded constant,
-  INT shim timestamp field correctly named `ingress_timestamp_us`,
-  asymmetric-delay test tolerance widened to eliminate suite-load
-  flakes. See [API Stability](api-stability.md) and
-  [Changelog](changelog.md).
-- **v1.3.0** (2026-05-11) — multi-hop INT example: two switches in a
-  linear path each insert their own metadata shim; the receiver
-  decodes the full hop-by-hop stack. Same P4 binary on both switches;
-  per-switch identity supplied via the v1.2 register API. No public
-  API changes. See [Changelog](changelog.md).
-- **v1.4.0** (2026-05-11) — cross-switch INT timestamp alignment via
-  `RunningSwitch.boot_timestamp_us` (wall-clock μs since Unix epoch at
-  BMv2 process start). The multi-hop INT example now writes a
-  coordination file at start; the listener displays aligned wall-clock
-  timestamps and per-hop forwarding latency. See [Changelog](changelog.md).
-- **v1.5.0** (2026-05-11) — `Network.boot_timestamps` helper (dict of
-  all switches' boot times) and env-var-keyed coordination file
-  (`P4NET_INT_BOOT_TIMES_PATH`) for the multi-hop INT example so
-  concurrent topologies don't collide. See [Changelog](changelog.md).
-- **v1.5.1** (2026-05-12) — drop misdesigned aligned-causal assertion
-  in the multi-hop INT integration test. See [Changelog](changelog.md).
-- **v1.6.0** (2026-05-14) — `AsyncP4RuntimeClient` parallel to the
-  sync client; `RunningSwitch.async_client` lazy property; example
-  `async_concurrent/` showing `asyncio.gather` across switches. New
-  symbols are Provisional in 1.x with a commitment to upgrade to
-  Stable within two minor releases. See
-  [Async client](async-client.md) and [Changelog](changelog.md).
-- **v1.7.0** (2026-05-14) — `AsyncP4RuntimeClient`,
-  `AsyncOperationCancelledError`, and `RunningSwitch.async_client`
-  promoted from Provisional to **Stable** following real-world user
-  soak. No source-level API change. See [Changelog](changelog.md).
+See the [changelog](changelog.md) for complete release notes.
+
+| Version | Date | Main changes |
+| --- | --- | --- |
+| 0.1.0 | 2026-05-10 | Topology DSL, P4Runtime control, BMv2 orchestration, and interactive CLI. |
+| 0.2.0 | 2026-05-10 | Controller packet I/O, IPv6 host addresses, asymmetric link impairments, Graphviz export, and host terminals. |
+| 1.0.0 | 2026-05-10 | Public API stability policy, expanded CI matrix, wheel installation checks, and security documentation. |
+| 1.1.0 | 2026-05-11 | INT example, logging configuration, and additive per-direction link impairments. |
+| 1.2.0 | 2026-05-11 | Register reads and writes, with register-based switch IDs in the INT example. |
+| 1.3.0 | 2026-05-11 | Multi-hop INT example using the same P4 program and distinct register values on each switch. |
+| 1.4.0 | 2026-05-11 | `RunningSwitch.boot_timestamp_us` and timestamp alignment in the multi-hop INT example. |
+| 1.5.0 | 2026-05-11 | `Network.boot_timestamps` and a configurable INT coordination-file path for separate experiments. |
+| 1.5.1 | 2026-05-12 | Revised multi-hop INT integration assertions. |
+| 1.6.0 | 2026-05-14 | Provisional async P4Runtime client, lazy switch client access, and the async concurrent example. |
+| 1.7.0 | 2026-05-14 | `AsyncP4RuntimeClient`, `AsyncOperationCancelledError`, and `RunningSwitch.async_client` became stable. |
 
 ## 1.x candidates (additive, no API breakage)
 
-None currently open; ideas welcome via issues.
+This page does not assign a new feature to a specific 1.x release. Compatible
+fixes and additions follow the API stability policy.
 
 ## 2.0 candidates (may require API breakage)
 
+These directions need design work before their interfaces and release scope
+can be decided. Adding a separate method or class can preserve compatibility.
+An incompatible change to a stable API must complete the deprecation cycle and
+ship in a new major version.
+
 ### PSA architecture support
 
-Beyond v1model. Requires `p4c` and BMv2 with the PSA target compiled
-in (not standard in many distributions). The compiler wrapper would
-need to learn how to select the architecture and the `simple_switch`
-process variant; `P4InfoIndex` should keep working unchanged because
-P4Runtime isolates the architecture from the controller. Promoted
-to 2.0 because the `Topology.add_switch` signature may need a new
-required argument or a redesigned default.
+`Topology.add_switch()` already has an `arch` parameter, currently restricted
+to `"v1model"`. `Network` launches `simple_switch_grpc`. PSA support needs
+integration with a matching compiler and runtime target. BMv2 documents its
+separate [target implementations](https://github.com/p4lang/behavioral-model/blob/main/targets/README.md).
+
+Work includes target selection, startup arguments and readiness checks, pipeline
+installation, and tests for table, counter, register, and packet I/O operations.
+`P4InfoIndex` and controller metadata handling need validation against the new
+target's P4Info. The design must determine which existing interfaces can be
+reused and whether any public interface needs to change.
 
 ### Live topology mutation
 
-`Network.add_host(...)`, `Network.add_link(...)`, and their `remove_*`
-counterparts while the network is already running. Currently the
-`Topology` is frozen at `start()` time. The realisation primitives
-(namespaces, veth pairs) already support live add/remove; the
-orchestrator's bookkeeping just needs to re-enter the same paths.
-Promoted to 2.0 because the `Topology` immutability invariant is
-documented in 1.x as part of the stable API.
+`Topology` remains a mutable description after `Network.start()`. Adding a host
+or link to that description does not create running resources. `Network` has
+no live node or link add/remove interface.
+
+Live operations need to keep the description, running-node handles, namespaces,
+interfaces, port assignments, and control-plane state consistent. The design
+also needs rollback when an operation fails and cleanup when the network stops.
+The current workflow is to stop the network, edit its description, and create
+and start a new `Network`. See [topology changes](known-limitations.md#4-live-topology-mutation-not-supported).
 
 ### AsyncNetwork
 
-`AsyncP4RuntimeClient` shipped in v1.6 closes the per-RPC story, but
-`Network.start()` itself is still synchronous and uses threads to
-parallelise BMv2 startup. A future `AsyncNetwork` (or
-`Network.start_async()`) would make the whole lifecycle composable
-inside an existing event loop without `asyncio.to_thread`
-wrappers. Out of scope for 1.x because adding an `async def start`
-alongside the sync `start` would either require keyword-only
-disambiguation or split into a new class; cleanest design needs the
-2.0 freedom to rethink lifecycle.
+`AsyncP4RuntimeClient` supports concurrent RPC operations, and
+`await net.astop()` already waits for network shutdown. `Network.start()` is
+synchronous and starts BMv2 switches sequentially, waiting for each switch to
+be ready before starting the next.
+
+In a coroutine, use `await asyncio.to_thread(net.start)` for startup and
+`await net.astop()` for shutdown. Keep async clients' event loops running until
+cleanup finishes. See the [async lifecycle guide](async-client.md#shutting-down-a-network).
+
+A future async startup interface or `AsyncNetwork` could build on the existing
+shutdown API to coordinate startup, cancellation, and rollback within an event
+loop. An async design can retain the sync lifecycle while adding separate
+entry points.
 
 ## Indefinitely deferred
 
-- **Distributed simulation across multiple machines.** Federating two
-  p4net instances needs L2 tunneling between hosts and a coordination
-  layer; nothing in the current architecture is designed for it.
-- **Web UI for topology visualization and live state.** Likely a
-  separate companion repo if it ever happens. Keeps p4net itself
-  framework-free.
+- **Distributed experiments.** `Network` manages resources on one Linux machine.
+  Multi-machine orchestration needs remote resource management, links between
+  hosts, and coordination of setup and cleanup.
+- **Web interface.** The current interfaces provide an interactive CLI and
+  Graphviz topology export. Browser-based visualization and control are outside
+  the candidate work listed above.
