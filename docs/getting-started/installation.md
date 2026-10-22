@@ -1,110 +1,130 @@
 ---
-description: How to install p4net and the external dependencies it relies on (p4c, BMv2 simple_switch_grpc, graphviz).
+description: Prepare the Linux tools, install p4net in a virtual environment, and verify the installation.
 ---
 
 # Installation
 
-p4net is a thin Python layer over `p4c`, `simple_switch_grpc` (BMv2),
-and the Linux kernel's network-namespace and traffic-control
-primitives. Installing the Python package is the easy part; getting
-the external compiler and dataplane in place is the work.
+Install the Linux tools first, then install p4net in a Python virtual environment. The Python package does not include the P4 compiler or BMv2.
 
 ## System requirements
 
-- **Linux**, with kernel ≥ 5.4. Verified on Ubuntu 22.04 and 24.04;
-  other modern distributions should work.
-- **Python ≥ 3.10**. CI exercises 3.10–3.13.
-- **Root privileges** for the orchestrator. p4net needs `CAP_NET_ADMIN`
-  to create network namespaces and veth pairs and to run `tc qdisc`.
-  Running with `sudo` is the simplest path; `setcap cap_net_admin+ep`
-  on the Python interpreter works but has the usual caveats around
-  shebang lookup.
+- Linux with kernel 5.4 or newer. CI runs on Ubuntu 22.04 and 24.04.
+- Python 3.10 or newer. CI covers Python 3.10–3.13.
+- Root privileges to run a network, including creating network namespaces, configuring links and starting switches. Installing the package, defining a topology and compiling P4 programs do not require root.
 
-## Required external tools
+The commands below use `sudo` for network operations. Run the installation commands as your regular user.
 
-| Tool                    | Purpose                                                 | Install hint                           |
-| ----------------------- | ------------------------------------------------------- | -------------------------------------- |
-| `p4c`                   | P4_16 v1model compiler.                                 | `apt install p4lang-p4c` (p4lang OBS), or [build from source](https://github.com/p4lang/p4c). |
-| `simple_switch_grpc`    | BMv2 dataplane with the P4Runtime gRPC server.          | [Build from `behavioral-model`](https://github.com/p4lang/behavioral-model) with `--with-pi` and `--with-thrift`. |
-| `iproute2` (`ip`, `tc`) | Namespace, link, address, qdisc management.             | Pre-installed on every modern distro.  |
-| `graphviz` (`dot`)      | Optional. Required only for `topology graph` rendering. | `apt install graphviz`.                |
+## Install the external tools { #required-external-tools }
 
-Verify each is reachable on `PATH`:
+On Ubuntu, install the Python environment tools and Linux network utilities:
 
-```
-$ p4c --version
-$ simple_switch_grpc --version
-$ ip -V
-$ tc -V
-$ dot -V        # optional
+```bash
+sudo apt update
+sudo apt install python3-venv python3-pip iproute2 iputils-ping procps git
 ```
 
-If any of those fail with "command not found", fix the install before
-continuing. p4net will surface a clean error at startup if the
-binaries are missing, but knowing why ahead of time is faster.
+Install the P4 compiler and BMv2 using their upstream instructions:
 
-## Install p4net from PyPI
+- **p4c**: follow the [packaged installation instructions](https://github.com/p4lang/p4c#installing-packaged-versions-of-p4c), or build it from source. The installation must include the BMv2 backend and the `core.p4` and `v1model.p4` headers.
+- **BMv2**: follow the [`simple_switch_grpc` build instructions](https://github.com/p4lang/behavioral-model/tree/main/targets/simple_switch_grpc#dependencies-and-build-steps). This target requires PI with Protobuf/gRPC support and BMv2 configured with `--with-pi`.
 
-The recommended path is a virtualenv:
+p4net uses these commands:
 
+| Command | Purpose | Provided by |
+| --- | --- | --- |
+| `p4c` | Compile P4_16 v1model programs | p4c with the BMv2 backend |
+| `simple_switch_grpc` | Run switches and serve P4Runtime | BMv2 |
+| `ip`, `tc` | Manage namespaces, links, addresses and traffic control | `iproute2` |
+| `ping` | Check connectivity from hosts | `iputils-ping` |
+| `sysctl` | Configure network settings in namespaces | `procps` |
+
+Check that the commands are on `PATH`:
+
+```bash
+p4c --version
+simple_switch_grpc --version
+ip -V
+tc -V
+ping -V
+sysctl --version
 ```
+
+Two features need additional tools:
+
+- Rendering topology diagrams as SVG, PNG or PDF requires Graphviz (`sudo apt install graphviz`). Exporting DOT files does not require Graphviz.
+- Reading, writing or resetting registers requires `simple_switch_CLI` and BMv2's Thrift service. Keep Thrift support enabled when building BMv2 if you need these operations.
+
+## Install from PyPI
+
+Create and activate a virtual environment, then install p4net:
+
+```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install p4net
+python -m pip install p4net
 ```
 
-Optional extras:
+pip installs the Python dependencies automatically. Keep this environment active for the remaining commands.
 
-- `pip install 'p4net[dev]'` — testing, linting, type-checking tools
-  (`pytest`, `pytest-cov`, `pytest-mock`, `ruff`, `mypy`, `pre-commit`).
-- `pip install 'p4net[docs]'` — for building this documentation site
-  locally (`mkdocs`, `mkdocs-material`, `mkdocstrings`,
-  `mkdocs-static-i18n`).
+## Install from source
 
-## Install from source (development)
+For development, clone the repository and install it in editable mode with the test, lint and type-checking tools:
 
-```
-git clone https://github.com/zhh2001/p4net
+```bash
+git clone https://github.com/zhh2001/p4net.git
 cd p4net
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -e '.[dev]'
+python -m pip install -e '.[dev]'
 ```
 
-Run the unit tests:
+The documentation uses [CairoSVG](https://cairosvg.org/documentation/) to generate social cards. On Ubuntu, install the system Cairo library with `sudo apt install libcairo2`, then install the documentation tools from the repository root:
 
-```
-pytest -q
-```
-
-The integration tests need root and the external binaries; opt in
-explicitly:
-
-```
-sudo -E env "PATH=$PATH" pytest --run-integration --run-p4c --run-bmv2
+```bash
+python -m pip install -e '.[dev,docs]'
 ```
 
-## Verify
+## Verify the installation
 
-```
-$ python -c "import p4net; print(p4net.__version__)"
-0.2.0
+Check the installed version, CLI and Python dependencies:
 
-$ p4net --help
-usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR] ...
-```
-
-If `p4net --help` prints `command not found` under `sudo`, your
-sudoers `secure_path` strips the venv from `PATH`. Two workarounds:
-
-```
-sudo env "PATH=$PATH" p4net <topology.py>           # explicit env
-sudo "$(. .venv/bin/activate && which p4net)" ...   # absolute path
+```bash
+python -c "import p4net; print(p4net.__version__)"
+p4net --help
+python -m pip check
 ```
 
-## Common gotchas
+The first command prints the version you installed. Continue with [Quick Start](quickstart.md) to create `quickstart.py` and its P4 program, then start the network:
 
-The most common issues — missing namespace tools, sysctl permission
-errors, BMv2 startup hangs, gRPC version skew — have entries in the
-[Troubleshooting guide](../troubleshooting.md). If you hit something
-that's not documented there, please file an issue.
+```bash
+sudo "$(command -v p4net)" quickstart.py
+```
+
+`command -v p4net` selects the CLI from the active environment. If you installed the external tools in a custom directory, include that directory in `PATH` when running through `sudo`:
+
+```bash
+sudo env "PATH=$PATH" "$(command -v p4net)" quickstart.py
+```
+
+## Run tests and build the documentation
+
+With the source installation, run tests from the repository root:
+
+```bash
+python -m pytest
+```
+
+This selects the default tests. Tests marked as requiring root, p4c or BMv2 are excluded by default. To enable all three groups, install the external tools and run:
+
+```bash
+sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
+  --run-integration --run-p4c --run-bmv2
+```
+
+After installing the documentation tools, build the site with:
+
+```bash
+python -m mkdocs build --strict
+```
+
+For installation and startup errors, see [Troubleshooting](../troubleshooting.md).
