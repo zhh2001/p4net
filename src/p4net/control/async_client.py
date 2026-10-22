@@ -161,6 +161,7 @@ class AsyncP4RuntimeClient:
     # ----------------------------------------------------------------- lifecycle
 
     async def connect(self, *, timeout: float = 10.0) -> None:
+        """Connect and await arbitration, releasing resources if setup is cancelled."""
         if self._connected:
             return
         self._closed = False
@@ -189,6 +190,9 @@ class AsyncP4RuntimeClient:
 
         try:
             await asyncio.wait_for(self._arbitration_event.wait(), timeout=timeout)
+        except asyncio.CancelledError:
+            await self._teardown()
+            raise
         except asyncio.TimeoutError as exc:
             await self._teardown()
             raise ConnectionError(

@@ -60,6 +60,7 @@ class _FakeStream:
     def __init__(self) -> None:
         self._responses: asyncio.Queue[Any] = asyncio.Queue()
         self._cancelled = False
+        self.read_started = asyncio.Event()
 
     async def push_arbitration(self, code: int = 0) -> None:
         resp = p4runtime_pb2.StreamMessageResponse()
@@ -82,6 +83,7 @@ class _FakeStream:
         return self
 
     async def __anext__(self) -> Any:
+        self.read_started.set()
         item = await self._responses.get()
         if item is StopAsyncIteration or self._cancelled:
             raise StopAsyncIteration
@@ -149,12 +151,90 @@ async def test_connect_then_disconnect_clean(patched_aio: dict[str, Any]) -> Non
     assert not client.is_connected
 
 
+@pytest.mark.parametrize("cancel_mode", ["task", "wait-for", "context-manager"])
+async def test_cancelled_connect_releases_resources_and_can_retry(
+    patched_aio: dict[str, Any], mocker: MockerFixture, cancel_mode: str
+) -> None:
+    client = AsyncP4RuntimeClient(
+        grpc_address=("127.0.0.1", 50051),
+        device_id=0,
+        info_index=_make_p4info_index(),
+    )
+
+    async def enter_context() -> None:
+        async with client:
+            pytest.fail("context entered before arbitration completed")
+
+    attempt = asyncio.create_task(
+        enter_context() if cancel_mode == "context-manager" else client.connect()
+    )
+    try:
+        await asyncio.wait_for(patched_aio["stream"].read_started.wait(), timeout=5.0)
+        stream_task = client._stream_task
+        assert stream_task is not None
+        if cancel_mode == "wait-for":
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(attempt, timeout=0)
+        else:
+            attempt.cancel("connection cancelled")
+            with pytest.raises(asyncio.CancelledError, match="connection cancelled"):
+                await attempt
+
+        assert attempt.cancelled()
+        patched_aio["channel"].close.assert_awaited_once()
+        assert patched_aio["stream"]._cancelled
+        assert stream_task.done()
+        assert not client.is_connected
+        assert not client.is_primary
+        assert client._channel is None
+        assert client._stub is None
+        assert client._stream_call is None
+        assert client._stream_task is None
+        assert client._outgoing is None
+        assert client._packet_in_queue is None
+
+        retry_channel = MagicMock(name="retry-channel")
+        retry_channel.close = AsyncMock(return_value=None)
+        retry_stream = _FakeStream()
+        mocker.patch(
+            "p4net.control.async_client.grpc.aio.insecure_channel", return_value=retry_channel
+        )
+        patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+        await retry_stream.push_arbitration()
+        await client.connect(timeout=2.0)
+        assert client.is_connected
+        assert client.is_primary
+        assert client._channel is retry_channel
+        assert client._stream_task is not stream_task
+        await client.disconnect()
+        retry_channel.close.assert_awaited_once()
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        attempt.cancel()
+        await asyncio.gather(attempt, return_exceptions=True)
+        await client.disconnect()
+
+
 async def test_connect_election_id_auto(patched_aio: dict[str, Any]) -> None:
     client = await _connect(patched_aio)
     high, low = client.election_id
     assert high > 0  # ms since epoch is well above zero
     assert low == 0
     await client.disconnect()
+
+
+async def test_connect_arbitration_timeout_releases_resources(patched_aio: dict[str, Any]) -> None:
+    client = AsyncP4RuntimeClient(grpc_address=("127.0.0.1", 50051), device_id=0)
+    try:
+        with pytest.raises(ConnectionError, match="arbitration timed out"):
+            await client.connect(timeout=0)
+        patched_aio["channel"].close.assert_awaited_once()
+        assert patched_aio["stream"]._cancelled
+        assert not client.is_connected
+        assert client._channel is None
+        assert client._stream_task is None
+    finally:
+        await client.disconnect()
 
 
 async def test_explicit_secondary_stays_connected(patched_aio: dict[str, Any]) -> None:

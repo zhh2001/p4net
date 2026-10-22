@@ -104,6 +104,10 @@ with Network(topology) as net:
 `EntryNotFoundError`、`NotPrimaryError`、`PipelineError`、
 `P4RuntimeError`）。
 
+等待仲裁响应时取消 `connect()`，客户端会先关闭 gRPC 连接并停止后台消息
+接收任务，再传播 `asyncio.CancelledError`。外层 `asyncio.wait_for()` 超时
+导致的取消也会执行同样的清理。
+
 当一个正在飞的操作被取消时——通常是它的 owning task 被取消，或
 `disconnect()` 与之并行执行——异步客户端抛
 [`AsyncOperationCancelledError`](api-stability.md#p4netcontrol)，

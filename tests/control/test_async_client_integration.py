@@ -19,7 +19,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import grpc
 import pytest
+from pytest_mock import MockerFixture
 
 from p4net import Network
 from p4net.control import (
@@ -85,6 +87,69 @@ async def test_basic_lifecycle(tmp_path: Path) -> None:
         assert not client.is_connected
     finally:
         await asyncio.to_thread(net.stop)
+
+
+@pytest.mark.parametrize("cancel_mode", ["task", "wait-for"])
+async def test_cancelled_connect_releases_resources_and_can_retry(
+    tmp_path: Path, mocker: MockerFixture, cancel_mode: str
+) -> None:
+    suffix = _suffix()
+    switch = f"s{suffix}"
+    host = f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await asyncio.to_thread(net.start)
+    client = net.switch(switch).async_client
+    client._election_id = (0, 0)
+    consumer_started = asyncio.Event()
+    allow_arbitration = asyncio.Event()
+    real_consumer = client._stream_consumer
+
+    async def hold_arbitration() -> None:
+        consumer_started.set()
+        await allow_arbitration.wait()
+        await real_consumer()
+
+    mocker.patch.object(client, "_stream_consumer", new=hold_arbitration)
+    attempt = asyncio.create_task(client.connect())
+    try:
+        await asyncio.wait_for(consumer_started.wait(), timeout=5.0)
+        channel = client._channel
+        stream = client._stream_call
+        stream_task = client._stream_task
+        assert stream_task is not None
+        if cancel_mode == "wait-for":
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(attempt, timeout=0)
+        else:
+            attempt.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await attempt
+        assert not client.is_connected
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert stream.cancelled()
+        assert stream_task.done()
+        assert client._channel is None
+        assert client._stream_task is None
+
+        allow_arbitration.set()
+        await client.connect()
+        assert client.is_connected
+        assert not client.is_primary
+        assert client._channel is not channel
+        assert [entry async for entry in client.list_table_entries("MyIngress.ipv4_lpm")] == []
+    finally:
+        attempt.cancel()
+        await asyncio.gather(attempt, return_exceptions=True)
+        try:
+            await client.disconnect()
+        finally:
+            await asyncio.to_thread(net.stop)
 
 
 # ---------------------------------------------------------------------------

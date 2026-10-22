@@ -120,6 +120,11 @@ async client translates these into the same exception hierarchy as
 the sync client (`DuplicateEntryError`, `EntryNotFoundError`,
 `NotPrimaryError`, `PipelineError`, `P4RuntimeError`).
 
+If `connect()` is cancelled while waiting for arbitration, it closes its
+gRPC channel and stops its stream task before propagating
+`asyncio.CancelledError`. Cancellation by an outer `asyncio.wait_for()`
+follows the same cleanup path.
+
 When an in-flight operation is cancelled — typically because the
 owning task was cancelled, or `disconnect()` was called concurrently
 — the async client raises
