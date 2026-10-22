@@ -1,145 +1,115 @@
 ---
-description: API stability classification per public symbol — what 1.0 means, deprecation policy, and per-package tier tables.
+description: Public API stability tiers, deprecation rules, and classifications for each p4net package.
 ---
 
 # API stability
 
-p4net's 1.x line commits to a stable public API. This page defines what "stable" means in practice, classifies every public symbol by stability tier, and documents the deprecation cycle.
-
-## What "1.0" means for p4net
-
-The 1.x line will not introduce breaking changes to **stable** APIs without a deprecation cycle. Some APIs are explicitly marked **provisional** — they may evolve through a deprecation cycle within 1.x. Some APIs are explicitly marked **experimental** — they may change without warning within 1.x and should not be relied on for anything you can't easily refactor. Anything not exported in `__all__` is **internal** regardless of name; do not import it.
+Stable APIs remain compatible throughout p4net 1.x. The tables below classify the exports in each package's `__all__`. A class's tier also applies to its documented constructor, methods, and properties unless a member has a separate entry. The top-level `p4net.Network` export is the same class as `p4net.network.Network`.
 
 ## Stability tiers
 
-**Stable.** Backwards-compatible across the entire 1.x line. Behavior changes only in 2.0+. Bug-fix changes that preserve the documented contract are always permitted.
+| Tier | Compatibility rule |
+| --- | --- |
+| Stable | Names, signatures, and documented behavior remain compatible in 1.x. Incompatible changes require the deprecation cycle and a new major version. |
+| Provisional | Incompatible changes may appear in a minor release after the deprecation cycle. |
+| Experimental | Interfaces may change without advance notice, including within 1.x. |
+| Internal | No public compatibility commitment. This includes private members and implementation details not exported by a package. |
 
-**Provisional.** May change in a 1.x minor release, but only after a deprecation warning has been visible for at least two consecutive minor versions. New keyword-only arguments may be added without a deprecation cycle (default-valued additions are not breaking).
-
-**Experimental.** May change without notice within 1.x. Do not rely on the precise interface; pin to a specific version if you need reproducibility.
-
-**Internal.** Not part of the public API regardless of language semantics. Do not import directly. Anything not exported in a package's `__all__` is internal even when nominally accessible.
+Bug fixes that restore documented behavior and compatible additions, such as keyword-only parameters with defaults, do not require a deprecation cycle.
 
 ## Deprecation policy
 
-- Deprecated APIs emit a `DeprecationWarning` from the call site.
-- Deprecated APIs survive at least two consecutive minor releases (e.g. deprecated in 1.2 → still works in 1.3 → removed earliest in 2.0; or earlier than 2.0 only for **provisional** / **experimental** APIs after the deprecation cycle has elapsed).
-- Removal in a minor release is permitted ONLY for provisional and experimental APIs after the cycle.
-- Stable APIs can only be removed in a major release (2.0+), and only after one full minor cycle of deprecation in the prior major.
+Deprecated stable and provisional APIs emit `DeprecationWarning` when called. They remain usable in at least two consecutive minor versions: the version that introduces the warning and the next minor version.
+
+For example, an API deprecated in 1.2 remains available in 1.3. A provisional API may change incompatibly or be removed in 1.4 at the earliest. A stable API must also complete this cycle, but may only change incompatibly or be removed in the next major version. Experimental APIs do not require this cycle.
+
+## Provisional tier and async client
+
+`AsyncP4RuntimeClient`, `AsyncOperationCancelledError`, and `RunningSwitch.async_client` were introduced as provisional APIs in 1.6.0 and became stable in 1.7.0. They follow the same compatibility rules as other stable APIs.
+
+The sync and async clients have different call patterns and some different methods and return types. For example, the sync client installs a pipeline with `set_pipeline_config()`, while the async client uses `await push_pipeline()`. See the [async client guide](async-client.md) for the complete comparison and event-loop requirements.
 
 ## Per-package classification
 
 ### `p4net.topo`
 
-The user-facing topology DSL. Mostly stable.
-
-| Symbol | Tier | Note |
+| Symbol | Tier | Scope |
 | --- | --- | --- |
-| `Host` | Stable | Field names and types are stable. New fields may be added with safe defaults. |
-| `P4Switch` | Stable | Same as `Host`. |
-| `Link` | Stable | Symmetric and asymmetric impairment fields (`bandwidth`, `delay`, `jitter`, `loss_pct` and their `*_a_to_b` / `*_b_to_a` variants) are stable. Per-direction additive fields (`delay_a_to_b_extra`, `delay_b_to_a_extra`, `jitter_a_to_b_extra`, `jitter_b_to_a_extra`, `loss_pct_a_to_b_extra`, `loss_pct_b_to_a_extra`) added in 1.1 are also stable. |
-| `LinkEndpoint` | Stable | |
-| `Topology` | Stable | `add_host`, `add_switch`, `add_link`, `validate`, `to_graphviz`, `render_graphviz`, `to_dict`, `from_dict` are stable. The `to_dict` / `from_dict` round-trip format is part of the public contract. |
-| `TopologyError` | Stable | |
+| `Host`, `P4Switch` | Stable | Documented data fields and their types. New fields may be added with compatible defaults. |
+| `Link`, `LinkEndpoint` | Stable | Endpoint fields, MTU, symmetric impairments, per-direction overrides, and additive delay, jitter, and loss fields. |
+| `Topology` | Stable | Node and link construction, lookups, validation, Graphviz export, and serialization. The `to_dict()` / `from_dict()` round-trip format is part of the contract. |
+| `TopologyError` | Stable | Topology validation errors. |
 
 ### `p4net.network`
 
-Stable user-facing surface; some lower-level details provisional.
-
-| Symbol | Tier | Note |
+| Symbol | Tier | Scope |
 | --- | --- | --- |
-| `Network` | Stable | `start`, `stop`, `astop`, `host`, `switch`, `pingall`, `pingall6`, `boot_timestamps`, `__enter__`, `__exit__` are stable. `await astop()` waits for async client and network cleanup. |
-| `Network.boot_timestamps` | Stable | Read-only dict mapping switch name to wall-clock μs since Unix epoch when that switch's BMv2 process started. Convenience helper over per-switch `RunningSwitch.boot_timestamp_us`. Returns a fresh dict on each call. Raises `NetworkNotRunningError` if accessed before `start` or after `stop`. |
-| `Network.xterm` | Experimental | Depends on `$DISPLAY`; behavior may evolve as we refine the spawned-process tracking. |
-| `RunningHost` | Stable | `name`, `primary_ip`, `primary_ip6`, `interfaces`, `interfaces6`, `ping`, `exec`, `popen` are stable. |
-| `RunningSwitch` | Stable | `name`, `client`, `bmv2`, `compile_result`, `log_file`, `descriptor`, `boot_timestamp_us` are stable. |
-| `RunningSwitch.async_client` | Stable (since 1.7) | Lazy property returning an unconnected `AsyncP4RuntimeClient` for this switch. Pre-seeded with the sync client's P4Info index. Cached per `RunningSwitch`; reset on `Network.stop()`. Promoted from Provisional in 1.7.0 — see "Provisional tier and async client". |
-| `RunningSwitch.boot_timestamp_us` | Stable | Wall-clock microseconds since Unix epoch when this switch's BMv2 process started. Combine with INT shim `ingress_timestamp_us` to compute wall-clock arrival time and align timestamps across multiple switches. Raises `NetworkNotRunningError` if accessed before `start` or after `stop`. |
-| `NetworkError` and subclasses | Stable | `NetworkAlreadyRunningError`, `NetworkNotRunningError`, `NodeNotFoundError`. |
-
-## Provisional tier and async client
-
-`AsyncP4RuntimeClient` and its companion exports (`AsyncOperationCancelledError`, `RunningSwitch.async_client`) were introduced as **Provisional** in p4net 1.6.0 to allow real-world soak before locking the API surface. The motivation was that async APIs in Python have a richer surface than sync (cancellation semantics, context manager behavior, async iteration ergonomics, exception propagation through `gather` / `wait_for`) that benefits from empirical validation before being locked in for the rest of 1.x.
-
-In p4net 1.7.0 all three symbols were **promoted to Stable** following real-world user soak in which no backwards-incompatible adjustments surfaced. This honors the two-minor-release upper bound on Provisional status that 1.6.0 committed to (promotion occurred at one minor release in, within the commitment window).
-
-Stable means the same contract as every other Stable symbol in p4net 1.x:
-
-- The class will not be removed within 1.x.
-- Method names, signatures, and documented behavior will not change incompatibly within 1.x.
-- Bug fixes that align behavior with documentation are allowed and expected.
-
-The Provisional tier remains available in this document and may be used for future additions that need empirical soak before lock-in. The async-client experience validates the tier's utility as a real engineering mechanism, not decoration.
+| `Network` | Stable | Lifecycle, host and switch access, `ping()`, `pingall()`, and `pingall6()`. In an event loop, `await net.astop()` waits for async clients and network resources to close. |
+| `Network.xterm` | Experimental | Opens a host terminal through the available X display. |
+| `Network.boot_timestamps` | Stable | Returns a new dictionary mapping switch names to BMv2 start times in Unix microseconds. Editing the dictionary does not change the network. Raises `NetworkNotRunningError` when the network is not running. |
+| `RunningHost` | Stable | Host descriptor, namespace and interface access, addresses, command execution, and ping. |
+| `RunningSwitch` | Stable | Switch descriptor, BMv2 process, sync client, compiler outputs, and log path. |
+| `RunningSwitch.async_client` | Stable since 1.7 | Lazily creates an unconnected client with the sync client's current P4Info index. The instance is cached until `stop()` or `astop()` closes and clears it. |
+| `RunningSwitch.boot_timestamp_us` | Stable | BMv2 start time in Unix microseconds. Raises `NetworkNotRunningError` if the underlying process has no boot timestamp. |
+| `NetworkError`, `NetworkAlreadyRunningError`, `NetworkNotRunningError`, `NodeNotFoundError` | Stable | Network lifecycle and node lookup errors. |
 
 ### `p4net.control`
 
-Stable client API; provisional codec edge cases; async client now Stable.
-
-| Symbol | Tier | Note |
+| Symbol | Tier | Scope |
 | --- | --- | --- |
-| `P4RuntimeClient` | Stable | `connect`, `disconnect`, `set_pipeline_config`, `get_pipeline_config`, `insert_table_entry`, `modify_table_entry`, `delete_table_entry`, `list_table_entries`, `clear_table`, `read_counter`, `write_counter`, `add_multicast_group`, `modify_multicast_group`, `delete_multicast_group`, `list_multicast_groups`, `send_packet_out`, `on_packet_in`, `expect_packet_in`, `read_register`, `write_register`. |
-| `AsyncP4RuntimeClient` | Stable (since 1.7) | Async parallel to `P4RuntimeClient`; mirrors the same public method names via `grpc.aio`. Promoted from Provisional in 1.7.0 — see "Provisional tier and async client" above. |
-| `AsyncOperationCancelledError` | Stable (since 1.7) | Raised when an async client operation is cancelled mid-flight; subclasses `P4RuntimeError`. Pairs with `AsyncP4RuntimeClient`. |
-| `P4RuntimeClient.read_register` / `write_register` | Stable | Read a single cell or the full array; write a single cell. BMv2's PI does not implement P4Runtime RegisterEntry, so the implementation uses BMv2's Thrift control channel via `simple_switch_CLI`; the Python API contract matches what a P4Runtime-compliant target would expose. |
-| `P4InfoIndex.register_by_name` | Stable | Returns a `RegisterSpec` for the named register; raises `NoSuchRegisterError`. |
-| `RegisterSpec` | Stable | Frozen dataclass with `id`, `name`, `bitwidth`, `size`. |
-| `NoSuchRegisterError` | Stable | Raised by register lookups when the name doesn't exist. |
-| `P4RuntimeClient` election ID | Provisional | The millisecond-time-since-epoch generator is stable behavior; the underlying type (`tuple[int, int]`) is stable; the strategy may change if it ever causes operational pain. |
-| `P4InfoIndex` | Stable | Top-level lookups (`tables`, `actions`, `counters`, controller-packet metadata) are stable. |
-| `P4InfoIndex.decode_match` | Provisional | Width-aware formatting rules (32-bit → IPv4, 48-bit → MAC, 128-bit → IPv6, else decimal) are stable in 1.x; we may add new field-type rules with deprecation notice. |
-| `CounterData` | Stable | |
-| Codec helpers (`encode_value`, `encode_int`, `encode_ipv4`, `encode_mac`, `decode_int`, `decode_ipv4`, `decode_ipv6`, `decode_mac`, `parse_lpm`, `parse_ternary`, `parse_range`, `format_exact`, `format_lpm`, `format_ternary`, `format_range`, `canonicalize`) | Stable | The string formats they emit and consume are part of the public contract. |
-| Exception types (`P4RuntimeError`, `ConnectionError`, `EncodingError`, `DuplicateEntryError`, `EntryNotFoundError`, `NoSuchTableError`, `NoSuchActionError`, `NoSuchFieldError`, `NotPrimaryError`, `PipelineError`) | Stable | |
+| `P4RuntimeClient` | Stable | Sync connection lifecycle, pipeline configuration, tables, counters, registers, multicast groups, and packet I/O. |
+| `AsyncP4RuntimeClient` | Stable since 1.7 | Async connection lifecycle, pipeline installation, tables, counters, registers, and packet I/O. See the [async guide](async-client.md#differences-from-the-sync-api) for differences from the sync API. |
+| `AsyncOperationCancelledError` | Stable since 1.7 | Async client cancellation error, subclassing `P4RuntimeError`. See the [async guide](async-client.md#errors-timeouts-and-cancellation) for the conditions that raise it. |
+| `P4RuntimeClient.read_counter`, `P4RuntimeClient.reset_counter` | Stable | Read counter cells or reset their packet and byte counts to zero. |
+| `P4RuntimeClient.read_register`, `P4RuntimeClient.write_register`, `AsyncP4RuntimeClient.read_register`, `AsyncP4RuntimeClient.write_register` | Stable | Read a register cell or array and write a cell through BMv2's Thrift service using `simple_switch_CLI`. |
+| Automatic election ID generation | Provisional | `Network` and async clients without an explicit ID use millisecond timestamps. A directly constructed sync client defaults to `(1, 0)`. The explicit `(high, low)` parameter format is stable. |
+| `P4InfoIndex` | Stable | P4Info loading, table/action/counter/register lookup, match and action encoding, and controller metadata helpers. The formatting method below has its own tier. |
+| `P4InfoIndex.decode_match` | Provisional | Formats matches using P4Info field widths: IPv4 at 32 bits, MAC at 48 bits, IPv6 at 128 bits, and decimal values at other widths. |
+| `CounterData` | Stable | `packet_count` and `byte_count`. |
+| `RegisterSpec` | Stable | Immutable register metadata: `id`, `name`, `bitwidth`, and `size`. |
+| `encode_value`, `encode_int`, `encode_ipv4`, `encode_mac`, `decode_int`, `decode_ipv4`, `decode_ipv6`, `decode_mac` | Stable | Value encodings and decodings. |
+| `parse_lpm`, `parse_ternary`, `parse_range`, `format_exact`, `format_lpm`, `format_ternary`, `format_range`, `canonicalize` | Stable | Match parsing, formatting, and canonical byte representation. |
+| `P4RuntimeError`, `ConnectionError`, `EncodingError`, `DuplicateEntryError`, `EntryNotFoundError`, `NoSuchTableError`, `NoSuchActionError`, `NoSuchFieldError`, `NoSuchRegisterError`, `NotPrimaryError`, `PipelineError` | Stable | Control-plane errors. |
 
 ### `p4net.runtime`
 
-Provisional. These are intentionally low-level escape hatches; the higher-level `Network` orchestrator covers most use cases.
+These primitives support direct management of Linux resources and BMv2 processes. `Network` combines them into a network lifecycle.
 
-| Symbol | Tier | Note |
+| Symbol | Tier | Scope |
 | --- | --- | --- |
-| `NetworkNamespace` | Provisional | |
-| `VethPair` | Provisional | |
-| `BMv2Switch` | Provisional | |
-| `NSProcess` | Provisional | |
-| `apply_netem`, `clear_qdisc` | Provisional | |
-| `disable_ipv6`, `enable_ipv6` | Provisional | |
-| Exception types (`LinkError`, `NamespaceError`, `BMv2NotFoundError`, `BMv2StartupError`, `TcError`, `PrivilegeError`, `P4NetError`) | Stable | |
+| `NetworkNamespace`, `VethPair`, `NSProcess` | Provisional | Namespace, interface, and process management. |
+| `BMv2Switch` | Provisional | BMv2 startup, listener ownership checks, process status, and shutdown. |
+| `apply_netem`, `clear_qdisc`, `disable_ipv6`, `enable_ipv6` | Provisional | Traffic shaping and interface IPv6 configuration. |
+| `P4NetError`, `PrivilegeError`, `NamespaceError`, `LinkError`, `TcError`, `BMv2NotFoundError`, `BMv2StartupError` | Stable | Runtime errors and the common `P4NetError` base class. |
 
 ### `p4net.compiler`
 
-Provisional internals; stable compiler interface.
-
-| Symbol | Tier | Note |
+| Symbol | Tier | Scope |
 | --- | --- | --- |
-| `P4Compiler` | Provisional | The `compile()` method's behavior is stable; the cache directory layout under `~/.cache/p4net/compiler/` is provisional. Users should never reach into the cache directly. |
-| `CompileResult` | Stable | `bmv2_json` and `p4info` Path attributes are part of the public contract. |
-| `CompilerError` | Stable | |
+| `P4Compiler` | Provisional | Compiler configuration and cache management. The compilation method has the stable contract below. |
+| `P4Compiler.compile` | Stable | Compiles a P4 source with architecture, force-rebuild, and extra-argument options and returns a `CompileResult`. Cache layout is an implementation detail. |
+| `CompileResult` | Stable | Compiler output metadata, including the `bmv2_json` and `p4info` paths. |
+| `CompileError`, `CompilerNotFoundError` | Stable | Compiler rejection, missing compiler, and compiler version-check errors. Both inherit from `P4NetError`. |
 
 ### `p4net.cli`
 
-The CLI command grammar (what users type at the prompt) is **stable** as a user-facing contract — every command in the [CLI Reference](cli.md) will work the same way across 1.x. The Python class structure used to implement it is **experimental**; external code should not subclass `CommandDispatcher` or `P4NetShell`.
-
-| Symbol | Tier | Note |
+| Interface | Tier | Scope |
 | --- | --- | --- |
-| The CLI command grammar | Stable | Documented in [CLI Reference](cli.md). |
-| `CommandDispatcher` (Python class) | Experimental | Implementation detail; subclassing not supported. |
-| `P4NetShell` (Python class) | Experimental | Implementation detail; subclassing not supported. |
-| `CLIError`, `CLIExit`, `CLIUsageError` | Stable | |
-| `p4net` console script (argv contract) | Stable | `--no-shell`, `--unsafe`, `--log-dir`, `--pcap-dir`, `--extra-compile-arg`. |
+| Interactive commands | Stable | Command syntax and documented behavior in the [CLI reference](cli.md). |
+| `p4net` console script | Stable | Topology file argument, `--no-shell`, `--unsafe`, `--log-dir`, `--pcap-dir`, `--extra-compile-arg`, and verbosity options. |
+| `CommandDispatcher`, `P4NetShell` | Experimental | Python classes that implement command dispatch and the interactive shell. |
+| `CLIError`, `CLIExit`, `CLIUsageError` | Stable | CLI errors and shell exit signaling. |
 
-## What's explicitly NOT supported in 1.x
+## Supported scope
 
-- **PSA architecture.** Only v1model is supported. PSA support is planned for 2.0; track in [Roadmap](roadmap.md).
-- **Live topology mutation.** Build a `Topology`, hand it to `Network`, do work, then `stop`. Adding or removing hosts, switches, or links at runtime is not supported in 1.x; planned for 2.0.
-- **Async P4Runtime client.** The client is synchronous (blocking gRPC). An asyncio + `grpc.aio` variant is post-1.x.
-- **Distributed simulation across multiple machines.** Single-host only.
+p4net runs v1model programs on BMv2 on a single Linux machine. It supports both sync and async P4Runtime clients. PSA targets, changes to a running topology, and distributed multi-machine orchestration are outside the current scope. See [known limitations](known-limitations.md) and the [roadmap](roadmap.md).
 
 ## Logger namespace
 
-The `p4net.*` logger namespace structure is **Stable** in 1.x. Code that reaches into the namespace via `logging.getLogger("p4net")` or any documented subpackage logger (`p4net.network`, `p4net.runtime`, `p4net.control`, `p4net.compiler`, `p4net.topo`, `p4net.cli`) will continue to work. New submodule loggers may be added; existing ones won't be renamed.
+The `p4net` logger and its `topo`, `network`, `control`, `runtime`, `compiler`, and `cli` subtrees are stable. Configure them with standard Python logging, for example `logging.getLogger("p4net.runtime")`.
 
-Log **message text** and the **level chosen for any specific event** are **not** part of the stable contract — see [Logging](logging.md) for the level taxonomy and rationale.
+Individual message text and the level of a specific event may change. See [Logging](logging.md) for configuration.
 
 ## Reporting incompatibilities
 
-We treat compatibility regressions in stable APIs as bugs to fix in a patch release. If a 1.x version breaks code that worked on a prior 1.x version using only stable APIs, please file an issue at <https://github.com/zhh2001/p4net/issues> with a minimal reproducer.
+Compatibility regressions in stable APIs are bugs. Report them in the [issue tracker](https://github.com/zhh2001/p4net/issues) with the affected versions and a minimal reproducer.
