@@ -184,3 +184,116 @@ async def test_delete_missing_priority_keeps_entries_and_forwarding(
     finally:
         if client_kind == "async":
             await client.disconnect()
+
+
+@pytest.mark.parametrize("client_kind", ["sync", "async"])
+async def test_priority_bounds_and_types_before_rpc(network: Network, client_kind: str) -> None:
+    switch = next(iter(network.switches.values()))
+    first, second = network.hosts
+    sync = switch.client
+    client = (
+        AsyncP4RuntimeClient(
+            grpc_address=("127.0.0.1", switch.descriptor.grpc_port),
+            device_id=switch.descriptor.device_id,
+            info_index=sync.index,
+            election_id=(sync.election_id[0] + 1, 0),
+        )
+        if client_kind == "async"
+        else sync
+    )
+    if client_kind == "async":
+        await client.connect()
+
+    async def write(operation: str, match: dict[str, object], priority: Any, *args: Any) -> None:
+        result = getattr(client, f"{operation}_table_entry")(
+            _TABLE, match, *args, priority=priority
+        )
+        if client_kind == "async":
+            await result
+
+    async def read() -> list[dict[str, Any]]:
+        entries = (
+            [entry async for entry in client.list_table_entries(_TABLE)]
+            if client_kind == "async"
+            else client.list_table_entries(_TABLE)
+        )
+        return sorted(entries, key=lambda entry: entry["priority"])
+
+    def connected() -> bool:
+        outcomes = network.pingall()
+        return len(outcomes) == 2 and all(outcomes.values())
+
+    maximum = (1 << 31) - 1
+    specific = {"hdr.ethernet.etherType": 0x0800}
+    try:
+        await write("insert", {}, 1, "MyIngress.forward")
+        await write("insert", specific, maximum, "MyIngress.drop")
+        assert [entry["priority"] for entry in await read()] == [1, maximum]
+        assert not network.ping(first, second, count=1, timeout=0.1)
+        await write("modify", specific, maximum, "MyIngress.forward")
+        await write("modify", {}, 1, "MyIngress.forward")
+        assert connected()
+        before = await read()
+        for priority in (
+            0,
+            -1,
+            -(1 << 31),
+            1 << 31,
+            -(1 << 31) - 1,
+            True,
+            False,
+            1.0,
+            1.9,
+            "10",
+            b"10",
+            float("nan"),
+            float("inf"),
+            -float("inf"),
+        ):
+            for match in (specific, {}):
+                for operation in ("insert", "modify", "delete"):
+                    args = () if operation == "delete" else ("MyIngress.forward",)
+                    with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+                        with pytest.raises(EncodingError, match="priority"):
+                            await write(operation, match, priority, *args)
+                        rpc.assert_not_called()
+        if client_kind == "sync":
+            cli = CommandDispatcher(network)
+            for priority in (0, -1, 1 << 31, -(1 << 31) - 1):
+                for verb in ("add", "del"):
+                    command = (
+                        f"{switch.name} table {verb} {_TABLE} "
+                        f"match: hdr.ethernet.etherType=0x0800 priority: {priority}"
+                    )
+                    if verb == "add":
+                        command += " action: MyIngress.forward"
+                    with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+                        output = cli.dispatch(command)
+                        assert output.startswith("error: EncodingError:") and "priority" in output
+                        rpc.assert_not_called()
+            for priority in (1, maximum):
+                for verb in ("add", "del"):
+                    command = (
+                        f"{switch.name} table {verb} {_TABLE} "
+                        f"match: hdr.ethernet.etherType=0x86dd priority: {priority}"
+                    )
+                    if verb == "add":
+                        command += " action: MyIngress.forward"
+                    with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+                        assert cli.dispatch(command) == "ok"
+                        rpc.assert_called_once()
+                        assert (
+                            rpc.call_args.args[0].updates[0].entity.table_entry.priority == priority
+                        )
+                assert await read() == before
+        assert await read() == before
+        assert connected()
+        await write("delete", specific, maximum)
+        (remaining,) = await read()
+        assert remaining["match"] == {} and remaining["priority"] == 1
+        assert connected()
+        await write("delete", {}, 1)
+        assert await read() == []
+    finally:
+        if client_kind == "async":
+            await client.disconnect()

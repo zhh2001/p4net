@@ -397,6 +397,11 @@ class AsyncP4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
+        """Insert an entry with an int priority in [1, 2147483647], excluding bool.
+
+        Optional, ternary and range tables require ``priority``, including
+        wildcard entries. Omit it for exact/LPM-only tables.
+        """
         await self._write_entry(table, match, action, params, priority, "INSERT", timeout)
 
     async def modify_table_entry(
@@ -409,6 +414,7 @@ class AsyncP4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
+        """Modify an entry using the priority rules of :meth:`insert_table_entry`."""
         await self._write_entry(table, match, action, params, priority, "MODIFY", timeout)
 
     async def delete_table_entry(
@@ -422,7 +428,8 @@ class AsyncP4RuntimeClient:
         """Delete by match key and original priority.
 
         Optional, ternary and range tables require ``priority``, including
-        wildcard entries. Omit it for exact/LPM-only tables.
+        wildcard entries. Use an int in [1, 2147483647], excluding bool.
+        Omit it for exact/LPM-only tables.
         """
         await self._write_entry(table, match, None, None, priority, "DELETE", timeout)
 
@@ -446,6 +453,12 @@ class AsyncP4RuntimeClient:
             )
         if not requires_priority and priority is not None:
             raise EncodingError(f"table {table!r} is exact/lpm-only; priority must be None")
+        if priority is not None and (
+            isinstance(priority, bool)
+            or not isinstance(priority, int)
+            or not 1 <= priority <= 0x7FFFFFFF
+        ):
+            raise EncodingError("priority must be an int in [1, 2147483647] (bool is not accepted)")
         fms = idx.encode_match(table, match)
         entry = p4runtime_pb2.TableEntry()
         entry.table_id = table_id
@@ -454,7 +467,7 @@ class AsyncP4RuntimeClient:
         if action is not None:
             entry.action.action.CopyFrom(idx.encode_action(action, params))
         if priority is not None:
-            entry.priority = int(priority)
+            entry.priority = priority
         upd = p4runtime_pb2.Update()
         upd.type = p4runtime_pb2.Update.Type.Value(update_type)
         upd.entity.table_entry.CopyFrom(entry)

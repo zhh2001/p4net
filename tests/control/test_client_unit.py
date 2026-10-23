@@ -816,10 +816,12 @@ def test_priority_forbidden_for_lpm_table(
 
 @pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
 @pytest.mark.parametrize("wildcard", [False, True])
+@pytest.mark.parametrize("priority", [1, 17, (1 << 31) - 1])
 def test_optional_table_write_preserves_priority(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
     operation: str,
     wildcard: bool,
+    priority: int,
 ) -> None:
     client = _push_pipeline(connected_client)
     stub: MagicMock = connected_client[1]["stub"]
@@ -827,16 +829,16 @@ def test_optional_table_write_preserves_priority(
     method = getattr(client, f"{operation}_table_entry")
     try:
         if operation == "delete":
-            method("MyIngress.optional_acl", match, priority=17)
+            method("MyIngress.optional_acl", match, priority=priority)
         else:
-            method("MyIngress.optional_acl", match, "NoAction", priority=17)
+            method("MyIngress.optional_acl", match, "NoAction", priority=priority)
         stub.Write.assert_called_once()
         request = stub.Write.call_args.args[0]
         update = request.updates[0]
         assert update.type == p4runtime_pb2.Update.Type.Value(operation.upper())
         entry = update.entity.table_entry
         assert entry.table_id == 2003
-        assert entry.priority == 17
+        assert entry.priority == priority
         assert entry.HasField("action") == (operation != "delete")
         if wildcard:
             assert len(entry.match) == 0
@@ -1170,5 +1172,70 @@ def test_delete_exact_table_does_not_require_priority(
         entry = connected_client[1]["stub"].Write.call_args.args[0].updates[0].entity.table_entry
         assert entry.priority == 0
         assert entry.match[0].HasField("exact")
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
+@pytest.mark.parametrize(
+    "priority",
+    [
+        0,
+        -1,
+        -(1 << 31),
+        1 << 31,
+        -(1 << 31) - 1,
+        True,
+        False,
+        1.0,
+        1.9,
+        "10",
+        b"10",
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+    ],
+)
+def test_invalid_priority_does_not_write(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    operation: str,
+    priority: Any,
+) -> None:
+    client = _push_pipeline(connected_client)
+    method = getattr(client, f"{operation}_table_entry")
+    match = {"hdr.ethernet.etherType": 0x0800}
+    try:
+        with pytest.raises(EncodingError, match="priority"):
+            if operation == "delete":
+                method("MyIngress.optional_acl", match, priority=priority)
+            else:
+                method("MyIngress.optional_acl", match, "NoAction", priority=priority)
+        connected_client[1]["stub"].Write.assert_not_called()
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
+@pytest.mark.parametrize("match_type", [p4info_pb2.MatchField.EXACT, p4info_pb2.MatchField.LPM])
+@pytest.mark.parametrize("priority", [0, False])
+def test_exact_lpm_priority_must_be_none(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    operation: str,
+    match_type: int,
+    priority: int,
+) -> None:
+    client = _push_pipeline(connected_client)
+    table = next(t for t in client.index.raw.tables if t.preamble.name == "MyIngress.ipv4_lpm")
+    table.match_fields[0].match_type = match_type
+    value = "10.0.0.1" if match_type == p4info_pb2.MatchField.EXACT else "10.0.0.0/24"
+    match = {"hdr.ipv4.dstAddr": value}
+    method = getattr(client, f"{operation}_table_entry")
+    try:
+        with pytest.raises(EncodingError, match="priority must be None"):
+            if operation == "delete":
+                method("MyIngress.ipv4_lpm", match, priority=priority)
+            else:
+                method("MyIngress.ipv4_lpm", match, "NoAction", priority=priority)
+        connected_client[1]["stub"].Write.assert_not_called()
     finally:
         client.disconnect()

@@ -232,7 +232,7 @@ Range bounds must satisfy `low <= high`. Equal bounds match one value. Reversed 
 
 For a 16-bit range field, `key=0..65535` matches every value. Such wildcard fields are omitted from entries shown by `table dump`; the table still requires a priority.
 
-For exact/LPM-only tables, omit `priority:`. Tables with optional, ternary or range keys require it when inserting entries, including entries that omit an optional field as a wildcard. For a table with an exact destination MAC, a ternary source MAC, and a range of EtherTypes:
+For exact/LPM-only tables, omit `priority:`. Tables with optional, ternary or range keys require it when inserting entries, including entries that omit an optional field as a wildcard. The priority must be an integer from `1` to `2147483647`. Zero, negative and out-of-range values report an `EncodingError` before sending the request. For a table with an exact destination MAC, a ternary source MAC, and a range of EtherTypes:
 
 ```text
 p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
@@ -241,7 +241,7 @@ ok
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
 
-Delete an entry using its match key. Use the same match-value formats as `table add`, including `value&&&mask` and `low..high`. For tables with optional, ternary or range keys, supply the entry's original priority as `priority: N`, including for wildcard entries. Omitting a required priority reports an `EncodingError`. For exact/LPM-only tables, omit `priority:`.
+Delete an entry using its match key. Use the same match-value formats as `table add`, including `value&&&mask` and `low..high`. For tables with optional, ternary or range keys, supply the entry's original priority as `priority: N`, including for wildcard entries. It must be an integer from `1` to `2147483647`. Omitting a required priority reports an `EncodingError`. For exact/LPM-only tables, omit `priority:`.
 
 ```text
 p4net> s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32

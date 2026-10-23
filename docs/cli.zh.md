@@ -232,7 +232,7 @@ range 的下界不能大于上界。上下界相等时匹配单个值，顺序�
 
 16 位 range 字段可用 `key=0..65535` 匹配全部值。`table dump` 不显示这样的通配字段，表仍需要优先级。
 
-仅含 exact/LPM 字段的表不填写 `priority:`，含 optional、ternary 或 range 字段的表在插入时需要优先级，省略 optional 字段作通配匹配的条目也一样。下面的表按目标 MAC 做 exact 匹配、按源 MAC 做 ternary 匹配，并对 EtherType 做 range 匹配：
+仅含 exact/LPM 字段的表不填写 `priority:`，含 optional、ternary 或 range 字段的表在插入时需要优先级，省略 optional 字段作通配匹配的条目也一样。优先级必须是 `1` 到 `2147483647` 之间的整数，零、负数和越界值会在发送请求前报 `EncodingError`。下面的表按目标 MAC 做 exact 匹配、按源 MAC 做 ternary 匹配，并对 EtherType 做 range 匹配：
 
 ```text
 p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
@@ -241,7 +241,7 @@ ok
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
 
-按匹配键删除表项，匹配值格式与 `table add` 相同，也使用 `值&&&掩码` 和 `下界..上界`。含 optional、ternary 或 range 字段的表必须用 `priority: N` 指定条目的原优先级，通配条目也一样。缺少必需的优先级时显示 `EncodingError`。仅含 exact/LPM 字段的表不填写 `priority:`。
+按匹配键删除表项，匹配值格式与 `table add` 相同，也使用 `值&&&掩码` 和 `下界..上界`。含 optional、ternary 或 range 字段的表必须用 `priority: N` 指定条目的原优先级，通配条目也一样。优先级必须是 `1` 到 `2147483647` 之间的整数。缺少必需的优先级时显示 `EncodingError`。仅含 exact/LPM 字段的表不填写 `priority:`。
 
 ```text
 p4net> s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32

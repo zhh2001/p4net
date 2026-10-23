@@ -895,22 +895,23 @@ async def test_delete_table_entry_uses_delete_type(
 
 @pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
 @pytest.mark.parametrize("wildcard", [False, True])
+@pytest.mark.parametrize("priority", [1, 17, (1 << 31) - 1])
 async def test_optional_table_write_preserves_priority(
-    patched_aio: dict[str, Any], operation: str, wildcard: bool
+    patched_aio: dict[str, Any], operation: str, wildcard: bool, priority: int
 ) -> None:
     client = await _connect(patched_aio)
     method = getattr(client, f"{operation}_table_entry")
     match = {} if wildcard else {"hdr.ethernet.etherType": 0x0800}
     try:
         if operation == "delete":
-            await method("MyIngress.optional_acl", match, priority=17)
+            await method("MyIngress.optional_acl", match, priority=priority)
         else:
             await method(
                 "MyIngress.optional_acl",
                 match,
                 "MyIngress.set_egress_port",
                 {"port": 2},
-                priority=17,
+                priority=priority,
             )
         rpc = patched_aio["stub"].Write
         rpc.assert_awaited_once()
@@ -918,7 +919,7 @@ async def test_optional_table_write_preserves_priority(
         assert update.type == p4runtime_pb2.Update.Type.Value(operation.upper())
         entry = update.entity.table_entry
         assert entry.table_id == 2002
-        assert entry.priority == 17
+        assert entry.priority == priority
         assert entry.HasField("action") == (operation != "delete")
         if wildcard:
             assert len(entry.match) == 0
@@ -1270,5 +1271,77 @@ async def test_delete_exact_table_does_not_require_priority(
         entry = patched_aio["stub"].Write.call_args.args[0].updates[0].entity.table_entry
         assert entry.priority == 0
         assert entry.match[0].HasField("exact")
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
+@pytest.mark.parametrize(
+    "priority",
+    [
+        0,
+        -1,
+        -(1 << 31),
+        1 << 31,
+        -(1 << 31) - 1,
+        True,
+        False,
+        1.0,
+        1.9,
+        "10",
+        b"10",
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+    ],
+)
+async def test_invalid_priority_does_not_write(
+    patched_aio: dict[str, Any], operation: str, priority: Any
+) -> None:
+    client = await _connect(patched_aio)
+    method = getattr(client, f"{operation}_table_entry")
+    match = {"hdr.ethernet.etherType": 0x0800}
+    try:
+        with pytest.raises(EncodingError, match="priority"):
+            if operation == "delete":
+                await method("MyIngress.optional_acl", match, priority=priority)
+            else:
+                await method(
+                    "MyIngress.optional_acl",
+                    match,
+                    "MyIngress.set_egress_port",
+                    {"port": 2},
+                    priority=priority,
+                )
+        patched_aio["stub"].Write.assert_not_awaited()
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
+@pytest.mark.parametrize("match_type", [p4info_pb2.MatchField.EXACT, p4info_pb2.MatchField.LPM])
+@pytest.mark.parametrize("priority", [0, False])
+async def test_exact_lpm_priority_must_be_none(
+    patched_aio: dict[str, Any], operation: str, match_type: int, priority: int
+) -> None:
+    client = await _connect(patched_aio)
+    table = next(t for t in client.info_index.raw.tables if t.preamble.name == "MyIngress.ipv4_lpm")
+    table.match_fields[0].match_type = match_type
+    value = "10.0.0.1" if match_type == p4info_pb2.MatchField.EXACT else "10.0.0.0/24"
+    match = {"hdr.ipv4.dstAddr": value}
+    method = getattr(client, f"{operation}_table_entry")
+    try:
+        with pytest.raises(EncodingError, match="priority must be None"):
+            if operation == "delete":
+                await method("MyIngress.ipv4_lpm", match, priority=priority)
+            else:
+                await method(
+                    "MyIngress.ipv4_lpm",
+                    match,
+                    "MyIngress.set_egress_port",
+                    {"port": 2},
+                    priority=priority,
+                )
+        patched_aio["stub"].Write.assert_not_awaited()
     finally:
         await client.disconnect()

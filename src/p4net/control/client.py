@@ -428,7 +428,8 @@ class P4RuntimeClient:
             action: Fully qualified action name.
             params: Action parameters keyed by P4 param name.
             priority: Required for tables with optional, ternary or range keys,
-                including entries that omit optional fields as wildcards.
+                including entries that omit optional fields as wildcards. Must
+                be an int in [1, 2147483647]; bool is not accepted.
             timeout: Per-call gRPC deadline in seconds.
 
         Raises:
@@ -479,7 +480,8 @@ class P4RuntimeClient:
         """Delete an entry from ``table`` by match key and original priority.
 
         Tables with optional, ternary or range keys require ``priority``,
-        including wildcard entries. Omit it for exact/LPM-only tables.
+        including wildcard entries. Use an int in [1, 2147483647], excluding
+        bool. Omit it for exact/LPM-only tables.
 
         Raises:
             EncodingError: if a required priority is missing or a match is invalid.
@@ -517,6 +519,12 @@ class P4RuntimeClient:
             )
         if not requires_priority and priority is not None:
             raise EncodingError(f"table {table!r} is exact/lpm-only; priority must be None")
+        if priority is not None and (
+            isinstance(priority, bool)
+            or not isinstance(priority, int)
+            or not 1 <= priority <= 0x7FFFFFFF
+        ):
+            raise EncodingError("priority must be an int in [1, 2147483647] (bool is not accepted)")
         field_matches = index.encode_match(table, match)
         entry = p4runtime_pb2.TableEntry()
         entry.table_id = table_id
@@ -525,7 +533,7 @@ class P4RuntimeClient:
         if action is not None:
             entry.action.action.CopyFrom(index.encode_action(action, params))
         if priority is not None:
-            entry.priority = int(priority)
+            entry.priority = priority
 
         update = p4runtime_pb2.Update()
         update.type = p4runtime_pb2.Update.Type.Value(update_type)
