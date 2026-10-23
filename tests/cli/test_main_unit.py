@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
+import pickle
+import sys
+from collections.abc import Iterator
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -10,6 +15,112 @@ import pytest
 from pytest_mock import MockerFixture
 
 from p4net.cli import main as cli_main
+
+
+@pytest.fixture(autouse=True)
+def cleanup_topology_modules() -> Iterator[None]:
+    previous = set(sys.modules)
+    yield
+    for name in set(sys.modules) - previous:
+        if name.startswith("_p4net_topology_"):
+            sys.modules.pop(name, None)
+
+
+def _write_dataclass_topology(path: Path, label: str) -> Path:
+    path.write_text(
+        "from __future__ import annotations\n"
+        "from dataclasses import dataclass\n"
+        "from typing import ClassVar\n"
+        "from p4net.topo import Topology\n"
+        "@dataclass\n"
+        "class HostConfig:\n"
+        f"    label: ClassVar[str] = {label!r}\n"
+        "    ip: str = '10.0.0.1/24'\n"
+        "config = HostConfig()\n"
+        "topology = Topology()\n"
+        "topology.add_host('h1', ip=config.ip)\n"
+        "def setup(net):\n"
+        "    setup.called_with = net\n"
+    )
+    return path
+
+
+def test_load_topology_supports_dataclasses_and_module_lookup(tmp_path: Path) -> None:
+    path = _write_dataclass_topology(tmp_path / "topology.py", "first")
+
+    module = cli_main._load_topology_module(path)
+
+    assert importlib.import_module(module.HostConfig.__module__) is module
+    assert [field.name for field in fields(module.HostConfig)] == ["ip"]
+    assert repr(module.config) == "HostConfig(ip='10.0.0.1/24')"
+    assert pickle.loads(pickle.dumps(module.config)) == module.config
+    assert module.topology.hosts["h1"].ip == "10.0.0.1/24"
+
+
+@pytest.mark.parametrize("same_path", [False, True], ids=["same-stem", "reload"])
+def test_load_topology_keeps_previous_classes_resolvable(tmp_path: Path, same_path: bool) -> None:
+    path = _write_dataclass_topology(tmp_path / "topology.py", "first")
+    first = cli_main._load_topology_module(path)
+    if not same_path:
+        path = tmp_path / "other" / "topology.py"
+        path.parent.mkdir()
+    _write_dataclass_topology(path, "second")
+
+    second = cli_main._load_topology_module(path)
+
+    assert first.__name__ != second.__name__
+    for module, label in ((first, "first"), (second, "second")):
+        restored = pickle.loads(pickle.dumps(module.config))
+        assert type(restored) is module.HostConfig
+        assert restored.label == label
+
+
+@pytest.mark.parametrize(
+    ("statement", "error"),
+    [
+        ("raise RuntimeError('failed')", RuntimeError),
+        ("raise ImportError('failed')", ImportError),
+        ("if True", SyntaxError),
+        ("raise SystemExit(2)", SystemExit),
+        ("raise KeyboardInterrupt", KeyboardInterrupt),
+    ],
+)
+def test_load_topology_failure_removes_partial_module(
+    tmp_path: Path, statement: str, error: type[BaseException]
+) -> None:
+    valid_path = _write_dataclass_topology(tmp_path / "topology.py", "valid")
+    valid = cli_main._load_topology_module(valid_path)
+    broken_path = tmp_path / "broken" / "topology.py"
+    broken_path.parent.mkdir()
+    broken_path.write_text(statement + "\n")
+    previous = set(sys.modules)
+
+    with pytest.raises(error):
+        cli_main._load_topology_module(broken_path)
+
+    assert not {name for name in set(sys.modules) - previous if name.startswith("_p4net_topology_")}
+    assert importlib.import_module(valid.__name__) is valid
+    assert pickle.loads(pickle.dumps(valid.config)) == valid.config
+
+
+def test_main_loads_dataclass_topology_and_calls_setup(
+    tmp_path: Path, mock_network: MagicMock, mocker: MockerFixture
+) -> None:
+    path = _write_dataclass_topology(tmp_path / "topology.py", "cli")
+    wait = mocker.patch("p4net.cli.main._wait_for_signal")
+
+    assert cli_main.main([str(path), "--no-shell"]) == 0
+
+    loaded = [
+        module
+        for name, module in sys.modules.items()
+        if name.startswith("_p4net_topology_") and getattr(module, "__file__", None) == str(path)
+    ]
+    (module,) = loaded
+    assert module.setup.called_with is mock_network._instance
+    assert mock_network.call_args.args[0] is module.topology
+    wait.assert_called_once_with()
+    mock_network._instance.__exit__.assert_called_once()
 
 
 def _write_topology_file(

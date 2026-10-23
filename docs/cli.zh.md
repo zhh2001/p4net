@@ -10,6 +10,8 @@ description: p4net 命令行参考，介绍拓扑启动、连通性测试、主�
 
 拓扑文件必须定义模块级变量 `topology`，其值为 `Topology` 实例。文件还可以定义 `setup(net)`，在网络启动后、进入交互命令行前执行。[IPv4 转发示例](examples/l3-forwarding.md) 包含这两部分。
 
+每个文件作为独立的 Python 模块加载，可以定义辅助类和 dataclass，用于构建拓扑或执行 `setup(net)`。
+
 使用安装了 p4net 的 Python 环境启动，两种入口等效：
 
 ```bash

@@ -13,6 +13,7 @@ import importlib.util
 import logging
 import signal
 import sys
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
@@ -90,11 +91,17 @@ def _load_topology_module(path: Path) -> ModuleType:
     """Import a Python file by path and return the module."""
     if not path.is_file():
         raise FileNotFoundError(f"topology file not found: {path}")
-    spec = importlib.util.spec_from_file_location(f"_p4net_topology_{path.stem}", path)
+    name = f"_p4net_topology_{path.stem}_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"could not build module spec for {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
     return module
 
 

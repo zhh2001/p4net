@@ -10,6 +10,8 @@ The `p4net` command starts a topology and opens an interactive shell. From the s
 
 The topology file must define a module-level `topology` variable containing a `Topology` instance. It may also define `setup(net)`, which runs after the network starts and before the shell opens. The [IPv4 forwarding example](examples/l3-forwarding.md) shows both definitions.
 
+Each file is loaded as a separate Python module. It can define helper classes and dataclasses for use when constructing the topology or running `setup(net)`.
+
 Run either entry point with the Python environment where p4net is installed:
 
 ```bash
