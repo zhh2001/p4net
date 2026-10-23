@@ -190,7 +190,7 @@ def test_clear_table_batches_all_deletes(tmp_path: Path) -> None:
         te.table_id = 2002
         fm = te.match.add()
         fm.field_id = 1
-        fm.lpm.value = bytes([10, 0, i, 0]).rstrip(b"\x00") or b"\x00"
+        fm.lpm.value = bytes([10, 0, i, 0])
         fm.lpm.prefix_len = 24
     # Read returns the response stream; Write captures the request.
     c._stub.Read = MagicMock(return_value=iter([resp]))
@@ -203,9 +203,15 @@ def test_clear_table_batches_all_deletes(tmp_path: Path) -> None:
     sent = c._stub.Write.call_args.args[0]
     assert len(sent.updates) == 5
     delete_enum = p4runtime_pb2.Update.Type.Value("DELETE")
+    deleted_keys = set()
     for upd in sent.updates:
         assert upd.type == delete_enum
         assert upd.entity.table_entry.table_id == 2002
+        (field,) = upd.entity.table_entry.match
+        assert field.HasField("lpm")
+        assert field.lpm.prefix_len == 24
+        deleted_keys.add(bytes(field.lpm.value))
+    assert deleted_keys == {bytes([10, 0, i, 0]) for i in range(5)}
 
 
 def test_clear_table_returns_zero_when_empty(tmp_path: Path) -> None:

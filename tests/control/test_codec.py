@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from p4net.control import (
@@ -283,6 +285,82 @@ def test_parse_lpm_rejects_non_int_prefix() -> None:
 def test_parse_lpm_rejects_unknown_form() -> None:
     with pytest.raises(EncodingError, match="must be string or 2-tuple"):
         parse_lpm(123, 32)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [
+        ("10.0.0.5/24", 32),
+        (("10.0.0.5", 24), 32),
+        ("fd00::1/64", 128),
+        (("fd00::1", 64), 128),
+        (("00:00:00:00:00:01", 40), 48),
+        ((0x101, 1), 9),
+        ((0x101, 4), 9),
+        ((0x1FF, 8), 9),
+        ((1, 1), 2),
+        ((b"\x01\x01", 4), 9),
+        (("0x101", 4), 9),
+        (("2001:db8:0:0:8000::1", 65), 128),
+        (("0x1", 1), 128),
+    ],
+)
+def test_parse_lpm_rejects_nonzero_host_bits(value: Any, bitwidth: int) -> None:
+    with pytest.raises(EncodingError, match="outside the prefix"):
+        parse_lpm(value, bitwidth)
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth", "expected", "length"),
+    [
+        ("10.0.0.5/32", 32, 0x0A000005, 32),
+        ("fd00::1/128", 128, (0xFD00 << 112) | 1, 128),
+        (("fd00:0:0:0:8000::", 65), 128, (0xFD00 << 112) | (1 << 63), 65),
+        ("01:02:03:04:05:06/48", 48, 0x010203040506, 48),
+        ("00:01:02:03:04:00/40", 48, 0x0102030400, 40),
+        ((0x100, 1), 9, 0x100, 1),
+        ((0x1E0, 4), 9, 0x1E0, 4),
+        ((0x1FE, 8), 9, 0x1FE, 8),
+        ((0x1FF, 9), 9, 0x1FF, 9),
+        ((2, 1), 2, 2, 1),
+        ((b"\x01\xe0", 4), 9, 0x1E0, 4),
+        ("0x1e0/4", 9, 0x1E0, 4),
+        ((b"\x80", 2), 9, 0x80, 2),
+    ],
+)
+def test_parse_lpm_accepts_aligned_and_full_width_prefixes(
+    value: Any, bitwidth: int, expected: int, length: int
+) -> None:
+    encoded, prefix = parse_lpm(value, bitwidth)
+    assert prefix == length
+    assert int.from_bytes(encoded, "big") == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth", "expected"),
+    [
+        ("10.0.0.5/0", 32, 0x0A000005),
+        ("fd00::dead/0", 128, (0xFD00 << 112) | 0xDEAD),
+        (("aa:bb:cc:dd:ee:ff", 0), 48, 0xAABBCCDDEEFF),
+        ((511, 0), 9, 511),
+        ((b"\x01\xff", 0), 9, 511),
+    ],
+)
+def test_parse_lpm_zero_prefix_preserves_validated_value(
+    value: Any, bitwidth: int, expected: int
+) -> None:
+    encoded, prefix = parse_lpm(value, bitwidth)
+    assert prefix == 0
+    assert int.from_bytes(encoded, "big") == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [("bad/0", 32), ((512, 0), 9), ((b"\x02\x00", 0), 9), ("2001:db8::1/0", 32)],
+)
+def test_parse_lpm_zero_prefix_still_validates_value(value: Any, bitwidth: int) -> None:
+    with pytest.raises(EncodingError):
+        parse_lpm(value, bitwidth)
 
 
 # ---------------------------------------------------------------------------

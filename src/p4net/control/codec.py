@@ -115,7 +115,11 @@ def parse_lpm(
     value: str | tuple[str | int, int],
     bitwidth: int,
 ) -> tuple[bytes, int]:
-    """Accept '10.0.0.0/24' or ('10.0.0.0', 24). Returns (encoded_value, prefix_len)."""
+    """Accept an address/prefix string or tuple and return its encoded value and length.
+
+    Nonzero prefixes require all bits outside the prefix to be zero. A zero
+    prefix validates and encodes the value without checking its host bits.
+    """
     if isinstance(value, str):
         if "/" not in value:
             raise EncodingError(f"LPM string {value!r} must contain '/'")
@@ -134,6 +138,10 @@ def parse_lpm(
     if prefix_len < 0 or prefix_len > bitwidth:
         raise EncodingError(f"LPM prefix_len {prefix_len} out of range [0, {bitwidth}]")
     encoded = encode_value(addr, bitwidth)
+    if prefix_len:
+        host_mask = (1 << (bitwidth - prefix_len)) - 1
+        if int.from_bytes(encoded, "big") & host_mask:
+            raise EncodingError("LPM value has nonzero bits outside the prefix")
     return encoded, prefix_len
 
 

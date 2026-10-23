@@ -195,6 +195,18 @@ def test_encode_match_lpm_tuple(p4info: p4info_pb2.P4Info) -> None:
     assert fms[0].lpm.prefix_len == 16
 
 
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [("10.0.0.5/0", 32), ("fd00::dead/0", 128), ((511, 0), 9)],
+)
+def test_lpm_zero_prefix_omits_nonzero_values(
+    p4info: p4info_pb2.P4Info, value: object, bitwidth: int
+) -> None:
+    table = next(t for t in p4info.tables if t.preamble.name == "MyIngress.ipv4_lpm")
+    table.match_fields[0].bitwidth = bitwidth
+    assert P4InfoIndex(p4info).encode_match("MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": value}) == []
+
+
 def test_encode_match_exact_two_fields(p4info: p4info_pb2.P4Info) -> None:
     idx = P4InfoIndex(p4info)
     fms = idx.encode_match(
@@ -415,8 +427,8 @@ def _decoded_match_for(p4info: p4info_pb2.P4Info, table: str, raw: dict) -> dict
 
 
 def test_decode_match_lpm_round_trip(p4info: p4info_pb2.P4Info) -> None:
-    out = _decoded_match_for(p4info, "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.0.5/24"})
-    assert out == {"hdr.ipv4.dstAddr": "10.0.0.5/24"}
+    out = _decoded_match_for(p4info, "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.0.128/25"})
+    assert out == {"hdr.ipv4.dstAddr": "10.0.0.128/25"}
 
 
 def test_decode_match_exact_ipv4_no_table() -> None:

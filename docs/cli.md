@@ -224,6 +224,8 @@ Match values follow the field types in the target switch's P4Info:
 
 Each component accepts the field's supported value formats, including decimal or hexadecimal integers, IP addresses, and MAC addresses. Write composite values without spaces, or quote the whole value when including spaces.
 
+For a nonzero LPM prefix, bits outside the prefix must be zero. `10.0.0.5/24` reports an `EncodingError`. Use `10.0.0.0/24`. Prefix `/0` is a wildcard: its value is checked for format and width before the matching field is omitted.
+
 Range bounds must satisfy `low <= high`. Equal bounds match one value. Reversed bounds report an `EncodingError`.
 
 For a 16-bit range field, `key=0..65535` matches every value. Such wildcard fields are omitted from entries shown by `table dump`; the table still requires a priority.
