@@ -209,11 +209,27 @@ p4net> s1 table add MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32 actio
 ok
 ```
 
-For exact/LPM-only tables, omit `priority:`. Tables with ternary or range keys require it when inserting entries. The CLI currently passes match values as strings; ternary `(value, mask)` and range `(low, high)` pairs must be supplied through the Python API.
+Match values follow the field types in the target switch's P4Info:
+
+| Match type | Example |
+| --- | --- |
+| exact, optional | `key=123` |
+| lpm | `key=10.0.0.0/24` |
+| ternary | `key=0x1200&&&0xff00` |
+| range | `key=100..200` |
+
+Each component accepts the field's supported value formats, including decimal or hexadecimal integers, IP addresses, and MAC addresses. Write composite values without spaces, or quote the whole value when including spaces.
+
+For exact/LPM-only tables, omit `priority:`. Tables with ternary or range keys require it when inserting entries. For a table with an exact destination MAC, a ternary source MAC, and a range of EtherTypes:
+
+```text
+p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
+ok
+```
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
 
-Delete an entry using its match key. The section syntax matches `table add`. For entries with a priority, include the original value as `priority: N`.
+Delete an entry using its match key. Use the same match-value formats as `table add`, including `value&&&mask` and `low..high`. For entries with a priority, include the original value as `priority: N`.
 
 ```text
 p4net> s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32

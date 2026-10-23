@@ -13,6 +13,8 @@ Every case stacks `integration` (root needed for namespaces) plus
 from __future__ import annotations
 
 import socket
+import sys
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -33,6 +35,7 @@ pytestmark = [
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "p4"
 _SIMPLE_ROUTING = _FIXTURES / "simple_routing.p4"
+_MATCH_TYPES = _FIXTURES / "match_types.p4"
 
 
 def _suffix() -> str:
@@ -222,6 +225,75 @@ def test_switch_table_del_removes_entry(network: Network) -> None:
     # b"\n\x00\x00\x06" is the canonical form of 10.0.0.6/32. Either rendering
     # is acceptable, so we just check the count of populated rows.
     assert out_dump.count("set_egress_port") == 2
+
+
+def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path) -> None:
+    suffix = _suffix()
+    h1, h2, s1 = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(h1, mac="00:00:00:00:00:01")
+    topo.add_host(h2, mac="00:00:00:00:00:02")
+    with socket.socket() as grpc, socket.socket() as thrift:
+        grpc.bind(("127.0.0.1", 0))
+        thrift.bind(("127.0.0.1", 0))
+        topo.add_switch(
+            s1,
+            _MATCH_TYPES,
+            grpc_port=grpc.getsockname()[1],
+            thrift_port=thrift.getsockname()[1],
+        )
+    topo.add_link(h1, s1, port_b=1)
+    topo.add_link(h2, s1, port_b=2)
+    match = (
+        "hdr.ethernet.dstAddr=00:00:00:00:00:02,"
+        "hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,"
+        "hdr.ethernet.etherType=0x88b0..0x88bf"
+    )
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    with Network(topo, compiler=compiler, log_dir=tmp_path / "logs") as net:
+        d = CommandDispatcher(net)
+        result = d.dispatch(
+            f"{s1} table add MyIngress.l2_match match: {match} "
+            "action: MyIngress.set_egress_port params: port=2 priority: 17"
+        )
+        assert result == "ok"
+        dump = d.dispatch(f"{s1} table dump MyIngress.l2_match")
+        assert "00:00:00:00:00:00&ff:ff:ff:ff:ff:00" in dump
+        assert "[34992,35007]" in dump
+        assert "priority: 17" in dump
+
+        marker = uuid.uuid4().bytes
+        frame = bytes.fromhex("00000000000200000000000188b5") + marker + bytes(48)
+        ready, received = tmp_path / "ready", tmp_path / "received"
+        receiver_script = (
+            "import socket\n"
+            "from pathlib import Path\n"
+            "s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))\n"
+            f"s.bind(({h2 + '-eth0'!r}, 0))\n"
+            "s.settimeout(5)\n"
+            f"Path({str(ready)!r}).write_text('ready')\n"
+            "while True:\n"
+            "    packet = s.recv(65535)\n"
+            f"    if {marker!r} in packet:\n"
+            f"        Path({str(received)!r}).write_bytes(packet)\n"
+            "        break\n"
+        )
+        with net.host(h2).popen([sys.executable, "-c", receiver_script]) as receiver:
+            deadline = time.monotonic() + 5
+            while not ready.exists():
+                assert time.monotonic() < deadline and receiver.poll() is None
+                time.sleep(0.02)
+            sender_script = (
+                "import socket\n"
+                "s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)\n"
+                f"s.bind(({h1 + '-eth0'!r}, 0))\n"
+                f"s.send({frame!r})\n"
+            )
+            net.host(h1).exec([sys.executable, "-c", sender_script], timeout=5)
+            assert receiver.wait(timeout=7) == 0
+        assert received.read_bytes() == frame
+        assert d.dispatch(f"{s1} table del MyIngress.l2_match match: {match} priority: 17") == "ok"
+        assert net.switch(s1).client.list_table_entries("MyIngress.l2_match") == []
 
 
 # ---------------------------------------------------------------------------

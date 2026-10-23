@@ -209,11 +209,27 @@ p4net> s1 table add MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32 actio
 ok
 ```
 
-仅含 exact/LPM 字段的表不填写 `priority:`，含 ternary 或 range 字段的表在插入时需要优先级。CLI 目前将匹配值作为字符串传入，ternary 的 `(value, mask)` 和 range 的 `(low, high)` 二元组需通过 Python API 提供。
+匹配值的格式由目标交换机 P4Info 中的字段类型决定：
+
+| 匹配类型 | 示例 |
+| --- | --- |
+| exact、optional | `key=123` |
+| lpm | `key=10.0.0.0/24` |
+| ternary | `key=0x1200&&&0xff00` |
+| range | `key=100..200` |
+
+各部分可以使用字段支持的值格式，包括十进制或十六进制整数、IP 地址和 MAC 地址。组合值内不加空格，需要空格时用引号包住整个值。
+
+仅含 exact/LPM 字段的表不填写 `priority:`，含 ternary 或 range 字段的表在插入时需要优先级。下面的表按目标 MAC 做 exact 匹配、按源 MAC 做 ternary 匹配，并对 EtherType 做 range 匹配：
+
+```text
+p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
+ok
+```
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
 
-按匹配键删除表项，各部分的语法与 `table add` 相同。条目带有优先级时，同时用 `priority: N` 指定原值。
+按匹配键删除表项，匹配值格式与 `table add` 相同，也使用 `值&&&掩码` 和 `下界..上界`。条目带有优先级时，同时用 `priority: N` 指定原值。
 
 ```text
 p4net> s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32

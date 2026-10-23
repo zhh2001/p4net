@@ -12,7 +12,7 @@ from p4.config.v1 import p4info_pb2
 import p4net.control  # ensures protobuf python-impl env var is set  # noqa: F401
 from p4net.cli import CommandDispatcher
 from p4net.cli.exceptions import CLIUsageError
-from p4net.control import P4InfoIndex
+from p4net.control import P4InfoIndex, P4RuntimeClient
 from p4net.network import Network
 
 
@@ -316,6 +316,200 @@ def test_table_add_multiple_match_pairs(network: MagicMock) -> None:
         "hdr.eth.src": "00:11:22:33:44:55",
         "hdr.eth.dst": "aa:bb:cc:dd:ee:ff",
     }
+
+
+def _match_client(network: MagicMock, fields: list[tuple[str, int, int]]) -> P4RuntimeClient:
+    info = _build_p4info()
+    table = info.tables[0]
+    table.preamble.name = "MyIngress.l2_match"
+    del table.match_fields[:]
+    for i, (name, kind, width) in enumerate(fields, 1):
+        field = table.match_fields.add()
+        field.id, field.name, field.match_type, field.bitwidth = i, name, kind, width
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=0)
+    client._index = P4InfoIndex(info)
+    client._connected = True
+    client._stub = MagicMock()
+    network.switches["s1"].client = client
+    return client
+
+
+@pytest.mark.parametrize("operation", ["add", "del"])
+@pytest.mark.parametrize("separator", [" ", ",", ", "])
+def test_typed_match_values_build_requests(
+    network: MagicMock, operation: str, separator: str
+) -> None:
+    client = _match_client(
+        network,
+        [
+            ("dst", p4info_pb2.MatchField.EXACT, 48),
+            ("src", p4info_pb2.MatchField.TERNARY, 48),
+            ("type", p4info_pb2.MatchField.RANGE, 16),
+        ],
+    )
+    match = separator.join(
+        [
+            "dst=00:00:00:00:00:02",
+            "src=00:11:22:00:00:00&&&ff:ff:ff:00:00:00",
+            "type=0x0800..0x08ff",
+        ]
+    )
+    action = " action: NoAction" if operation == "add" else ""
+    result = CommandDispatcher(network).dispatch(
+        f"s1 table {operation} MyIngress.l2_match match: {match}{action} priority: 10"
+    )
+    assert result == "ok"
+    request = client._stub.Write.call_args.args[0]
+    entry = request.updates[0].entity.table_entry
+    assert entry.priority == 10
+    exact, ternary, range_match = entry.match
+    assert exact.exact.value == b"\x02"
+    assert ternary.ternary.value == bytes.fromhex("1122000000")
+    assert ternary.ternary.mask == bytes.fromhex("ffffff000000")
+    assert range_match.range.low == b"\x08\x00"
+    assert range_match.range.high == b"\x08\xff"
+
+
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        (p4info_pb2.MatchField.TERNARY, "1"),
+        (p4info_pb2.MatchField.TERNARY, "1&&&"),
+        (p4info_pb2.MatchField.TERNARY, "&&&1"),
+        (p4info_pb2.MatchField.TERNARY, "1&&&2&&&3"),
+        (p4info_pb2.MatchField.TERNARY, "1&2"),
+        (p4info_pb2.MatchField.RANGE, "1"),
+        (p4info_pb2.MatchField.RANGE, "1.."),
+        (p4info_pb2.MatchField.RANGE, "..2"),
+        (p4info_pb2.MatchField.RANGE, "1..2..3"),
+        (p4info_pb2.MatchField.RANGE, "1-2"),
+    ],
+)
+def test_malformed_typed_match_values_fail_before_rpc(
+    network: MagicMock, kind: int, value: str
+) -> None:
+    client = _match_client(network, [("key", kind, 16)])
+    with pytest.raises(CLIUsageError, match="key"):
+        CommandDispatcher(network).dispatch(
+            f"s1 table add MyIngress.l2_match match: key={value} action: NoAction priority: 10"
+        )
+    client._stub.Write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        (p4info_pb2.MatchField.TERNARY, "1&&&65536"),
+        (p4info_pb2.MatchField.RANGE, "0..65536"),
+        (p4info_pb2.MatchField.RANGE, "bad..10"),
+    ],
+)
+def test_typed_match_values_use_encoder_validation(
+    network: MagicMock, kind: int, value: str
+) -> None:
+    client = _match_client(network, [("key", kind, 16)])
+    result = CommandDispatcher(network).dispatch(
+        f"s1 table add MyIngress.l2_match match: key={value} action: NoAction priority: 10"
+    )
+    assert result.startswith("error: EncodingError:")
+    assert "2-tuple" not in result
+    client._stub.Write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        (p4info_pb2.MatchField.TERNARY, "fd00::&&&ffff:ffff::"),
+        (p4info_pb2.MatchField.RANGE, "fd00::..fd01::"),
+    ],
+)
+def test_typed_ipv6_values_ending_in_colons(network: MagicMock, kind: int, value: str) -> None:
+    client = _match_client(network, [("addr", kind, 128)])
+    result = CommandDispatcher(network).dispatch(
+        f"s1 table add MyIngress.l2_match match: addr={value} action: NoAction priority: 10"
+    )
+    assert result == "ok"
+    entry = client._stub.Write.call_args.args[0].updates[0].entity.table_entry
+    assert entry.match[0].WhichOneof("field_match_type") == (
+        "ternary" if kind == p4info_pb2.MatchField.TERNARY else "range"
+    )
+
+
+def test_typed_match_uses_target_switch_schema(network: MagicMock) -> None:
+    first = _match_client(network, [("key", p4info_pb2.MatchField.TERNARY, 16)])
+    network.switches["s2"] = network.switches["s1"]
+    network.switches["s1"] = _make_switch()
+    second = _match_client(network, [("key", p4info_pb2.MatchField.RANGE, 16)])
+    d = CommandDispatcher(network)
+    assert (
+        d.dispatch(
+            "s2 table add MyIngress.l2_match match: key=0x1000&&&0xff00 "
+            "action: NoAction priority: 10"
+        )
+        == "ok"
+    )
+    assert (
+        d.dispatch(
+            "s1 table add MyIngress.l2_match match: key=100..200 action: NoAction priority: 10"
+        )
+        == "ok"
+    )
+    first_match = first._stub.Write.call_args.args[0].updates[0].entity.table_entry.match[0]
+    second_match = second._stub.Write.call_args.args[0].updates[0].entity.table_entry.match[0]
+    assert first_match.WhichOneof("field_match_type") == "ternary"
+    assert second_match.WhichOneof("field_match_type") == "range"
+
+
+def test_zero_ternary_mask_is_encoded_as_wildcard(network: MagicMock) -> None:
+    client = _match_client(network, [("key", p4info_pb2.MatchField.TERNARY, 16)])
+    result = CommandDispatcher(network).dispatch(
+        "s1 table add MyIngress.l2_match match: key=0&&&0 action: NoAction priority: 10"
+    )
+    assert result == "ok"
+    assert not client._stub.Write.call_args.args[0].updates[0].entity.table_entry.match
+
+
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        (p4info_pb2.MatchField.TERNARY, "0x1200 &&& 0xff00"),
+        (p4info_pb2.MatchField.RANGE, "100 .. 200"),
+    ],
+)
+def test_quoted_typed_match_values(network: MagicMock, kind: int, value: str) -> None:
+    client = _match_client(network, [("key", kind, 16)])
+    result = CommandDispatcher(network).dispatch(
+        f"s1 table add MyIngress.l2_match match: key='{value}' action: NoAction priority: 10"
+    )
+    assert result == "ok"
+    client._stub.Write.assert_called_once()
+
+
+def test_malformed_range_delete_fails_before_rpc(network: MagicMock) -> None:
+    client = _match_client(network, [("key", p4info_pb2.MatchField.RANGE, 16)])
+    with pytest.raises(CLIUsageError, match=r"low\.\.high"):
+        CommandDispatcher(network).dispatch(
+            "s1 table del MyIngress.l2_match match: key=100.. priority: 10"
+        )
+    client._stub.Write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "table,match,error",
+    [
+        ("unknown_table", "key=1&&&255", "NoSuchTableError"),
+        ("MyIngress.l2_match", "unknown_field=1&&&255", "NoSuchFieldError"),
+    ],
+)
+def test_typed_match_preserves_schema_errors(
+    network: MagicMock, table: str, match: str, error: str
+) -> None:
+    client = _match_client(network, [("key", p4info_pb2.MatchField.TERNARY, 16)])
+    result = CommandDispatcher(network).dispatch(
+        f"s1 table add {table} match: {match} action: NoAction priority: 10"
+    )
+    assert result.startswith(f"error: {error}:")
+    client._stub.Write.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

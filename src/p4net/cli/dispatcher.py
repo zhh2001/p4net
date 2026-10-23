@@ -16,6 +16,7 @@ from p4net.cli.exceptions import CLIExit, CLIUsageError
 from p4net.cli.formatting import bold, render_pingall_matrix
 
 if TYPE_CHECKING:
+    from p4net.control import P4InfoIndex
     from p4net.network import Network
 
 _log = logging.getLogger(__name__)
@@ -80,12 +81,12 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "<switch> table dump <table>",
     ),
     "<switch> table add": (
-        "Insert a table entry.",
+        "Insert a table entry (ternary value&&&mask, range low..high).",
         "<switch> table add <table> match: <k>=<v>[,<k>=<v>...] action: <name> "
         "[params: <k>=<v>[,<k>=<v>...]] [priority: <int>]",
     ),
     "<switch> table del": (
-        "Delete a table entry by match key.",
+        "Delete a table entry (ternary value&&&mask, range low..high).",
         "<switch> table del <table> match: <k>=<v>[,<k>=<v>...] [priority: <int>]",
     ),
     "<switch> table clear": (
@@ -570,9 +571,12 @@ class CommandDispatcher:
         if priority is not None:
             kwargs["priority"] = priority
         try:
+            typed_match = _parse_table_match(switch.client.index, table, match)  # type: ignore[attr-defined]
             switch.client.insert_table_entry(  # type: ignore[attr-defined]
-                table, match, action, params, **kwargs
+                table, typed_match, action, params, **kwargs
             )
+        except CLIUsageError:
+            raise
         except Exception as exc:
             return f"error: {type(exc).__name__}: {exc}"
         return "ok"
@@ -590,7 +594,10 @@ class CommandDispatcher:
         if priority is not None:
             kwargs["priority"] = priority
         try:
-            switch.client.delete_table_entry(table, match, **kwargs)  # type: ignore[attr-defined]
+            typed_match = _parse_table_match(switch.client.index, table, match)  # type: ignore[attr-defined]
+            switch.client.delete_table_entry(table, typed_match, **kwargs)  # type: ignore[attr-defined]
+        except CLIUsageError:
+            raise
         except Exception as exc:
             return f"error: {type(exc).__name__}: {exc}"
         return "ok"
@@ -860,17 +867,44 @@ def _render_action_params(
 # ---------------------------------------------------------------------------
 
 
+def _parse_table_match(
+    index: P4InfoIndex, table_name: str, values: dict[str, str]
+) -> dict[str, object]:
+    """Convert composite match values using the target switch's field types."""
+    kinds = {
+        field.name: _match_type_label(field.match_type)
+        for table in index.raw.tables
+        if table.preamble.name == table_name
+        for field in table.match_fields
+    }
+    formats = {"ternary": ("&&&", "value&&&mask"), "range": ("..", "low..high")}
+    result: dict[str, object] = {}
+    for name, value in values.items():
+        kind = kinds.get(name)
+        if kind not in formats:
+            result[name] = value
+            continue
+        separator, usage = formats[kind]
+        parts = [part.strip() for part in value.split(separator)]
+        if len(parts) != 2 or not all(parts):
+            raise CLIUsageError(
+                f"table {table_name!r} match field {name!r}: expected {usage}, got {value!r}"
+            )
+        result[name] = (parts[0], parts[1])
+    return result
+
+
 def _parse_sections(tokens: list[str], *, allowed: set[str]) -> dict[str, list[str]]:
     """Walk tokens, splitting on section markers (`match:`, `action:`, ...).
 
-    Any token of the shape `<name>:` is treated as a section marker; if
-    `<name>` is not in `allowed`, raise `CLIUsageError` so typos surface
-    instead of being silently appended to the previous section.
+    A token of the shape `<name>:` outside an assignment starts a section.
+    Unknown names raise `CLIUsageError`. Assignment values may end in a
+    colon, as in IPv6 addresses.
     """
     sections: dict[str, list[str]] = {}
     current: str | None = None
     for tok in tokens:
-        if tok.endswith(":") and len(tok) > 1:
+        if tok.endswith(":") and len(tok) > 1 and "=" not in tok:
             name = tok[:-1]
             if name not in allowed:
                 raise CLIUsageError(
