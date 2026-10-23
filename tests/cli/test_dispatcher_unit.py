@@ -641,3 +641,84 @@ def test_topology_missing_subverb(two_host_network: MagicMock) -> None:
     d = CommandDispatcher(two_host_network)
     with pytest.raises(CLIUsageError, match="missing sub-verb"):
         d.dispatch("topology")
+
+
+@pytest.mark.parametrize("command", ["h1 ping h2", "h1 ping6 h2", "pingall", "pingall6"])
+@pytest.mark.parametrize(
+    "arguments,error",
+    [
+        ("0", "positive integer"),
+        ("-1", "positive integer"),
+        ("1 -0.25", "finite non-negative"),
+        ("1 nan", "finite non-negative"),
+        ("1 NaN", "finite non-negative"),
+        ("1 inf", "finite non-negative"),
+        ("1 -Infinity", "finite non-negative"),
+        ("1 1e309", "finite non-negative"),
+        ("2147484 0", "maximum ping wait"),
+        ("1 2147482.25", "maximum ping wait"),
+        ("2 1073741.1", "maximum ping wait"),
+        ("2 1e308", "maximum ping wait"),
+        ("abc", "count must be an integer"),
+        ("1 xyz", "timeout must be a number"),
+        ("1 2 3", "too many arguments"),
+    ],
+)
+def test_ping_commands_reject_invalid_numbers_before_backend(
+    two_host_network: MagicMock, command: str, arguments: str, error: str
+) -> None:
+    for name, host in two_host_network.hosts.items():
+        host.primary_ip6 = "fd00::1" if name == "h1" else "fd00::2"
+    with pytest.raises(CLIUsageError, match=error) as raised:
+        CommandDispatcher(two_host_network).dispatch(f"{command} {arguments}")
+    label = " ".join(command.split()[:2]) if command.startswith("h1 ") else command
+    assert str(raised.value).startswith(label + ":")
+    two_host_network.pingall.assert_not_called()
+    two_host_network.pingall6.assert_not_called()
+    for host in two_host_network.hosts.values():
+        host.ping.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["h1 ping h2", "h1 ping6 h2", "pingall", "pingall6"])
+@pytest.mark.parametrize(
+    "arguments,count,timeout",
+    [
+        ("1 0", 1, 0.0),
+        ("2 0.25", 2, 0.25),
+        ("3 1e-3", 3, 0.001),
+        ("1 2147482", 1, 2147482.0),
+        ("2147483 0", 2147483, 0.0),
+    ],
+)
+def test_ping_commands_preserve_valid_numbers(
+    two_host_network: MagicMock, command: str, arguments: str, count: int, timeout: float
+) -> None:
+    for name, host in two_host_network.hosts.items():
+        host.primary_ip6 = "fd00::1" if name == "h1" else "fd00::2"
+        host.ping.return_value = True
+    results = {("h1", "h2"): True, ("h2", "h1"): True}
+    two_host_network.pingall.return_value = results
+    two_host_network.pingall6.return_value = results
+    output = CommandDispatcher(two_host_network).dispatch(f"{command} {arguments}")
+    if command == "h1 ping h2":
+        two_host_network.hosts["h1"].ping.assert_called_once_with(
+            two_host_network.hosts["h2"], count=count, timeout=timeout
+        )
+        assert output == "OK"
+    elif command == "h1 ping6 h2":
+        two_host_network.hosts["h1"].ping.assert_called_once_with(
+            "fd00::2", count=count, timeout=timeout, force_ipv6=True
+        )
+        assert output == "OK"
+    else:
+        getattr(two_host_network, command).assert_called_once_with(count=count, timeout=timeout)
+        assert "2/2 succeeded" in output
+
+
+@pytest.mark.parametrize("command", ["pingall 0", "pingall6 1 nan"])
+def test_ping_argument_errors_are_reported_without_eligible_hosts(command: str) -> None:
+    network = _make_network()
+    with pytest.raises(CLIUsageError):
+        CommandDispatcher(network).dispatch(command)
+    network.pingall.assert_not_called()
+    network.pingall6.assert_not_called()

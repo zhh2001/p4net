@@ -17,12 +17,15 @@ import sys
 import time
 import uuid
 from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from p4net import Network
 from p4net.cli import CommandDispatcher
+from p4net.cli.exceptions import CLIUsageError
 from p4net.compiler import P4Compiler
 from p4net.network import RunningHost
 from p4net.topo import Topology
@@ -339,3 +342,54 @@ def test_host_cmd_ip_br_addr(network: Network) -> None:
     d = CommandDispatcher(network, color=False)
     out = d.dispatch(f"{h1} cmd ip -br addr")
     assert "10.0.0.1/24" in out
+
+
+def test_ping_numeric_validation_with_real_dual_stack_network(tmp_path: Path) -> None:
+    suffix = _suffix()
+    h1, h2, s1 = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
+    topology = Topology()
+    topology.add_host(h1, ip="10.0.0.1/24", ip6="fd00:39::1/64")
+    topology.add_host(h2, ip="10.0.0.2/24", ip6="fd00:39::2/64")
+    with socket.socket() as grpc, socket.socket() as thrift:
+        grpc.bind(("127.0.0.1", 0))
+        thrift.bind(("127.0.0.1", 0))
+        topology.add_switch(
+            s1,
+            _FIXTURES / "two_port_swap.p4",
+            grpc_port=grpc.getsockname()[1],
+            thrift_port=thrift.getsockname()[1],
+        )
+    topology.add_link(h1, s1, port_b=1)
+    topology.add_link(h2, s1, port_b=2)
+    with Network(
+        topology, compiler=P4Compiler(cache_dir=tmp_path / "compiler"), log_dir=tmp_path / "logs"
+    ) as network:
+        dispatcher = CommandDispatcher(network)
+        commands = (f"{h1} ping {h2}", f"{h1} ping6 {h2}", "pingall", "pingall6")
+        with ExitStack() as patches:
+            launches = [
+                patches.enter_context(
+                    patch.object(
+                        host.namespace, "popen", side_effect=AssertionError("invalid ping launched")
+                    )
+                )
+                for host in network.hosts.values()
+            ]
+            for command in commands:
+                for arguments in (
+                    "0",
+                    "-1",
+                    "1 -0.25",
+                    "1 nan",
+                    "1 inf",
+                    "2 1e308",
+                    "1 2147482.25",
+                ):
+                    with pytest.raises(CLIUsageError):
+                        dispatcher.dispatch(f"{command} {arguments}")
+            for launch in launches:
+                launch.assert_not_called()
+        for command in commands:
+            for timeout in ("0", "0.25"):
+                output = dispatcher.dispatch(f"{command} 1 {timeout}")
+                assert output == "OK" if command.startswith(h1) else "2/2 succeeded" in output

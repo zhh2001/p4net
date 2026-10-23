@@ -8,6 +8,7 @@ shell wraps it, and unit tests target it directly with a mock Network.
 from __future__ import annotations
 
 import logging
+import math
 import shlex
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -20,6 +21,9 @@ if TYPE_CHECKING:
     from p4net.network import Network
 
 _log = logging.getLogger(__name__)
+
+# poll(2) accepts signed 32-bit millisecond timeouts.
+_MAX_PING_WAIT = ((1 << 31) - 1) // 1000
 
 # A switch verb handler takes (switch_name, remaining tokens) and returns
 # the formatted output string.
@@ -469,6 +473,20 @@ class CommandDispatcher:
                 raise CLIUsageError(
                     f"{label}: timeout must be a number, got {tokens[1]!r}"
                 ) from exc
+        if count <= 0:
+            raise CLIUsageError(f"{label}: count must be a positive integer, got {tokens[0]!r}")
+        if not math.isfinite(timeout) or timeout < 0:
+            raise CLIUsageError(
+                f"{label}: timeout must be a finite non-negative number, got {tokens[1]!r}"
+            )
+        wait = math.inf
+        if count <= _MAX_PING_WAIT:
+            wait = max(count * timeout, count - 1 + timeout)
+        if not math.isfinite(wait) or math.ceil(wait) + 1 > _MAX_PING_WAIT:
+            raise CLIUsageError(
+                f"{label}: count and timeout exceed the maximum ping wait "
+                f"of {_MAX_PING_WAIT} seconds"
+            )
         return count, timeout
 
     # ------------------------------------------------------------------

@@ -83,7 +83,7 @@ h2    10.0.0.2/24  fd00::2/64  h2-eth0
 
 ### `pingall [count] [timeout]`
 
-在配置了主 IPv4 地址的主机之间逐方向执行 ping。矩阵列出全部主机，行表示源主机，列表示目标主机。`count` 默认 `1`，`timeout` 默认 `2.0` 秒。`1` 表示成功，`X` 表示失败，`-` 表示自身。未配置 IPv4 的主机所涉及的方向不执行测试，以 `?` 表示。
+在配置了主 IPv4 地址的主机之间逐方向执行 ping。矩阵列出全部主机，行表示源主机，列表示目标主机。`count` 默认 `1`，`timeout` 默认 `2.0` 秒，取值范围见 [ping 参数说明](#ping--count-timeout)。`1` 表示成功，`X` 表示失败，`-` 表示自身。未配置 IPv4 的主机所涉及的方向不执行测试，以 `?` 表示。
 
 ```text
 p4net> pingall 2 2.0
@@ -95,7 +95,7 @@ h2  1   -
 
 ### `pingall6 [count] [timeout]`
 
-在配置了主 IPv6 地址的主机之间执行 IPv6 ping，排除未配置 IPv6 的主机。默认参数和输出格式与 `pingall` 相同。如果没有主机配置 IPv6，返回 `(no IPv6-equipped hosts in topology)`。
+在配置了主 IPv6 地址的主机之间执行 IPv6 ping，排除未配置 IPv6 的主机。参数规则和输出格式与 `pingall` 相同。如果没有主机配置 IPv6，返回 `(no IPv6-equipped hosts in topology)`。
 
 ```text
 p4net> pingall6
@@ -122,7 +122,9 @@ p4net> topology graph /tmp/topo.svg layout=TB format=svg
 
 从指定主机发起 ping。目标是拓扑中的主机名时，解析为该主机的主 IPv4 地址。其他目标直接传给 `ping`，字符串中包含 `:` 时使用 IPv6。按主机名发起 IPv6 ping 使用 `ping6`。
 
-默认 `count=1`、`timeout=2.0` 秒。`count` 是回显请求的次数上限。超时值支持小数秒，例如 `0.25`，并传给 `ping -W`。p4net 另行限制整个进程的等待时间，覆盖默认一秒的发送间隔。收到至少一次应答就显示 `OK`，部分丢包也算成功。没有应答或执行失败时显示 `FAIL`。
+默认 `count=1`、`timeout=2.0` 秒。`count` 必须为正整数，表示回显请求的次数上限。`timeout` 必须有限且非负，可以使用小数秒，例如 `0.25`，并传给 `ping -W`。超时值为 `0` 时，由进程的整体等待时限控制退出。
+
+p4net 根据次数、超时和默认一秒的发送间隔计算整体等待时限，上限为 2,147,483 秒。收到至少一次应答就显示 `OK`，部分丢包也算成功。没有应答或执行失败时显示 `FAIL`。
 
 ```text
 p4net> h1 ping h2

@@ -83,7 +83,7 @@ List each switch's gRPC address, BMv2 process PID, and log file path.
 
 ### `pingall [count] [timeout]`
 
-Run IPv4 ping between hosts with a configured primary IPv4 address, in both directions. The matrix includes all hosts, with the row as source and column as destination. `count` defaults to `1` and `timeout` to `2.0` seconds. Cells show `1` for success, `X` for failure, `-` for the same host, and `?` for an untested pair involving a host without IPv4.
+Run IPv4 ping between hosts with a configured primary IPv4 address, in both directions. The matrix includes all hosts, with the row as source and column as destination. `count` defaults to `1` and `timeout` to `2.0` seconds. Both follow the [ping argument rules](#ping--count-timeout). Cells show `1` for success, `X` for failure, `-` for the same host, and `?` for an untested pair involving a host without IPv4.
 
 ```text
 p4net> pingall 2 2.0
@@ -95,7 +95,7 @@ h2  1   -
 
 ### `pingall6 [count] [timeout]`
 
-Run IPv6 ping between hosts with a configured primary IPv6 address. Hosts without one are excluded. The defaults and output format match `pingall`. If no host has IPv6 configured, the result is `(no IPv6-equipped hosts in topology)`.
+Run IPv6 ping between hosts with a configured primary IPv6 address. Hosts without one are excluded. The argument rules and output format match `pingall`. If no host has IPv6 configured, the result is `(no IPv6-equipped hosts in topology)`.
 
 ```text
 p4net> pingall6
@@ -122,7 +122,9 @@ p4net> topology graph /tmp/topo.svg layout=TB format=svg
 
 Ping from the named host. A target host name resolves to that host's primary IPv4 address. Other targets are passed to `ping`; a string containing `:` selects IPv6. Use `ping6` to resolve a host name to IPv6.
 
-The defaults are `count=1` and `timeout=2.0` seconds. `count` limits the number of echo requests. The timeout accepts fractional seconds, such as `0.25`, and is passed to `ping -W`. p4net also limits the overall process wait, allowing for the default one-second send interval. The result is `OK` if at least one reply arrives, including under partial packet loss. No replies or an execution failure produces `FAIL`.
+The defaults are `count=1` and `timeout=2.0` seconds. `count` must be a positive integer and limits the number of echo requests. `timeout` must be finite and non-negative. It accepts fractional seconds, such as `0.25`, and is passed to `ping -W`. A timeout of `0` relies on the overall process wait limit.
+
+p4net calculates the overall wait from the count, timeout, and default one-second send interval. This wait must not exceed 2,147,483 seconds. The result is `OK` if at least one reply arrives, including under partial packet loss. No replies or an execution failure produces `FAIL`.
 
 ```text
 p4net> h1 ping h2
