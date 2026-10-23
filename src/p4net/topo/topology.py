@@ -14,7 +14,7 @@ from typing import Any
 
 from p4net.topo.exceptions import TopologyError
 from p4net.topo.host import Host
-from p4net.topo.link import Link, LinkEndpoint
+from p4net.topo.link import Link, LinkEndpoint, _validate_port_number
 from p4net.topo.switch import P4Switch
 
 NodeRef = str | Host | P4Switch
@@ -23,6 +23,7 @@ NodeKind = Host | P4Switch
 _IFNAME_MAX_LEN = 15
 _BASE_GRPC_PORT = 50051
 _BASE_THRIFT_PORT = 9090
+_SWITCH_PORT_MAX = 510
 
 
 def _iface_name(node_name: str, port: int) -> str:
@@ -255,8 +256,9 @@ class Topology:
         per-direction impairment fields like ``delay_a_to_b`` shape only
         the direction from the ``a``-side veth toward the ``b`` side.
 
-        Automatic port allocation skips each switch's CPU port. Explicitly
-        assigning that port to a link raises :class:`TopologyError`.
+        Ports must be non-negative ints, excluding bool. Switch data ports
+        range from 0 to 510. Automatic allocation starts at 1 for switches,
+        skips the CPU port and raises :class:`TopologyError` when exhausted.
 
         Args:
             a: First endpoint (host or switch name, or a node object).
@@ -412,6 +414,11 @@ class Topology:
                 if ep.node not in self._hosts and ep.node not in self._switches:
                     errors.append(f"link[{i}] endpoint {which} references unknown node {ep.node!r}")
                 switch = self._switches.get(ep.node)
+                if switch is not None and ep.port is not None and ep.port > _SWITCH_PORT_MAX:
+                    errors.append(
+                        f"link[{i}] endpoint {which} switch port {ep.port} "
+                        f"out of range [0, {_SWITCH_PORT_MAX}]"
+                    )
                 if (
                     switch is not None
                     and switch.cpu_port is not None
@@ -719,6 +726,11 @@ class Topology:
 
     def _auto_port(self, node: NodeKind, requested: int | None) -> int:
         if requested is not None:
+            _validate_port_number(requested)
+            if isinstance(node, P4Switch) and requested > _SWITCH_PORT_MAX:
+                raise TopologyError(
+                    f"switch {node.name!r} port {requested} out of range [0, {_SWITCH_PORT_MAX}]"
+                )
             if (
                 isinstance(node, P4Switch)
                 and node.cpu_port is not None
@@ -739,4 +751,8 @@ class Topology:
         candidate = 1 if isinstance(node, P4Switch) else 0
         while candidate in used:
             candidate += 1
+        if isinstance(node, P4Switch) and candidate > _SWITCH_PORT_MAX:
+            raise TopologyError(
+                f"switch {node.name!r} has no free data ports in [1, {_SWITCH_PORT_MAX}]"
+            )
         return candidate

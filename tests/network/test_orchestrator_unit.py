@@ -68,6 +68,23 @@ def test_cpu_port_conflict_rejected_before_runtime_resources(
         network.stop()
 
 
+@pytest.mark.parametrize("port", [511, 512])
+def test_imported_switch_port_rejected_before_runtime_resources(
+    patched: dict[str, Any], tmp_path: Path, port: int
+) -> None:
+    data = _make_simple_topology().to_dict()
+    data["links"][0]["b"]["port"] = port
+    network = Network(Topology.from_dict(data), log_dir=tmp_path / "logs")
+    try:
+        with pytest.raises(TopologyError, match="port"):
+            network.start()
+        for name in ("ns_factory", "veth_factory", "bmv2_factory", "client_factory"):
+            patched[name].assert_not_called()
+        patched["compiler"].compile.assert_not_called()
+    finally:
+        network.stop()
+
+
 @pytest.fixture
 def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
     """Patch every primitive Network calls; return a dict of MagicMocks."""

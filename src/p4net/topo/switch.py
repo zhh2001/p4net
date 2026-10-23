@@ -52,6 +52,10 @@ class P4Switch:
             raise TopologyError(
                 f"thrift_port {self.thrift_port} out of range [{_PORT_MIN}, {_PORT_MAX}]"
             )
+        if self.cpu_port is not None and (
+            isinstance(self.cpu_port, bool) or not isinstance(self.cpu_port, int)
+        ):
+            raise TopologyError(f"cpu_port {self.cpu_port!r} must be an int (bool is not accepted)")
         if self.cpu_port is not None and not _CPU_PORT_MIN <= self.cpu_port <= _CPU_PORT_MAX:
             raise TopologyError(
                 f"cpu_port {self.cpu_port} out of range [{_CPU_PORT_MIN}, {_CPU_PORT_MAX}]"

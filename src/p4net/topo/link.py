@@ -13,6 +13,11 @@ _MTU_MAX = 65535
 _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 
+def _validate_port_number(port: object) -> None:
+    if isinstance(port, bool) or not isinstance(port, int) or port < 0:
+        raise TopologyError(f"port {port!r} must be a non-negative int (bool is not accepted)")
+
+
 @dataclass(frozen=True)
 class LinkEndpoint:
     """One end of a `Link`, attached to a host or switch.
@@ -29,6 +34,8 @@ class LinkEndpoint:
     ip6: str | None = None
 
     def __post_init__(self) -> None:
+        if self.port is not None:
+            _validate_port_number(self.port)
         if self.mac is not None and not _MAC_RE.match(self.mac):
             raise TopologyError(
                 f"invalid LinkEndpoint MAC {self.mac!r}: must be 'XX:XX:XX:XX:XX:XX'"

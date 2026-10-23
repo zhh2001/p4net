@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -165,6 +166,104 @@ def test_link_explicit_ports_respected() -> None:
     link = t.add_link("h1", "s1", port_a=5, port_b=42)
     assert link.a.port == 5
     assert link.b.port == 42
+
+
+@pytest.mark.parametrize(
+    "port", [True, False, -1, 1.0, 1.5, "2", b"2", float("nan"), float("inf"), [], {}]
+)
+@pytest.mark.parametrize("node", ["h1", "s1"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_builder_rejects_invalid_port_without_adding_link(
+    port: Any, node: str, reverse: bool
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    other = "s1" if node == "h1" else "h1"
+    with pytest.raises(TopologyError, match="port"):
+        if reverse:
+            topo.add_link(other, node, port_b=port)
+        else:
+            topo.add_link(node, other, port_a=port)
+    assert topo.links == ()
+    link = topo.add_link("h1", "s1")
+    assert (link.a.port, link.b.port) == (0, 1)
+
+
+@pytest.mark.parametrize("port", [511, 512, 65535])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_builder_rejects_switch_port_out_of_range(port: int, reverse: bool) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    with pytest.raises(TopologyError, match="port"):
+        if reverse:
+            topo.add_link("s1", "h1", port_a=port)
+        else:
+            topo.add_link("h1", "s1", port_b=port)
+    assert topo.links == ()
+
+
+@pytest.mark.parametrize(("host_port", "switch_port"), [(0, 0), (512, 510)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_valid_host_and_switch_port_boundaries_round_trip(
+    host_port: int, switch_port: int, reverse: bool
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"), cpu_port=255)
+    if reverse:
+        link = topo.add_link("s1", "h1", port_a=switch_port, port_b=host_port)
+    else:
+        link = topo.add_link("h1", "s1", port_a=host_port, port_b=switch_port)
+    topo.validate()
+    restored = Topology.from_dict(topo.to_dict())
+    restored.validate()
+    assert restored.links[0] == link
+
+
+@pytest.mark.parametrize("cpu_port", [None, 1, 510])
+def test_switch_auto_allocation_reports_exhaustion(cpu_port: int | None) -> None:
+    topo = Topology()
+    topo.add_switch("s1", Path("p.p4"), cpu_port=cpu_port)
+    topo.add_switch("s2", Path("p.p4"))
+    for port in range(1, 511):
+        if port != cpu_port:
+            topo.add_link("s1", "s2", port_a=port, port_b=port)
+    count = len(topo.links)
+    with pytest.raises(TopologyError, match=r"no free.*ports"):
+        topo.add_link("s1", "s2")
+    assert len(topo.links) == count
+    link = topo.add_link("s1", "s2", port_a=0, port_b=0)
+    assert (link.a.port, link.b.port) == (0, 0)
+    topo.validate()
+
+
+@pytest.mark.parametrize("cpu_port", [None, 509])
+def test_switch_auto_allocation_can_use_last_port(cpu_port: int | None) -> None:
+    topo = Topology()
+    topo.add_switch("s1", Path("p.p4"), cpu_port=cpu_port)
+    topo.add_switch("s2", Path("p.p4"))
+    for port in range(1, 510):
+        if port != cpu_port:
+            topo.add_link("s1", "s2", port_a=port, port_b=port)
+    link = topo.add_link("s1", "s2")
+    assert link.a.port == 510
+    topo.validate()
+
+
+@pytest.mark.parametrize("port", [511, 512])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_validate_rejects_imported_switch_port_out_of_range(port: int, reverse: bool) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("s1", "h1") if reverse else topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    data["links"][0]["a" if reverse else "b"]["port"] = port
+    imported = Topology.from_dict(data)
+    with pytest.raises(TopologyError, match="port"):
+        imported.validate()
 
 
 @pytest.mark.parametrize("cpu_port", [1, 2, 510])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -76,6 +77,14 @@ def test_invalid_cpu_port(bad_cpu: int) -> None:
 @pytest.mark.parametrize("good_cpu", [1, 255, 510])
 def test_valid_cpu_port(good_cpu: int) -> None:
     P4Switch(name="s1", p4_src=Path("p.p4"), cpu_port=good_cpu)
+
+
+@pytest.mark.parametrize(
+    "cpu_port", [True, False, 1.0, 1.5, 510.0, "1", b"1", float("nan"), float("inf"), [], {}]
+)
+def test_cpu_port_rejects_invalid_types(cpu_port: Any) -> None:
+    with pytest.raises(TopologyError, match="cpu_port"):
+        P4Switch("s1", Path("p.p4"), cpu_port=cpu_port)
 
 
 @pytest.mark.parametrize("bad_level", ["", "verbose", "FATAL", "Info"])

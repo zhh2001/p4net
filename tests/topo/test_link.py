@@ -3,10 +3,24 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import pytest
 
 from p4net.topo import Link, LinkEndpoint, TopologyError
+
+
+@pytest.mark.parametrize(
+    "port", [True, False, -1, 1.0, 1.5, "1", b"1", float("nan"), float("inf"), [], {}]
+)
+def test_endpoint_rejects_invalid_port_number(port: Any) -> None:
+    with pytest.raises(TopologyError, match="port"):
+        LinkEndpoint(node="h1", port=port)
+
+
+@pytest.mark.parametrize("port", [None, 0, 1, 510, 511, 512, 10000])
+def test_endpoint_preserves_optional_and_nonnegative_ports(port: int | None) -> None:
+    assert LinkEndpoint(node="h1", port=port).port == port
 
 
 def test_minimal_link() -> None:

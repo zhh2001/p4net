@@ -48,6 +48,8 @@ These objects manage individual resources. `Network` determines their creation a
 
 Host ports are assigned from 0, switch ports from 1. Automatic allocation skips the switch's configured CPU port, which is reserved for controller traffic. Assigning it explicitly to a link reports a `TopologyError`; `Topology.validate()` also rejects this conflict in imported topologies. Generated interface names have the form `<node>-eth<port>`. Names longer than Linux's 15-character limit are rejected.
 
+Port numbers must be `int` values, excluding `bool`. Host ports must be non-negative. Switch data ports range from `0` to `510`, and CPU ports from `1` to `510`. Switch port `0` remains available through explicit assignment. Automatic switch allocation uses ports `1..510`, skips the CPU port, and reports a `TopologyError` when exhausted. Invalid port values are rejected without converting strings or floats. Imported switch data ports are also checked by `Topology.validate()`.
+
 Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 
 Construction checks field values and parameter combinations. `Topology.validate()` additionally checks endpoint references, self-links, port and device-ID collisions, switch service-port collisions, interface names, and host address conflicts. Network startup calls it unless `unsafe=True`. The CLI also validates before `topology graph`.
