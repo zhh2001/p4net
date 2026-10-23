@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import errno
 import socket
 import sys
 import time
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -37,10 +41,41 @@ time.sleep(30)
 """
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def _reserve_port(host: str, excluded: set[int]) -> socket.socket:
+    rejected: list[socket.socket] = []
+    try:
+        while True:
+            sock = socket.socket()
+            rejected.append(sock)
+            sock.bind((host, 0))
+            if int(sock.getsockname()[1]) not in excluded:
+                rejected.pop()
+                return sock
+            # Keep excluded ports bound so the next attempt selects another one.
+    finally:
+        for sock in rejected:
+            sock.close()
+
+
+@contextmanager
+def _other_address_listener(host: str, family: int = socket.AF_INET) -> Iterator[socket.socket]:
+    with ExitStack() as cleanup:
+        while True:
+            reserved = cleanup.enter_context(_reserve_port("127.0.0.1", set()))
+            port = int(reserved.getsockname()[1])
+            holder = cleanup.enter_context(socket.socket(family))
+            if family == socket.AF_INET6:
+                holder.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            try:
+                holder.bind((host, port))
+            except OSError as exc:
+                if exc.errno == errno.EADDRINUSE:
+                    continue
+                raise
+            holder.listen()
+            reserved.close()
+            yield holder
+            return
 
 
 @pytest.fixture
@@ -57,18 +92,27 @@ def python_switch(tmp_path: Path) -> Iterator[Callable[..., BMv2Switch]]:
         thrift_port: int | None = None,
         grpc_bind_addr: str = "127.0.0.1",
     ) -> BMv2Switch:
-        sw = BMv2Switch(
-            f"s{len(switches)}",
-            device_id=0,
-            grpc_port=_free_port() if grpc_port is None else grpc_port,
-            thrift_port=_free_port() if thrift_port is None else thrift_port,
-            bmv2_json=tmp_path / mode,
-            port_to_iface={},
-            log_dir=tmp_path,
-            grpc_bind_addr=grpc_bind_addr,
-            binary=str(binary),
-        )
-        switches.append(sw)
+        with ExitStack() as reservations:
+            excluded = {port for port in (grpc_port, thrift_port) if port is not None}
+            if grpc_port is None:
+                holder = reservations.enter_context(_reserve_port(grpc_bind_addr, excluded))
+                grpc_port = int(holder.getsockname()[1])
+                excluded.add(grpc_port)
+            if thrift_port is None:
+                holder = reservations.enter_context(_reserve_port("127.0.0.1", excluded))
+                thrift_port = int(holder.getsockname()[1])
+            sw = BMv2Switch(
+                f"s{len(switches)}",
+                device_id=0,
+                grpc_port=grpc_port,
+                thrift_port=thrift_port,
+                bmv2_json=tmp_path / mode,
+                port_to_iface={},
+                log_dir=tmp_path,
+                grpc_bind_addr=grpc_bind_addr,
+                binary=str(binary),
+            )
+            switches.append(sw)
         sw.start()
         return sw
 
@@ -131,7 +175,7 @@ def test_readiness_rejects_shared_grpc_listener(
 def test_readiness_ignores_other_ipv4_address(
     python_switch: Callable[..., BMv2Switch],
 ) -> None:
-    with socket.create_server(("127.0.0.2", 0)) as holder:
+    with _other_address_listener("127.0.0.2") as holder:
         sw = python_switch(grpc_port=int(holder.getsockname()[1]))
         sw.wait_until_ready(timeout=3.0)
 
@@ -139,10 +183,7 @@ def test_readiness_ignores_other_ipv4_address(
 def test_readiness_ignores_ipv6_only_listener(
     python_switch: Callable[..., BMv2Switch],
 ) -> None:
-    with socket.socket(socket.AF_INET6) as holder:
-        holder.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-        holder.bind(("::", 0))
-        holder.listen()
+    with _other_address_listener("::", socket.AF_INET6) as holder:
         sw = python_switch(grpc_port=int(holder.getsockname()[1]))
         sw.wait_until_ready(timeout=3.0)
 
@@ -157,3 +198,104 @@ def test_readiness_rejects_foreign_dual_stack_listener(
         sw = python_switch(mode="none", grpc_port=int(holder.getsockname()[1]))
         with pytest.raises(BMv2StartupError, match=r"gRPC.*another process"):
             sw.wait_until_ready(timeout=0.5)
+
+
+def test_auto_service_ports_are_reserved_and_distinct(
+    python_switch: Callable[..., BMv2Switch],
+) -> None:
+    real_socket = socket.socket
+    first_port: int | None = None
+    first_still_reserved: list[bool] = []
+
+    class PreferFirstPort(real_socket):
+        def bind(self, address: Any) -> None:
+            nonlocal first_port
+            if self.family != socket.AF_INET or address != ("127.0.0.1", 0):
+                super().bind(address)
+                return
+            if first_port is None:
+                super().bind(address)
+                first_port = int(self.getsockname()[1])
+                return
+            try:
+                super().bind(("127.0.0.1", first_port))
+            except OSError as exc:
+                if exc.errno != errno.EADDRINUSE:
+                    raise
+                first_still_reserved.append(True)
+                super().bind(address)
+            else:
+                first_still_reserved.append(False)
+
+    with patch.object(socket, "socket", PreferFirstPort):
+        sw = python_switch()
+        assert sw.grpc_port != sw.thrift_port
+        sw.wait_until_ready(timeout=3.0)
+    assert first_still_reserved and all(first_still_reserved)
+
+
+@pytest.mark.parametrize("field", ["grpc_port", "thrift_port"])
+def test_auto_service_port_excludes_explicit_port(
+    python_switch: Callable[..., BMv2Switch], field: str
+) -> None:
+    real_socket = socket.socket
+    with real_socket() as selected:
+        selected.bind(("127.0.0.1", 0))
+        explicit_port = int(selected.getsockname()[1])
+    attempted = False
+
+    class PreferExplicitPort(real_socket):
+        def bind(self, address: Any) -> None:
+            nonlocal attempted
+            if self.family != socket.AF_INET or address != ("127.0.0.1", 0):
+                super().bind(address)
+                return
+            attempted = True
+            try:
+                super().bind(("127.0.0.1", explicit_port))
+            except OSError as exc:
+                if exc.errno != errno.EADDRINUSE:
+                    raise
+                super().bind(address)
+
+    with patch.object(socket, "socket", PreferExplicitPort):
+        sw = python_switch(**{field: explicit_port})
+        assert getattr(sw, field) == explicit_port
+        assert sw.grpc_port != sw.thrift_port
+        sw.wait_until_ready(timeout=3.0)
+    assert attempted
+
+
+@pytest.mark.parametrize("family", [socket.AF_INET, socket.AF_INET6])
+def test_ignored_address_port_is_selected_on_grpc_bind_address(
+    python_switch: Callable[..., BMv2Switch], family: int
+) -> None:
+    real_socket = socket.socket
+    with real_socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        occupied_port = int(occupied.getsockname()[1])
+        other_host = "127.0.0.2" if family == socket.AF_INET else "::"
+
+        class PreferOccupiedPort(real_socket):
+            def bind(self, address: Any) -> None:
+                if self.family == family and address == (other_host, 0):
+                    super().bind((other_host, occupied_port))
+                else:
+                    super().bind(address)
+
+        selected: list[BMv2Switch] = []
+
+        def make_switch(**kwargs: Any) -> BMv2Switch:
+            sw = python_switch(**kwargs)
+            selected.append(sw)
+            return sw
+
+        with patch.object(socket, "socket", PreferOccupiedPort):
+            if family == socket.AF_INET:
+                test_readiness_ignores_other_ipv4_address(make_switch)
+            else:
+                test_readiness_ignores_ipv6_only_listener(make_switch)
+        assert len(selected) == 1
+        assert selected[0].grpc_port != occupied_port
+        assert occupied.getsockname()[1] == occupied_port
