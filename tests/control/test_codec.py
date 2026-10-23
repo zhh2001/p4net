@@ -391,6 +391,83 @@ def test_parse_ternary_widths_match() -> None:
     assert len(m) == 4
 
 
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [
+        ((0xAB, 0xF0), 8),
+        (("0xab", "0xf0"), 8),
+        (("10.0.0.5", "255.255.255.0"), 32),
+        (("fd00::1", "ffff:ffff:ffff:ffff::"), 128),
+        (("00:00:00:00:00:01", "ff:ff:ff:ff:ff:fe"), 48),
+        ((0x101, 0x100), 9),
+        ((0x100, 0xFF), 9),
+        ((0x103, 0x105), 9),
+        ((1, 2), 2),
+        ((b"\x01", b"\x01\x00"), 9),
+        ((b"\x01\x00", b"\xff"), 9),
+        ((b"\x00\x01", b"\x00\x02"), 16),
+        (((1 << 127) | 1, 1 << 127), 128),
+    ],
+)
+def test_parse_ternary_rejects_bits_outside_mask(value: Any, bitwidth: int) -> None:
+    with pytest.raises(EncodingError, match="outside the mask"):
+        parse_ternary(value, bitwidth)
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth", "expected"),
+    [
+        ((0xA0, 0xF0), 8, (b"\xa0", b"\xf0")),
+        (("0x81", 0xA5), 8, (b"\x81", b"\xa5")),
+        (("10.0.0.0", "255.255.255.0"), 32, (b"\x0a\x00\x00\x00", b"\xff\xff\xff\x00")),
+        (("fd00::", "ffff::"), 128, (b"\xfd\x00" + b"\x00" * 14, b"\xff\xff" + b"\x00" * 14)),
+        ((0x101, 0x105), 9, (b"\x01\x01", b"\x01\x05")),
+        ((0x1FF, 0x1FF), 9, (b"\x01\xff", b"\x01\xff")),
+        ((2, 2), 2, (b"\x02", b"\x02")),
+        ((b"\x01", b"\x01\x01"), 9, (b"\x01", b"\x01\x01")),
+        ((b"\x00\x01", b"\x01"), 9, (b"\x00\x01", b"\x01")),
+        ((b"", b"\x01"), 9, (b"", b"\x01")),
+        ((0, 0xA5), 8, (b"\x00", b"\xa5")),
+    ],
+)
+def test_parse_ternary_preserves_valid_encoded_values(
+    value: Any, bitwidth: int, expected: tuple[bytes, bytes]
+) -> None:
+    assert parse_ternary(value, bitwidth) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth", "expected"),
+    [
+        ((0xAB, 0), 8, (b"\xab", b"\x00")),
+        (("10.0.0.5", "0.0.0.0"), 32, (b"\x0a\x00\x00\x05", b"\x00" * 4)),
+        ((511, 0), 9, (b"\x01\xff", b"\x00\x00")),
+        ((b"\x01\xff", b""), 9, (b"\x01\xff", b"")),
+    ],
+)
+def test_parse_ternary_zero_mask_preserves_validated_value(
+    value: Any, bitwidth: int, expected: tuple[bytes, bytes]
+) -> None:
+    assert parse_ternary(value, bitwidth) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [
+        (("bad", 0), 8),
+        ((512, 0), 9),
+        ((b"\x02\x00", 0), 9),
+        (("2001:db8::1", 0), 32),
+        ((1, "bad"), 8),
+        ((1, b"\x00\x00\x00"), 9),
+        ((1, 512), 9),
+    ],
+)
+def test_parse_ternary_still_validates_value_and_mask(value: Any, bitwidth: int) -> None:
+    with pytest.raises(EncodingError):
+        parse_ternary(value, bitwidth)
+
+
 # ---------------------------------------------------------------------------
 # parse_range
 # ---------------------------------------------------------------------------

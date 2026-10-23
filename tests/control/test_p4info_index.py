@@ -250,6 +250,24 @@ def test_encode_match_ternary_zero_mask_omitted(p4info: p4info_pb2.P4Info) -> No
     assert fms == []
 
 
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [
+        (("10.0.0.5", "0.0.0.0"), 32),
+        (("fd00::dead", "::"), 128),
+        ((511, b""), 9),
+    ],
+)
+def test_ternary_zero_mask_omits_nonzero_values(
+    p4info: p4info_pb2.P4Info, value: object, bitwidth: int
+) -> None:
+    table = next(t for t in p4info.tables if t.preamble.name == "MyIngress.ternary_acl")
+    table.match_fields[0].bitwidth = bitwidth
+    assert (
+        P4InfoIndex(p4info).encode_match("MyIngress.ternary_acl", {"hdr.ipv4.dstAddr": value}) == []
+    )
+
+
 def test_encode_match_range(p4info: p4info_pb2.P4Info) -> None:
     idx = P4InfoIndex(p4info)
     fms = idx.encode_match("MyIngress.range_acl", {"hdr.tcp.srcPort": (1024, 65535)})

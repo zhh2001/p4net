@@ -149,12 +149,20 @@ def parse_ternary(
     value: tuple[str | int | bytes, str | int | bytes],
     bitwidth: int,
 ) -> tuple[bytes, bytes]:
-    """Accept ('value', 'mask'). Returns (encoded_value, encoded_mask)."""
+    """Encode a (value, mask) pair, requiring zero value bits outside a nonzero mask.
+
+    A zero mask validates and encodes both parts without checking masked bits.
+    """
     if not (isinstance(value, tuple) and len(value) == 2):
         raise EncodingError(f"ternary value must be a 2-tuple of (value, mask), got {value!r}")
     val_part, mask_part = value
     enc_val = encode_value(val_part, bitwidth)
     enc_mask = encode_value(mask_part, bitwidth)
+    mask = int.from_bytes(enc_mask, "big")
+    if mask:
+        val = int.from_bytes(enc_val, "big")
+        if val & mask != val:
+            raise EncodingError("ternary value has nonzero bits outside the mask")
     return enc_val, enc_mask
 
 

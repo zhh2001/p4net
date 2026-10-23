@@ -226,6 +226,8 @@ Each component accepts the field's supported value formats, including decimal or
 
 For a nonzero LPM prefix, bits outside the prefix must be zero. `10.0.0.5/24` reports an `EncodingError`. Use `10.0.0.0/24`. Prefix `/0` is a wildcard: its value is checked for format and width before the matching field is omitted.
 
+For a nonzero ternary mask, value bits must be zero wherever the mask is zero. `0xab&&&0xf0` reports an `EncodingError`. Use `0xa0&&&0xf0`. A zero mask is a wildcard: both parts are checked for format and width before the matching field is omitted, even when the value is nonzero.
+
 Range bounds must satisfy `low <= high`. Equal bounds match one value. Reversed bounds report an `EncodingError`.
 
 For a 16-bit range field, `key=0..65535` matches every value. Such wildcard fields are omitted from entries shown by `table dump`; the table still requires a priority.
