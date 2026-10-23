@@ -28,7 +28,8 @@ usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
 - `--unsafe` —— 跳过 `Topology.validate()`。仅在你确定拓扑没有
   问题时使用。
 - `--log-dir DIR` —— BMv2 日志目录。默认是新建的临时目录。
-- `--pcap-dir DIR` —— 按端口的 BMv2 抓包目录。默认禁用。
+- `--pcap-dir DIR` —— BMv2 按端口保存抓包文件的目录。不指定时不抓包。
+  在 `Topology.add_switch()` 中设置 `pcap_enabled=False`，可关闭指定交换机的抓包。
 - `--extra-compile-arg ARG` —— 额外传给 `p4c` 的参数，可以多次
   指定。
 

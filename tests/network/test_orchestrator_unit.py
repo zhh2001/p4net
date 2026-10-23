@@ -193,6 +193,25 @@ def test_stop_invokes_destructors_and_unregisters(patched: dict[str, Any], tmp_p
     assert net.is_running is False
 
 
+@pytest.mark.parametrize("capture_enabled", [False, True])
+@pytest.mark.parametrize("roundtrip", [False, True])
+def test_per_switch_capture_settings(
+    patched: dict[str, Any], tmp_path: Path, capture_enabled: bool, roundtrip: bool
+) -> None:
+    topo = _make_simple_topology()
+    topo.add_switch("s2", p4_src=Path("simple_routing.p4"), pcap_enabled=False)
+    topo.add_link("s1", "s2", port_a=3, port_b=1)
+    if roundtrip:
+        topo = Topology.from_dict(topo.to_dict())
+    pcap_dir = tmp_path / "pcaps" if capture_enabled else None
+
+    with Network(topo, log_dir=tmp_path / "logs", pcap_dir=pcap_dir):
+        capture_dirs = {
+            args.args[0]: args.kwargs["pcap_dir"] for args in patched["bmv2_factory"].call_args_list
+        }
+        assert capture_dirs == {"s1": pcap_dir, "s2": None}
+
+
 def test_stop_is_idempotent(patched: dict[str, Any], tmp_path: Path) -> None:
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     net.start()

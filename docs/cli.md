@@ -30,7 +30,9 @@ usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
   topology is well-formed.
 - `--log-dir DIR` — directory for BMv2 log files. Defaults to a fresh
   tempdir.
-- `--pcap-dir DIR` — per-port BMv2 packet captures. Disabled by default.
+- `--pcap-dir DIR` — directory for per-port BMv2 packet captures. Captures are
+  disabled when this option is omitted. Set `pcap_enabled=False` in
+  `Topology.add_switch()` to exclude a switch from capture.
 - `--extra-compile-arg ARG` — extra argument forwarded to `p4c`,
   repeatable.
 

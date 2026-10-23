@@ -572,7 +572,7 @@ class Network:
                 bmv2_json=compile_result.bmv2_json,
                 port_to_iface=port_to_iface,
                 log_dir=self._log_dir,
-                pcap_dir=self._pcap_dir,
+                pcap_dir=self._pcap_dir if sw.pcap_enabled else None,
                 cpu_port=sw.cpu_port,
                 log_level=sw.log_level,
             )

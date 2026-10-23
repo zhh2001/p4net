@@ -188,7 +188,8 @@ class Topology:
             thrift_port: Thrift bind port. Auto-assigned starting at 9090.
             cpu_port: CPU port number for controller punt (optional).
             log_level: BMv2 log level passed via ``--log-level``.
-            pcap_enabled: Per-port pcap capture toggle.
+            pcap_enabled: Capture this switch's ports (default True). Requires a
+                directory via ``Network(pcap_dir=...)`` or CLI ``--pcap-dir``.
 
         Returns:
             The newly created :class:`P4Switch`.

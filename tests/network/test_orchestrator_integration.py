@@ -178,6 +178,51 @@ def test_two_hosts_one_switch_with_table_programming(tmp_path: Path) -> None:
         assert cell.packet_count >= 1
 
 
+@pytest.mark.parametrize("capture_enabled", [False, True])
+def test_per_switch_packet_capture(tmp_path: Path, capture_enabled: bool) -> None:
+    suffix = _suffix()
+    h1, h2 = f"h{suffix}a", f"h{suffix}b"
+    s1, s2 = f"s{suffix}a", f"s{suffix}b"
+    topo = Topology()
+    topo.add_host(h1, ip="10.0.0.1/24")
+    topo.add_host(h2, ip="10.0.0.2/24")
+    topo.add_switch(s1, p4_src=_TWO_PORT_SWAP, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_switch(
+        s2,
+        p4_src=_TWO_PORT_SWAP,
+        grpc_port=_free_port(),
+        thrift_port=_free_port(),
+        pcap_enabled=False,
+    )
+    topo.add_link(h1, s1, port_b=1)
+    topo.add_link(s1, s2, port_a=2, port_b=1)
+    topo.add_link(s2, h2, port_a=2)
+    pcap_dir = tmp_path / "pcaps"
+    marker = b"p4net-pcap-test"
+    with Network(
+        topo,
+        log_dir=tmp_path / "logs",
+        pcap_dir=pcap_dir if capture_enabled else None,
+        compiler=P4Compiler(cache_dir=tmp_path / "compiler"),
+    ) as net:
+        net.host(h1).exec(
+            ["ping", "-n", "-c", "1", "-W", "2", "-p", marker.hex(), "10.0.0.2"],
+            capture_output=True,
+            timeout=5,
+        )
+        assert net.ping(h2, h1) is True
+
+    captures = list(pcap_dir.glob("*.pcap"))
+    expected = (
+        {f"{s1}-eth{port}_{direction}.pcap" for port in (1, 2) for direction in ("in", "out")}
+        if capture_enabled
+        else set()
+    )
+    assert {path.name for path in captures} == expected
+    for path in captures:
+        assert marker in path.read_bytes(), path
+
+
 # ---------------------------------------------------------------------------
 # 3. Link impairment kills connectivity
 # ---------------------------------------------------------------------------
