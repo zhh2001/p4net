@@ -19,7 +19,7 @@ from p4net.network.orchestrator import (
     _format_duration_ns,
     _parse_duration_ns,
 )
-from p4net.topo import Link, LinkEndpoint, Topology
+from p4net.topo import Link, LinkEndpoint, Topology, TopologyError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -261,6 +261,39 @@ def test_safe_invokes_validate(patched: dict[str, Any], tmp_path: Path) -> None:
     net.start()
     topo.validate.assert_called_once()
     net.stop()
+
+
+@pytest.mark.parametrize("same_switch", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_service_port_collision_fails_before_creating_resources(
+    patched: dict[str, Any], tmp_path: Path, same_switch: bool, asynchronous: bool
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch(
+        "s1",
+        Path("simple_routing.p4"),
+        grpc_port=60000,
+        thrift_port=60000 if same_switch else 60001,
+    )
+    topo.add_link("h1", "s1")
+    if not same_switch:
+        topo.add_switch("s2", Path("simple_routing.p4"), grpc_port=60001, thrift_port=60002)
+        topo.add_link("s1", "s2")
+    net = Network(topo, log_dir=tmp_path / "logs")
+    try:
+        with pytest.raises(TopologyError, match="service port collision"):
+            if asynchronous:
+                await net.astart()
+            else:
+                net.start()
+        patched["compiler"].compile.assert_not_called()
+        for factory in ("ns_factory", "veth_factory", "bmv2_factory", "client_factory"):
+            patched[factory].assert_not_called()
+        assert not (tmp_path / "logs").exists()
+        assert not net.is_running
+    finally:
+        await net.astop()
 
 
 def test_extra_compile_args_passed_through(patched: dict[str, Any], tmp_path: Path) -> None:

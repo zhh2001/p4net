@@ -395,7 +395,11 @@ class Topology:
         return result
 
     def validate(self) -> None:
-        """Raise `TopologyError` listing every internal-consistency problem found."""
+        """Raise `TopologyError` listing every internal-consistency problem found.
+
+        All configured gRPC and Thrift ports must be distinct across the topology,
+        including the two ports of each switch.
+        """
         errors: list[str] = []
 
         # 1. Endpoint references resolve to a known node.
@@ -422,20 +426,30 @@ class Topology:
                 else:
                     seen[key] = i
 
-        # 4. No two switches share device_id, grpc_port, or thrift_port.
-        for field_name in ("device_id", "grpc_port", "thrift_port"):
-            owners: dict[Any, str] = {}
-            for sw in self._switches.values():
-                value = getattr(sw, field_name)
-                if value is None:
-                    continue
-                if value in owners:
+        # 4. Device IDs are unique; gRPC and Thrift share the TCP port space.
+        device_owners: dict[int, str] = {}
+        port_owners: dict[int, tuple[str, str]] = {}
+        for sw in self._switches.values():
+            if sw.device_id is not None:
+                if sw.device_id in device_owners:
                     errors.append(
-                        f"switch {field_name} collision: {sw.name!r} and "
-                        f"{owners[value]!r} both use {value}"
+                        f"switch device_id collision: {sw.name!r} and "
+                        f"{device_owners[sw.device_id]!r} both use {sw.device_id}"
                     )
                 else:
-                    owners[value] = sw.name
+                    device_owners[sw.device_id] = sw.name
+            for field_name, port in (("grpc_port", sw.grpc_port), ("thrift_port", sw.thrift_port)):
+                if port is None:
+                    continue
+                if port in port_owners:
+                    owner, owner_field = port_owners[port]
+                    label = field_name if field_name == owner_field else "service port"
+                    errors.append(
+                        f"switch {label} collision: {sw.name!r} ({field_name}) and "
+                        f"{owner!r} ({owner_field}) both use {port}"
+                    )
+                else:
+                    port_owners[port] = (sw.name, field_name)
 
         # 5. Interface name length.
         for i, link in enumerate(self._links):

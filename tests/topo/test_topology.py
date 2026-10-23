@@ -367,6 +367,51 @@ def test_validate_switch_field_collision_thrift_port() -> None:
         t.validate()
 
 
+@pytest.mark.parametrize(
+    "ports",
+    [
+        [(60000, 60001), (60001, 60002)],
+        [(60001, 60000), (60002, 60001)],
+        [(60001, 60001)],
+    ],
+    ids=["thrift-then-grpc", "grpc-then-thrift", "same-switch"],
+)
+@pytest.mark.parametrize("roundtrip", [False, True])
+def test_validate_service_port_collision(ports: list[tuple[int, int]], roundtrip: bool) -> None:
+    t = Topology()
+    for i, (grpc_port, thrift_port) in enumerate(ports, 1):
+        t.add_switch(f"s{i}", Path("p.p4"), grpc_port=grpc_port, thrift_port=thrift_port)
+    if roundtrip:
+        t = Topology.from_dict(t.to_dict())
+
+    with pytest.raises(TopologyError, match="service port collision") as error:
+        t.validate()
+    message = str(error.value)
+    assert "60001" in message
+    assert "grpc_port" in message and "thrift_port" in message
+    for switch in t.switches:
+        assert switch in message
+
+
+def test_validate_service_port_collision_reports_other_errors() -> None:
+    t = Topology()
+    t.add_switch("s1", Path("p.p4"), device_id=5, grpc_port=60000, thrift_port=60001)
+    t.add_switch("s2", Path("p.p4"), device_id=5, grpc_port=60001, thrift_port=60000)
+    with pytest.raises(TopologyError) as error:
+        t.validate()
+    message = str(error.value)
+    assert "device_id collision" in message
+    assert message.count("service port collision") == 2
+    assert "60000" in message and "60001" in message
+
+
+def test_validate_service_ports_are_separate_from_device_ids() -> None:
+    t = Topology()
+    t.add_switch("s1", Path("p.p4"), device_id=60001, grpc_port=60000, thrift_port=60001)
+    t.add_switch("s2", Path("p.p4"), device_id=60000, grpc_port=60002, thrift_port=60003)
+    t.validate()
+
+
 def test_validate_iface_name_too_long_in_existing_link() -> None:
     """If a link is constructed bypassing add_link, validate() catches the long iface."""
     t = Topology()

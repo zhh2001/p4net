@@ -60,7 +60,9 @@ sudo ss -ltnp 'sport = :9090'
 
 将监听进程的 PID 与 `switches` 中的交换机 PID 对应起来。gRPC 绑定失败后，BMv2 仍可能继续运行 Thrift 服务，进程存活时也需检查日志中的 `Address already in use`。
 
-根据 PID 确认端口所属的实验，关闭对应实验，或选择其他端口。新拓扑可在 `add_switch()` 中通过 `grpc_port` 和 `thrift_port` 指定端口。p4net 按交换机添加顺序分配默认端口，并在启动时核对监听进程。端口被占用时会启动失败，需要另选端口。
+根据 PID 确认端口所属的实验，关闭对应实验，或选择其他端口。新拓扑可在 `add_switch()` 中通过 `grpc_port` 和 `thrift_port` 指定端口。默认端口按交换机添加顺序分配。
+
+同一拓扑中，所有 gRPC 和 Thrift 端口都必须互不重复，包括同一台交换机的两个端口。`Topology.validate()` 会在创建运行资源前通过 `TopologyError` 报告配置冲突。端口被其他进程占用时，BMv2 启动检查会报错，需要另选端口。
 
 如果交换机确实需要更长的启动时间，直接使用底层 `BMv2Switch` 时可设置 `startup_timeout`，或调用 `wait_until_ready(timeout=...)`。`Network` 使用默认的 10 秒等待时间。
 

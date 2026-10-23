@@ -60,7 +60,9 @@ sudo ss -ltnp 'sport = :9090'
 
 Compare the listener PID with the switch PID from `switches`. BMv2 may continue running its Thrift service after a gRPC bind failure, so check the log for `Address already in use` even while the process is alive.
 
-Match the PID to the experiment that owns it, then stop that experiment or choose other ports. Set `grpc_port` and `thrift_port` in `add_switch()` to select ports for a new topology. p4net assigns default ports by switch order and checks listener ownership during startup. An occupied port causes startup to fail; select other ports explicitly.
+Match the PID to the experiment that owns it, then stop that experiment or choose other ports. Set `grpc_port` and `thrift_port` in `add_switch()` to select ports for a new topology. Default ports follow the switch order.
+
+Within one topology, all gRPC and Thrift ports must be distinct, including the two ports of each switch. `Topology.validate()` reports configuration conflicts as `TopologyError` before runtime resources are created. Ports occupied by other processes are detected during BMv2 startup; choose other ports when this happens.
 
 For a switch that takes longer to start, the lower-level `BMv2Switch` interface accepts `startup_timeout` or `wait_until_ready(timeout=...)`. `Network` uses the default 10-second wait.
 
