@@ -403,7 +403,8 @@ class Topology:
         """Raise `TopologyError` listing every internal-consistency problem found.
 
         All configured gRPC and Thrift ports must be distinct across the topology,
-        including the two ports of each switch.
+        including the two ports of each switch. Every link endpoint must have
+        an assigned port.
         """
         errors: list[str] = []
 
@@ -413,6 +414,8 @@ class Topology:
             for which, ep in (("a", link.a), ("b", link.b)):
                 if ep.node not in self._hosts and ep.node not in self._switches:
                     errors.append(f"link[{i}] endpoint {which} references unknown node {ep.node!r}")
+                if ep.port is None:
+                    errors.append(f"link[{i}] endpoint {which} ({ep.node!r}) has no assigned port")
                 switch = self._switches.get(ep.node)
                 if switch is not None and ep.port is not None and ep.port > _SWITCH_PORT_MAX:
                     errors.append(
@@ -636,7 +639,11 @@ class Topology:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Topology:
-        """Reconstruct a :class:`Topology` from a :meth:`to_dict` payload."""
+        """Reconstruct a :class:`Topology` from a :meth:`to_dict` payload.
+
+        Endpoint ports are restored as stored. Call :meth:`validate` to check
+        that every endpoint has an assigned port.
+        """
         topo = cls()
         for name, host_data in data.get("hosts", {}).items():
             topo._hosts[name] = Host(

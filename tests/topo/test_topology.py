@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -781,6 +782,87 @@ def test_from_dict_handles_missing_optional_sections() -> None:
     assert t.hosts == {}
     assert t.switches == {}
     assert list(t.links) == []
+
+
+@pytest.mark.parametrize("node", ["h1", "s1"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("missing", ["omitted", "null"])
+def test_imported_missing_port_is_rejected_without_allocation(
+    node: str, reverse: bool, missing: str
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"), cpu_port=255)
+    other = "s1" if node == "h1" else "h1"
+    topo.add_link(other, node) if reverse else topo.add_link(node, other)
+    side = "b" if reverse else "a"
+    data = topo.to_dict()
+    if missing == "omitted":
+        data["links"][0][side].pop("port")
+    else:
+        data["links"][0][side]["port"] = None
+    original = deepcopy(data)
+    imported = Topology.from_dict(data)
+    before = imported.to_dict()
+    endpoint = getattr(imported.links[0], side)
+    assert endpoint.port is None
+    assert endpoint.iface_name == data["links"][0][side]["iface_name"]
+    with pytest.raises(TopologyError, match=rf"endpoint {side}.*{node}.*assigned port"):
+        imported.validate()
+    assert imported.to_dict() == before
+    assert data == original
+
+
+@pytest.mark.parametrize("node", ["h1", "s1"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_validate_rejects_missing_port_in_direct_link(node: str, reverse: bool) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    other = "s1" if node == "h1" else "h1"
+    link = topo.add_link(other, node) if reverse else topo.add_link(node, other)
+    side = "b" if reverse else "a"
+    endpoint = getattr(link, side)
+    missing = LinkEndpoint(node=node, iface_name=endpoint.iface_name)
+    topo._links[0] = Link(a=link.a, b=missing) if reverse else Link(a=missing, b=link.b)
+    with pytest.raises(TopologyError, match=rf"endpoint {side}.*{node}.*assigned port"):
+        topo.validate()
+
+
+def test_validate_reports_all_unassigned_endpoint_ports() -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    topo.add_link("s1", "h2")
+    data = topo.to_dict()
+    for link in data["links"]:
+        link["a"]["port"] = None
+        link["b"]["port"] = None
+    imported = Topology.from_dict(data)
+    with pytest.raises(TopologyError) as excinfo:
+        imported.validate()
+    message = str(excinfo.value)
+    assert message.count("has no assigned port") == 4
+    for index in range(2):
+        for side in ("a", "b"):
+            assert f"link[{index}] endpoint {side}" in message
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_imported_explicit_zero_ports_are_preserved(reverse: bool) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"), cpu_port=1)
+    topo.add_link("s1", "h1", port_a=0, port_b=0) if reverse else topo.add_link(
+        "h1", "s1", port_a=0, port_b=0
+    )
+    data = topo.to_dict()
+    imported = Topology.from_dict(data)
+    imported.validate()
+    assert imported.to_dict() == data
+    assert (imported.links[0].a.port, imported.links[0].b.port) == (0, 0)
 
 
 def test_links_property_returns_immutable_view() -> None:

@@ -52,6 +52,8 @@ Port numbers must be `int` values, excluding `bool`. Host ports must be non-nega
 
 Switch `device_id`, `grpc_port` and `thrift_port` also require `int` values, excluding `bool`. Device IDs range from `0` to `2147483647`. gRPC and Thrift ports range from `1024` to `65535`. Passing `None` to `Topology.add_switch()` selects automatic assignment. Invalid types report a `TopologyError` at construction, including when loading a topology from a dictionary.
 
+`Topology.from_dict()` restores endpoint ports as stored. If an endpoint's `port` is omitted or `None`, `Topology.validate()` reports a `TopologyError` naming the link, endpoint and node. Network startup performs this check before compilation or network resource creation. Explicit port `0` is valid.
+
 Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 
 Construction checks field values and parameter combinations. `Topology.validate()` additionally checks endpoint references, self-links, port and device-ID collisions, switch service-port collisions, interface names, and host address conflicts. Network startup calls it unless `unsafe=True`. The CLI also validates before `topology graph`.
