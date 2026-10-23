@@ -50,6 +50,8 @@ flowchart TB
 
 端口号必须是 `int`，不接受 `bool`。主机端口号为非负整数，交换机数据端口范围是 `0..510`，CPU 端口范围是 `1..510`。交换机端口 `0` 可显式指定。自动分配使用 `1..510`，跳过 CPU 端口，用尽后报 `TopologyError`。非法端口值直接报错，不转换字符串或浮点数。导入拓扑中的交换机数据端口也由 `Topology.validate()` 检查。
 
+交换机的 `device_id`、`grpc_port` 和 `thrift_port` 同样只接受 `int`，不接受 `bool`。设备 ID 范围是 `0..2147483647`，gRPC 和 Thrift 端口范围是 `1024..65535`。向 `Topology.add_switch()` 传入 `None` 时自动分配。非法类型会在构造时抛出 `TopologyError`，从字典导入拓扑时也一样。
+
 链路参数支持三种形式：对称值、`delay_a_to_b` 这样的逐方向值，以及 `delay_a_to_b_extra` 这样的附加值。附加值需要对称基础值。例如，`delay="100ms"` 加 `delay_a_to_b_extra="100ms"`，得到 `a` 到 `b` 方向 200 ms、反向 100 ms 的时延。对称值不能与同一参数的直接逐方向覆盖值混用。
 
 描述对象在构造时检查字段值和参数组合。`Topology.validate()` 进一步检查端点引用、自环、端口和设备 ID 冲突、交换机服务端口冲突、接口名及主机地址冲突。网络启动时会调用它，除非设置了 `unsafe=True`。CLI 执行 `topology graph` 前也会校验。

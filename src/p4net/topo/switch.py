@@ -18,7 +18,10 @@ _CPU_PORT_MAX = 510
 
 @dataclass(frozen=True)
 class P4Switch:
-    """A P4-programmable switch backed by BMv2 simple_switch_grpc."""
+    """A P4-programmable switch backed by BMv2 simple_switch_grpc.
+
+    Device IDs and port numbers accept ints, excluding bool, or None.
+    """
 
     name: str
     p4_src: Path
@@ -42,6 +45,14 @@ class P4Switch:
             raise TopologyError(
                 f"unsupported arch {self.arch!r}: only 'v1model' is supported in this release"
             )
+        for field_name, value in (
+            ("device_id", self.device_id),
+            ("grpc_port", self.grpc_port),
+            ("thrift_port", self.thrift_port),
+            ("cpu_port", self.cpu_port),
+        ):
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+                raise TopologyError(f"{field_name} {value!r} must be an int (bool is not accepted)")
         if self.device_id is not None and not 0 <= self.device_id < _DEVICE_ID_MAX:
             raise TopologyError(f"device_id {self.device_id} out of range [0, {_DEVICE_ID_MAX})")
         if self.grpc_port is not None and not _PORT_MIN <= self.grpc_port <= _PORT_MAX:
@@ -52,10 +63,6 @@ class P4Switch:
             raise TopologyError(
                 f"thrift_port {self.thrift_port} out of range [{_PORT_MIN}, {_PORT_MAX}]"
             )
-        if self.cpu_port is not None and (
-            isinstance(self.cpu_port, bool) or not isinstance(self.cpu_port, int)
-        ):
-            raise TopologyError(f"cpu_port {self.cpu_port!r} must be an int (bool is not accepted)")
         if self.cpu_port is not None and not _CPU_PORT_MIN <= self.cpu_port <= _CPU_PORT_MAX:
             raise TopologyError(
                 f"cpu_port {self.cpu_port} out of range [{_CPU_PORT_MIN}, {_CPU_PORT_MAX}]"

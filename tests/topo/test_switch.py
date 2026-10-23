@@ -7,7 +7,96 @@ from typing import Any
 
 import pytest
 
-from p4net.topo import P4Switch, TopologyError
+from p4net.topo import P4Switch, Topology, TopologyError
+
+
+def _make_numeric_switch(field: str, value: Any, source: str) -> P4Switch:
+    values = {field: value}
+    if source == "descriptor":
+        return P4Switch("s1", Path("p.p4"), **values)
+    if source == "builder":
+        return Topology().add_switch("s1", Path("p.p4"), **values)
+    data = {"switches": {"s1": {"name": "s1", "p4_src": "p.p4", **values}}}
+    return Topology.from_dict(data).switches["s1"]
+
+
+_INVALID_NUMERIC_FIELDS = [
+    (field, value)
+    for field, integer, fraction in (
+        ("device_id", 0.0, 1.5),
+        ("grpc_port", 50051.0, 50051.5),
+        ("thrift_port", 9090.0, 9090.5),
+    )
+    for value in (
+        True,
+        False,
+        integer,
+        fraction,
+        "1",
+        b"1",
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        [],
+        {},
+    )
+]
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize(("field", "value"), _INVALID_NUMERIC_FIELDS)
+def test_switch_numeric_fields_reject_invalid_types(field: str, value: Any, source: str) -> None:
+    with pytest.raises(TopologyError, match=field):
+        _make_numeric_switch(field, value, source)
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("device_id", None),
+        ("device_id", 0),
+        ("device_id", 17),
+        ("device_id", (1 << 31) - 1),
+        ("grpc_port", None),
+        ("grpc_port", 1024),
+        ("grpc_port", 50051),
+        ("grpc_port", 65535),
+        ("thrift_port", None),
+        ("thrift_port", 1024),
+        ("thrift_port", 9090),
+        ("thrift_port", 65535),
+    ],
+)
+def test_switch_numeric_fields_preserve_valid_values(
+    field: str, value: int | None, source: str
+) -> None:
+    switch = _make_numeric_switch(field, value, source)
+    expected = (
+        {"device_id": 0, "grpc_port": 50051, "thrift_port": 9090}[field]
+        if value is None and source == "builder"
+        else value
+    )
+    actual = getattr(switch, field)
+    assert actual == expected
+    assert actual is None or type(actual) is int
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("device_id", -1),
+        ("device_id", 1 << 31),
+        ("grpc_port", 1023),
+        ("grpc_port", 65536),
+        ("thrift_port", 1023),
+        ("thrift_port", 65536),
+    ],
+)
+def test_switch_numeric_fields_keep_existing_ranges(field: str, value: int, source: str) -> None:
+    with pytest.raises(TopologyError, match=field):
+        _make_numeric_switch(field, value, source)
 
 
 def test_minimal_switch() -> None:
