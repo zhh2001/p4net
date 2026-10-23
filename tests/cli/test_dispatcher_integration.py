@@ -230,7 +230,8 @@ def test_switch_table_del_removes_entry(network: Network) -> None:
     assert out_dump.count("set_egress_port") == 2
 
 
-def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("range_value", ["0x88b0..0x88bf", "0..65535"])
+def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path, range_value: str) -> None:
     suffix = _suffix()
     h1, h2, s1 = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
     topo = Topology()
@@ -250,19 +251,29 @@ def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path) -> None:
     match = (
         "hdr.ethernet.dstAddr=00:00:00:00:00:02,"
         "hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,"
-        "hdr.ethernet.etherType=0x88b0..0x88bf"
+        f"hdr.ethernet.etherType={range_value}"
     )
     compiler = P4Compiler(cache_dir=tmp_path / "compiler")
     with Network(topo, compiler=compiler, log_dir=tmp_path / "logs") as net:
         d = CommandDispatcher(net)
-        result = d.dispatch(
-            f"{s1} table add MyIngress.l2_match match: {match} "
-            "action: MyIngress.set_egress_port params: port=2 priority: 17"
-        )
+        client = net.switch(s1).client
+        with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+            result = d.dispatch(
+                f"{s1} table add MyIngress.l2_match match: {match} "
+                "action: MyIngress.set_egress_port params: port=2 priority: 17"
+            )
+            rpc.assert_called_once()
+            entry = rpc.call_args.args[0].updates[0].entity.table_entry
+            assert entry.priority == 17
+            ranges = [field for field in entry.match if field.HasField("range")]
+            assert len(ranges) == (0 if range_value == "0..65535" else 1)
         assert result == "ok"
         dump = d.dispatch(f"{s1} table dump MyIngress.l2_match")
         assert "00:00:00:00:00:00&ff:ff:ff:ff:ff:00" in dump
-        assert "[34992,35007]" in dump
+        if range_value == "0..65535":
+            assert "hdr.ethernet.etherType" not in dump
+        else:
+            assert "[34992,35007]" in dump
         assert "priority: 17" in dump
 
         marker = uuid.uuid4().bytes
@@ -295,13 +306,19 @@ def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path) -> None:
             net.host(h1).exec([sys.executable, "-c", sender_script], timeout=5)
             assert receiver.wait(timeout=7) == 0
         assert received.read_bytes() == frame
-        client = net.switch(s1).client
         with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
             output = d.dispatch(f"{s1} table del MyIngress.l2_match match: {match}")
             assert output.startswith("error: EncodingError:") and "priority" in output
             rpc.assert_not_called()
         assert len(client.list_table_entries("MyIngress.l2_match")) == 1
-        assert d.dispatch(f"{s1} table del MyIngress.l2_match match: {match} priority: 17") == "ok"
+        with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+            assert (
+                d.dispatch(f"{s1} table del MyIngress.l2_match match: {match} priority: 17") == "ok"
+            )
+            rpc.assert_called_once()
+            entry = rpc.call_args.args[0].updates[0].entity.table_entry
+            ranges = [field for field in entry.match if field.HasField("range")]
+            assert len(ranges) == (0 if range_value == "0..65535" else 1)
         assert net.switch(s1).client.list_table_entries("MyIngress.l2_match") == []
 
 

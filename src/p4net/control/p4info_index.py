@@ -208,7 +208,7 @@ class P4InfoIndex:
         table_name: str,
         match: Mapping[str, object],
     ) -> list[Any]:
-        """Build a list of P4Runtime FieldMatch protos for the given table."""
+        """Build FieldMatch protos, omitting wildcards such as full-domain ranges."""
         table = self._tables_by_name.get(table_name)
         if table is None:
             raise NoSuchTableError(f"no table named {table_name!r}")
@@ -250,6 +250,8 @@ class P4InfoIndex:
                 fm.ternary.mask = canonicalize(m)
             elif mt == p4info_pb2.MatchField.RANGE:
                 low, high = parse_range(value, bw)  # type: ignore[arg-type]
+                if int.from_bytes(low, "big") == 0 and int.from_bytes(high, "big") == (1 << bw) - 1:
+                    continue
                 fm.range.low = canonicalize(low)
                 fm.range.high = canonicalize(high)
             elif mt == p4info_pb2.MatchField.OPTIONAL:

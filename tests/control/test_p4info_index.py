@@ -244,6 +244,74 @@ def test_encode_match_range(p4info: p4info_pb2.P4Info) -> None:
     assert fms[0].HasField("range")
 
 
+@pytest.mark.parametrize("bitwidth", [1, 7, 8, 9, 16, 32, 48, 64, 128])
+@pytest.mark.parametrize("representation", ["integer", "hex", "bytes"])
+def test_full_range_is_omitted(
+    p4info: p4info_pb2.P4Info, bitwidth: int, representation: str
+) -> None:
+    table = next(t for t in p4info.tables if t.preamble.name == "MyIngress.range_acl")
+    table.match_fields[0].bitwidth = bitwidth
+    maximum = (1 << bitwidth) - 1
+    value: object = (0, maximum)
+    if representation == "hex":
+        value = ("0x0", hex(maximum))
+    elif representation == "bytes":
+        size = (bitwidth + 7) // 8
+        value = (bytes(size), maximum.to_bytes(size, "big"))
+    index = P4InfoIndex(p4info)
+
+    assert index.encode_match("MyIngress.range_acl", {"hdr.tcp.srcPort": value}) == []
+    assert index.table_requires_priority("MyIngress.range_acl") is True
+
+
+@pytest.mark.parametrize("bitwidth", [1, 9, 16, 128])
+@pytest.mark.parametrize("touches_maximum", [False, True])
+def test_partial_range_is_kept(
+    p4info: p4info_pb2.P4Info, bitwidth: int, touches_maximum: bool
+) -> None:
+    table = next(t for t in p4info.tables if t.preamble.name == "MyIngress.range_acl")
+    table.match_fields[0].bitwidth = bitwidth
+    maximum = (1 << bitwidth) - 1
+    low, high = (1, maximum) if touches_maximum else (0, maximum - 1)
+
+    (field,) = P4InfoIndex(p4info).encode_match(
+        "MyIngress.range_acl", {"hdr.tcp.srcPort": (low, high)}
+    )
+
+    assert field.HasField("range")
+    assert int.from_bytes(field.range.low, "big") == low
+    assert int.from_bytes(field.range.high, "big") == high
+
+
+def test_full_range_preserves_other_match_fields(p4info: p4info_pb2.P4Info) -> None:
+    table = next(t for t in p4info.tables if t.preamble.name == "MyIngress.range_acl")
+    field = table.match_fields.add()
+    field.id = 2
+    field.name = "meta.protocol"
+    field.bitwidth = 8
+    field.match_type = p4info_pb2.MatchField.EXACT
+
+    (encoded,) = P4InfoIndex(p4info).encode_match(
+        "MyIngress.range_acl", {"hdr.tcp.srcPort": (0, 65535), "meta.protocol": 6}
+    )
+
+    assert encoded.field_id == 2
+    assert encoded.HasField("exact") and encoded.exact.value == b"\x06"
+
+
+@pytest.mark.parametrize("bitwidth", [7, 9, 128])
+def test_range_overflow_is_rejected_before_wildcard_check(
+    p4info: p4info_pb2.P4Info, bitwidth: int
+) -> None:
+    table = next(t for t in p4info.tables if t.preamble.name == "MyIngress.range_acl")
+    table.match_fields[0].bitwidth = bitwidth
+    overflow = (1 << bitwidth).to_bytes((bitwidth + 8) // 8, "big")
+    with pytest.raises(EncodingError):
+        P4InfoIndex(p4info).encode_match(
+            "MyIngress.range_acl", {"hdr.tcp.srcPort": (b"\x00", overflow)}
+        )
+
+
 def test_encode_match_optional(p4info: p4info_pb2.P4Info) -> None:
     idx = P4InfoIndex(p4info)
     fms = idx.encode_match("MyIngress.optional_acl", {"hdr.tcp.flags": 0x18})

@@ -224,6 +224,8 @@ ok
 
 各部分可以使用字段支持的值格式，包括十进制或十六进制整数、IP 地址和 MAC 地址。组合值内不加空格，需要空格时用引号包住整个值。
 
+16 位 range 字段可用 `key=0..65535` 匹配全部值。`table dump` 不显示这样的通配字段，表仍需要优先级。
+
 仅含 exact/LPM 字段的表不填写 `priority:`，含 optional、ternary 或 range 字段的表在插入时需要优先级，省略 optional 字段作通配匹配的条目也一样。下面的表按目标 MAC 做 exact 匹配、按源 MAC 做 ternary 匹配，并对 EtherType 做 range 匹配：
 
 ```text
