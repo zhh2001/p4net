@@ -152,7 +152,7 @@ flowchart TB
 
 [快速入门示例](examples/quick-start.md)将两台主机接到同一台交换机的端口 1 和 2，初始化函数设置静态 ARP。使用默认次数和超时调用 `h1.ping(h2)` 时：
 
-1. `RunningHost.ping()` 通过 `ip netns exec h1` 运行 `ping -4 -c 1 -W 2 -w 3 10.0.0.2`。
+1. `RunningHost.ping()` 通过 `ip netns exec h1` 运行 `ping -4 -c 1 -W 2 10.0.0.2`，等待三秒仍未结束时发送中断信号并回收进程。
 2. 主机内核从 `h1-eth0` 发出 ICMP 回显请求，数据包到达对端接口 `s1-eth1`。
 3. BMv2 解析以太网头，P4 入口控制将输入端口 1 对应的输出端口设为 2。
 4. 数据帧从 `s1-eth2` 发出，到达第二台主机命名空间中的 `h2-eth0`。

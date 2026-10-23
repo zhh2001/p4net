@@ -152,7 +152,7 @@ For example, `topology.add_link(h1, s1, delay_a_to_b="200ms")` delays traffic le
 
 The [quick-start example](examples/quick-start.md) connects two hosts to ports 1 and 2 of one switch. Its setup function installs static ARP entries. For `h1.ping(h2)` with the default count and timeout:
 
-1. `RunningHost.ping()` runs `ping -4 -c 1 -W 2 -w 3 10.0.0.2` through `ip netns exec h1`.
+1. `RunningHost.ping()` runs `ping -4 -c 1 -W 2 10.0.0.2` through `ip netns exec h1`, waiting up to three seconds before interrupting the process.
 2. The host kernel sends the ICMP echo request through `h1-eth0` to the peer interface `s1-eth1`.
 3. BMv2 parses the Ethernet header. The P4 ingress control selects output port 2 for input port 1.
 4. The frame leaves through `s1-eth2` and reaches `h2-eth0` in the second host namespace.

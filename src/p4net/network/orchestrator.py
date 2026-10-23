@@ -414,7 +414,7 @@ class Network:
         count: int = 1,
         timeout: float = 2.0,
     ) -> bool:
-        """Run a single ping from `src` to `dst`.
+        """Send at most `count` echo requests from `src` to `dst`.
 
         `src` must resolve to a host in this network. `dst` may be a
         `RunningHost`, the name of a host in this network, or a literal IP

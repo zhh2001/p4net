@@ -585,16 +585,17 @@ def test_ping_resolves_host_names(patched: dict[str, Any], tmp_path: Path) -> No
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     net.start()
     try:
-        # Replace each running host's namespace.exec with a controllable mock.
+        # Replace each running host's namespace.popen with a controllable mock.
         h1 = net.host("h1")
         h2 = net.host("h2")
-        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
-            return_value=MagicMock(returncode=0)
-        )
+        h1.namespace.popen = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+        process = h1.namespace.popen.return_value
+        process.__enter__.return_value = process
+        process.wait.return_value = 0
         # Ping by name → uses h2's primary_ip.
         ok = net.ping("h1", "h2", count=2, timeout=1.0)
         assert ok is True
-        argv = h1.namespace.exec.call_args.args[0]
+        argv = h1.namespace.popen.call_args.args[0]
         assert argv[:6] == ["ping", "-4", "-c", "2", "-W", "1"]
         assert argv[-1] == h2.primary_ip
     finally:
@@ -607,9 +608,10 @@ def test_ping_with_running_host_objects(patched: dict[str, Any], tmp_path: Path)
     try:
         h1 = net.host("h1")
         h2 = net.host("h2")
-        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
-            return_value=MagicMock(returncode=0)
-        )
+        h1.namespace.popen = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+        process = h1.namespace.popen.return_value
+        process.__enter__.return_value = process
+        process.wait.return_value = 0
         assert net.ping(h1, h2) is True
     finally:
         net.stop()
@@ -622,13 +624,14 @@ def test_ping_with_unknown_dst_passes_string_through(
     net.start()
     try:
         h1 = net.host("h1")
-        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
-            return_value=MagicMock(returncode=1)
-        )
+        h1.namespace.popen = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+        process = h1.namespace.popen.return_value
+        process.__enter__.return_value = process
+        process.wait.return_value = 1
         # An IP literal that's not a known host name is passed through.
         result = net.ping("h1", "203.0.113.5")
         assert result is False
-        argv = h1.namespace.exec.call_args.args[0]
+        argv = h1.namespace.popen.call_args.args[0]
         assert argv[-1] == "203.0.113.5"
     finally:
         net.stop()
@@ -640,9 +643,10 @@ def test_pingall_returns_pair_results(patched: dict[str, Any], tmp_path: Path) -
     try:
         for name in ("h1", "h2"):
             h = net.host(name)
-            h.namespace.exec = MagicMock(  # type: ignore[method-assign]
-                return_value=MagicMock(returncode=0)
-            )
+            h.namespace.popen = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+            process = h.namespace.popen.return_value
+            process.__enter__.return_value = process
+            process.wait.return_value = 0
         result = net.pingall()
         assert set(result.keys()) == {("h1", "h2"), ("h2", "h1")}
         assert all(result.values())
@@ -661,9 +665,10 @@ def test_pingall_skips_hosts_without_primary_ip(patched: dict[str, Any], tmp_pat
     net.start()
     try:
         h1 = net.host("h1")
-        h1.namespace.exec = MagicMock(  # type: ignore[method-assign]
-            return_value=MagicMock(returncode=0)
-        )
+        h1.namespace.popen = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+        process = h1.namespace.popen.return_value
+        process.__enter__.return_value = process
+        process.wait.return_value = 0
         result = net.pingall()
         # h2 has no primary_ip, so no pings involving h2 should be issued.
         assert result == {}
@@ -926,20 +931,21 @@ def test_pingall6_skips_v4_only_hosts(patched: dict[str, Any], tmp_path: Path) -
     net = Network(topo, log_dir=tmp_path / "logs")
     net.start()
     try:
-        # Reset every host's namespace.exec so we only count pingall6's calls.
+        # Reset every host's namespace.popen so we only count pingall6's calls.
         for h_name in ("h1", "h2", "h3"):
             h = net.host(h_name)
-            h.namespace.exec = MagicMock(  # type: ignore[method-assign]
-                return_value=MagicMock(returncode=0)
-            )
+            h.namespace.popen = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+            process = h.namespace.popen.return_value
+            process.__enter__.return_value = process
+            process.wait.return_value = 0
         result = net.pingall6()
         # Two ordered pairs over {h1, h2}: (h1,h2) and (h2,h1). h3 absent.
         assert set(result.keys()) == {("h1", "h2"), ("h2", "h1")}
         # Verify a real call: h1 used force_ipv6=True via the `-6` argv flag.
-        argv = net.host("h1").namespace.exec.call_args.args[0]
+        argv = net.host("h1").namespace.popen.call_args.args[0]
         assert "-6" in argv
         # h3 received no pingall6-driven exec.
-        net.host("h3").namespace.exec.assert_not_called()
+        net.host("h3").namespace.popen.assert_not_called()
     finally:
         net.stop()
 

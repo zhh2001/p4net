@@ -11,6 +11,7 @@ Run with:
 from __future__ import annotations
 
 import socket
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -73,6 +74,17 @@ def _seed_nd(host: object, target_ip6: str, target_mac: str, iface: str) -> None
             "permanent",
         ]
     )
+
+    deadline = time.monotonic() + 5
+    while True:
+        state = host.exec(  # type: ignore[attr-defined]
+            ["ip", "-6", "addr", "show", "dev", iface], capture_output=True
+        ).stdout
+        assert b"dadfailed" not in state
+        if b"tentative" not in state:
+            break
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
 
 
 # Shared bring-up for the IPv6 LPM cases.

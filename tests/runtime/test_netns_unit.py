@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import signal
 import subprocess
+import sys
+import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -272,3 +276,37 @@ def test_nsprocess_del_does_not_raise() -> None:
     np = NSProcess(fake)
     # Trigger __del__ explicitly; it must not raise.
     np.__del__()
+
+
+def test_nsprocess_communicate_retains_output_after_timeout(tmp_path: Path) -> None:
+    ready = tmp_path / "ready"
+    script = (
+        "import signal, sys, time\n"
+        "from pathlib import Path\n"
+        "signal.signal(signal.SIGINT, lambda *_: sys.exit(0))\n"
+        f"Path({str(ready)!r}).touch()\n"
+        "sys.stdin.buffer.read()\n"
+        "sys.stdout.buffer.write(b'x' * 131072); sys.stdout.flush()\n"
+        "sys.stderr.buffer.write(b'y' * 131072); sys.stderr.flush()\n"
+        "while True: time.sleep(1)\n"
+    )
+    with NSProcess(
+        subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    ) as process:
+        deadline = time.monotonic() + 5
+        while not ready.exists():
+            assert time.monotonic() < deadline and process.poll() is None
+            time.sleep(0.01)
+        with pytest.raises(subprocess.TimeoutExpired):
+            process.communicate(input=b"input", timeout=0.2)
+        assert process.poll() is None
+        process.send_signal(signal.SIGINT)
+        stdout, stderr = process.communicate(timeout=5)
+        assert stdout == b"x" * 131072
+        assert stderr == b"y" * 131072
+        assert process.wait() == 0

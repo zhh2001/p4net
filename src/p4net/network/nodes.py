@@ -10,6 +10,7 @@ orchestrator's internals.
 from __future__ import annotations
 
 import math
+import signal
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -134,10 +135,11 @@ class RunningHost:
         timeout: float = 2.0,
         force_ipv6: bool = False,
     ) -> bool:
-        """Run ``ping`` and return whether at least one reply arrived.
+        """Send at most ``count`` echo requests; return True if any reply arrived.
 
         ``timeout`` is passed to ``ping -W`` in seconds, including fractions.
-        The overall deadline also covers the default one-second send interval.
+        A process timeout covers the default one-second send interval and stops
+        ping with SIGINT so replies already received still count as success.
 
         Auto-selects IPv4 vs IPv6 based on the target string (``:`` → IPv6),
         or pass ``force_ipv6=True`` to force the IPv6 path. When ``dst`` is a
@@ -154,13 +156,9 @@ class RunningHost:
         else:
             target = dst
         is_v6 = force_ipv6 or ":" in target
-        # `-W` is a per-reply timeout. `-w` enforces an overall deadline so
-        # the command terminates even when every echo request goes unanswered
-        # (e.g. under 100%-loss netem); without it iputils-ping can hang
-        # indefinitely waiting for the last reply.
         probes = int(count)
         deadline = math.ceil(max(probes * timeout, probes - 1 + timeout)) + 1
-        result = self._namespace.exec(
+        with self._namespace.popen(
             [
                 "ping",
                 "-6" if is_v6 else "-4",
@@ -168,14 +166,21 @@ class RunningHost:
                 str(probes),
                 "-W",
                 str(timeout).removesuffix(".0"),
-                "-w",
-                str(deadline),
                 target,
             ],
-            capture_output=True,
-            check=False,
-        )
-        return result.returncode == 0
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ) as process:
+            try:
+                process.communicate(timeout=deadline)
+            except subprocess.TimeoutExpired:
+                process.send_signal(signal.SIGINT)
+                try:
+                    process.communicate(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+            return process.wait() == 0
 
     def __repr__(self) -> str:
         return f"RunningHost(name={self.name!r}, primary_ip={self.primary_ip!r})"

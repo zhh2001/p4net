@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import signal
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from p4net.network import NetworkError, RunningHost, RunningSwitch
+from p4net.runtime import NSProcess
 from p4net.topo import Host, P4Switch
 
 # ---------------------------------------------------------------------------
@@ -16,11 +18,22 @@ from p4net.topo import Host, P4Switch
 # ---------------------------------------------------------------------------
 
 
+def _ping_process(host: RunningHost, returncode: int = 0) -> MagicMock:
+    process = MagicMock(spec=NSProcess)
+    process.__enter__.return_value = process
+    process.wait.return_value = returncode
+    process.poll.return_value = returncode
+    host.namespace.popen = MagicMock(return_value=process)  # type: ignore[method-assign]
+    return process
+
+
 def _make_host(name: str = "h1", **kwargs: object) -> RunningHost:
     h = Host(name=name, **kwargs)  # type: ignore[arg-type]
     ns = MagicMock(name="NetworkNamespace")
     ifaces = {"h1-eth0": "10.0.0.1/24"}
-    return RunningHost(h, ns, ifaces)
+    host = RunningHost(h, ns, ifaces)
+    _ping_process(host)
+    return host
 
 
 def test_running_host_basic_properties() -> None:
@@ -66,15 +79,10 @@ def test_running_host_popen_delegates_to_namespace() -> None:
 
 def test_running_host_ping_string_returns_true_on_zero_rc() -> None:
     rh = _make_host()
-    rh.namespace.exec = MagicMock(  # type: ignore[method-assign]
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-    )
     assert rh.ping("10.0.0.2", count=1, timeout=2.0) is True
-    argv = rh.namespace.exec.call_args.args[0]
-    # `-4` selects IPv4 explicitly. `-w` (overall deadline) is appended so
-    # ping doesn't hang under heavy loss.
+    argv = rh.namespace.popen.call_args.args[0]
     assert argv[:6] == ["ping", "-4", "-c", "1", "-W", "2"]
-    assert "-w" in argv
+    assert "-w" not in argv
     assert argv[-1] == "10.0.0.2"
 
 
@@ -83,7 +91,7 @@ def test_running_host_ping_string_returns_true_on_zero_rc() -> None:
 def test_running_host_ping_preserves_fractional_timeout(target: str, timeout: float) -> None:
     rh = _make_host()
     rh.ping(target, timeout=timeout)
-    argv = rh.namespace.exec.call_args.args[0]
+    argv = rh.namespace.popen.call_args.args[0]
     assert float(argv[argv.index("-W") + 1]) == timeout
 
 
@@ -96,17 +104,38 @@ def test_running_host_ping_deadline_covers_probes(
 ) -> None:
     rh = _make_host()
     rh.ping("10.0.0.2", count=count, timeout=timeout)
-    argv = rh.namespace.exec.call_args.args[0]
-    deadline = int(argv[argv.index("-w") + 1])
+    deadline = rh.namespace.popen.return_value.communicate.call_args.kwargs["timeout"]
     assert minimum_deadline < deadline < minimum_deadline + 2
 
 
 def test_running_host_ping_returns_false_on_nonzero_rc() -> None:
     rh = _make_host()
-    rh.namespace.exec = MagicMock(  # type: ignore[method-assign]
-        return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout=b"", stderr=b"")
-    )
+    _ping_process(rh, 1)
     assert rh.ping("10.0.0.99") is False
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_running_host_ping_timeout_preserves_reply_result(returncode: int) -> None:
+    host = _make_host()
+    process = _ping_process(host, returncode)
+    process.communicate.side_effect = [subprocess.TimeoutExpired("ping", 3), (b"", b"")]
+    assert host.ping("10.0.0.2") is (returncode == 0)
+    process.send_signal.assert_called_once_with(signal.SIGINT)
+    process.kill.assert_not_called()
+
+
+def test_running_host_ping_kills_unresponsive_process() -> None:
+    host = _make_host()
+    process = _ping_process(host, -signal.SIGKILL)
+    process.communicate.side_effect = [
+        subprocess.TimeoutExpired("ping", 3),
+        subprocess.TimeoutExpired("ping", 1),
+        (b"", b""),
+    ]
+    assert host.ping("10.0.0.2") is False
+    process.send_signal.assert_called_once_with(signal.SIGINT)
+    process.kill.assert_called_once()
+    assert process.communicate.call_count == 3
 
 
 def test_running_host_ping_other_host_uses_primary_ip() -> None:
@@ -114,11 +143,8 @@ def test_running_host_ping_other_host_uses_primary_ip() -> None:
     rh2 = _make_host("h2")
     # Make h2's primary_ip differ from h1's so we can verify it.
     rh2._interfaces["h1-eth0"] = "10.0.0.2/24"
-    rh1.namespace.exec = MagicMock(  # type: ignore[method-assign]
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-    )
     rh1.ping(rh2)
-    argv = rh1.namespace.exec.call_args.args[0]
+    argv = rh1.namespace.popen.call_args.args[0]
     assert argv[-1] == "10.0.0.2"
 
 

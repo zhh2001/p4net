@@ -168,7 +168,8 @@ class NSProcess:
     """A process running inside a `NetworkNamespace`.
 
     Wraps a regular `subprocess.Popen` returned by `NetworkNamespace.popen`.
-    The forwarded API (`pid`, `poll`, `wait`, `terminate`, `kill`) mirrors
+    The forwarded API (`pid`, `poll`, `wait`, `communicate`, `send_signal`,
+    `terminate`, `kill`) mirrors
     `subprocess.Popen`. `close()` is preserved as a no-op so callers from
     earlier phases keep working unchanged: there is no namespace-side
     handle to release because the wrapped process is a regular child of
@@ -192,6 +193,17 @@ class NSProcess:
     def wait(self, timeout: float | None = None) -> int:
         """Block until the child exits and return its exit code."""
         return int(self._popen.wait(timeout=timeout))
+
+    def communicate(
+        self, input: bytes | None = None, timeout: float | None = None
+    ) -> tuple[bytes | None, bytes | None]:
+        """Read captured output and wait; a timeout leaves the process running."""
+        stdout, stderr = self._popen.communicate(input=input, timeout=timeout)
+        return stdout, stderr
+
+    def send_signal(self, signum: int) -> None:
+        """Send a signal to the child process."""
+        self._popen.send_signal(signum)
 
     def terminate(self) -> None:
         """Send ``SIGTERM`` to the child."""
