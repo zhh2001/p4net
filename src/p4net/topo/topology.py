@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from p4net._ifname import _validate_ifname
 from p4net.topo.exceptions import TopologyError
 from p4net.topo.host import Host
 from p4net.topo.link import Link, LinkEndpoint, _validate_port_number
@@ -20,7 +21,6 @@ from p4net.topo.switch import P4Switch
 NodeRef = str | Host | P4Switch
 NodeKind = Host | P4Switch
 
-_IFNAME_MAX_LEN = 15
 _BASE_GRPC_PORT = 50051
 _BASE_THRIFT_PORT = 9090
 _SWITCH_PORT_MAX = 510
@@ -309,14 +309,11 @@ class Topology:
         port_b_val = self._auto_port(node_b, port_b)
         iface_a = _iface_name(node_a.name, port_a_val)
         iface_b = _iface_name(node_b.name, port_b_val)
-        if len(iface_a) > _IFNAME_MAX_LEN:
-            raise TopologyError(
-                f"interface name {iface_a!r} exceeds {_IFNAME_MAX_LEN} chars; shorten the node name"
-            )
-        if len(iface_b) > _IFNAME_MAX_LEN:
-            raise TopologyError(
-                f"interface name {iface_b!r} exceeds {_IFNAME_MAX_LEN} chars; shorten the node name"
-            )
+        for name in (iface_a, iface_b):
+            try:
+                _validate_ifname(name)
+            except ValueError as exc:
+                raise TopologyError(f"{exc}; shorten the node name") from exc
         if ip_a is not None and isinstance(node_a, P4Switch):
             raise TopologyError(
                 "P4 switch data ports do not carry IP addresses; remove ip_a from the add_link call"
@@ -474,18 +471,18 @@ class Topology:
                 else:
                     port_owners[port] = (sw.name, field_name)
 
-        # 5. Interface names are assigned and within Linux's length limit.
+        # 5. Interface names are assigned and valid for the runtime.
         for i, link in enumerate(self._links):
             for which, ep in (("a", link.a), ("b", link.b)):
                 if ep.iface_name is None or ep.iface_name == "":
                     errors.append(
                         f"link[{i}] endpoint {which} ({ep.node!r}) has no assigned interface name"
                     )
-                elif len(ep.iface_name) > _IFNAME_MAX_LEN:
-                    errors.append(
-                        f"link[{i}] endpoint {which}: interface name "
-                        f"{ep.iface_name!r} exceeds {_IFNAME_MAX_LEN} chars"
-                    )
+                    continue
+                try:
+                    _validate_ifname(ep.iface_name)
+                except ValueError as exc:
+                    errors.append(f"link[{i}] endpoint {which} ({ep.node!r}): {exc}")
 
         # 6. No two hosts share an IP within the same IPv4Network.
         # Collect (node_name, IPv4Interface) from host primary IPs and link

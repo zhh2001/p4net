@@ -46,7 +46,7 @@ These objects manage individual resources. `Network` determines their creation a
 
 `Host`, `P4Switch`, `LinkEndpoint`, and `Link` are frozen data classes. They describe addresses, switch configuration, link endpoints, and impairments. `Topology` is a mutable builder that collects these descriptions, validates them, serializes them, and exports Graphviz diagrams. Building a description creates no network resources.
 
-Host ports are assigned from 0, switch ports from 1. Automatic allocation skips the switch's configured CPU port, which is reserved for controller traffic. Assigning it explicitly to a link reports a `TopologyError`; `Topology.validate()` also rejects this conflict in imported topologies. Generated interface names have the form `<node>-eth<port>`. Names longer than Linux's 15-character limit are rejected.
+Host ports are assigned from 0, switch ports from 1. Automatic allocation skips the switch's configured CPU port, which is reserved for controller traffic. Assigning it explicitly to a link reports a `TopologyError`; `Topology.validate()` also rejects this conflict in imported topologies. Generated interface names have the form `<node>-eth<port>`. Names longer than Linux's 15-byte limit are rejected.
 
 Port numbers must be `int` values, excluding `bool`. Host ports must be non-negative. Switch data ports range from `0` to `510`, and CPU ports from `1` to `510`. Switch port `0` remains available through explicit assignment. Automatic switch allocation uses ports `1..510`, skips the CPU port, and reports a `TopologyError` when exhausted. Invalid port values are rejected without converting strings or floats. Imported switch data ports are also checked by `Topology.validate()`.
 
@@ -55,6 +55,8 @@ Switch `device_id`, `grpc_port` and `thrift_port` also require `int` values, exc
 `Topology.from_dict()` restores endpoint ports as stored. If an endpoint's `port` is omitted or `None`, `Topology.validate()` reports a `TopologyError` naming the link, endpoint and node. Network startup performs this check before compilation or network resource creation. Explicit port `0` is valid.
 
 `Topology.from_dict()` also restores interface names as stored. `Topology.validate()` rejects a missing, `None` or empty `iface_name`, identifying the link, endpoint and node. Valid custom names are preserved.
+
+Topology and runtime code use the same interface-name checks. Names must be UTF-8 strings of at most 15 bytes, cannot be `.` or `..`, and cannot contain whitespace, `/`, `:` or NUL. Invalid names report a `TopologyError` during topology validation or a `ValueError` when constructing a `VethPair`. For example, `界界界界界` uses 15 bytes and passes name validation; adding another `界` exceeds the limit.
 
 Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 

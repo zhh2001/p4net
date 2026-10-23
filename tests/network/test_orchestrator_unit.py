@@ -135,6 +135,31 @@ def test_imported_unassigned_interface_name_rejected_before_runtime_resources(
         network.stop()
 
 
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize(
+    "name", [0, [], "bad/name", "bad:name", "bad name", ".", "nul\0tail", "界" * 6, "\ud800"]
+)
+def test_invalid_interface_name_rejected_before_runtime_resources(
+    patched: dict[str, Any], tmp_path: Path, side: str, name: Any
+) -> None:
+    data = _make_simple_topology().to_dict()
+    data["links"][0][side]["iface_name"] = name
+    topo = Topology.from_dict(data)
+    before = topo.to_dict()
+    logs, pcaps = tmp_path / "logs", tmp_path / "pcaps"
+    network = Network(topo, log_dir=logs, pcap_dir=pcaps)
+    try:
+        with pytest.raises(TopologyError, match="interface name"):
+            network.start()
+        for factory in ("ns_factory", "veth_factory", "bmv2_factory", "client_factory"):
+            patched[factory].assert_not_called()
+        patched["compiler"].compile.assert_not_called()
+        assert not logs.exists() and not pcaps.exists()
+        assert topo.to_dict() == before
+    finally:
+        network.stop()
+
+
 @pytest.fixture
 def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
     """Patch every primitive Network calls; return a dict of MagicMocks."""

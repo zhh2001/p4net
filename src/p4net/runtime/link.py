@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from pyroute2 import IPRoute, NetNS
 
+from p4net._ifname import _validate_ifname
 from p4net.runtime.exceptions import LinkError
 from p4net.runtime.netns import NetworkNamespace
 
@@ -26,23 +27,9 @@ logger = logging.getLogger(__name__)
 
 Side = Literal["a", "b"]
 _SIDES: tuple[Side, ...] = ("a", "b")
-_IFNAME_MAX_LEN = 15
 _MTU_MIN = 68
 _MTU_MAX = 65535
 _MAC_RE = re.compile(r"^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$")
-
-
-def _validate_ifname(name: str) -> None:
-    if not isinstance(name, str):
-        raise ValueError("interface name must be a string")
-    if not name:
-        raise ValueError("interface name must be non-empty")
-    if any(ch.isspace() for ch in name):
-        raise ValueError("interface name must not contain whitespace")
-    if "/" in name:
-        raise ValueError("interface name must not contain '/'")
-    if len(name) > _IFNAME_MAX_LEN:
-        raise ValueError(f"interface name longer than {_IFNAME_MAX_LEN} characters: {name!r}")
 
 
 def _validate_side(side: str) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,9 +13,28 @@ from p4net.runtime import LinkError, NetworkNamespace, VethPair
 
 @pytest.mark.parametrize(
     "bad_name",
-    ["", " ", "has space", "has\ttab", "with/slash", "x" * 16],
+    [
+        "",
+        " ",
+        "has space",
+        "has\ttab",
+        "with/slash",
+        "x" * 16,
+        False,
+        0,
+        1.5,
+        [],
+        {},
+        b"eth0",
+        ".",
+        "..",
+        "with:colon",
+        "nul\0tail",
+        "界" * 6,
+        "\ud800",
+    ],
 )
-def test_invalid_ifname_rejected(bad_name: str) -> None:
+def test_invalid_ifname_rejected(bad_name: Any) -> None:
     with pytest.raises(ValueError):
         VethPair(bad_name, "vb")
     with pytest.raises(ValueError):
@@ -24,6 +44,14 @@ def test_invalid_ifname_rejected(bad_name: str) -> None:
 def test_same_names_rejected() -> None:
     with pytest.raises(ValueError):
         VethPair("v0", "v0")
+
+
+@pytest.mark.parametrize("name", ["v", "x" * 15, "界" * 5, "名" + "x" * 12])
+def test_valid_interface_names_preserved(name: str) -> None:
+    first = VethPair(name, "peer")
+    second = VethPair("peer", name)
+    assert first.name_a == name
+    assert second.name_b == name
 
 
 def test_construct_valid() -> None:

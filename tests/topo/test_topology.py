@@ -371,7 +371,7 @@ def test_iface_name_too_long_rejected() -> None:
     t.add_host("h1")
     t.add_switch("longswitch12", Path("p.p4"))  # 12 chars
     # "longswitch12-eth100" = 19 chars > 15
-    with pytest.raises(TopologyError, match="exceeds 15 chars"):
+    with pytest.raises(TopologyError, match="exceeds 15 bytes"):
         t.add_link("h1", "longswitch12", port_b=100)
 
 
@@ -613,7 +613,7 @@ def test_validate_iface_name_too_long_in_existing_link() -> None:
             b=LinkEndpoint(node="s1", port=1, iface_name="s1-eth1"),
         )
     )
-    with pytest.raises(TopologyError, match="exceeds 15 chars"):
+    with pytest.raises(TopologyError, match="exceeds 15 bytes"):
         t.validate()
 
 
@@ -949,6 +949,89 @@ def test_imported_custom_interface_names_are_preserved(reverse: bool) -> None:
     imported.validate()
     assert imported.to_dict() == data
     assert (imported.links[0].a.port, imported.links[0].b.port) == (0, 0)
+
+
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize("source", ["dictionary", "direct"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        False,
+        0,
+        1.5,
+        [],
+        {},
+        b"eth0",
+        ".",
+        "..",
+        "bad/name",
+        "bad:name",
+        "bad name",
+        "bad\tname",
+        "bad\nname",
+        "nul\0tail",
+        "界" * 6,
+        "\ud800",
+    ],
+)
+def test_invalid_interface_name_rejected_with_endpoint_context(
+    name: Any, side: str, source: str
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    link = topo.add_link("h1", "s1")
+    if source == "dictionary":
+        data = topo.to_dict()
+        data["links"][0][side]["iface_name"] = name
+        original = deepcopy(data)
+        topo = Topology.from_dict(data)
+        assert data == original
+    else:
+        ep = getattr(link, side)
+        invalid = LinkEndpoint(node=ep.node, port=ep.port, iface_name=name)
+        topo._links[0] = Link(a=invalid, b=link.b) if side == "a" else Link(a=link.a, b=invalid)
+    before = topo.to_dict()
+    node = "h1" if side == "a" else "s1"
+    with pytest.raises(TopologyError) as excinfo:
+        topo.validate()
+    message = str(excinfo.value)
+    assert f"link[0] endpoint {side}" in message
+    assert node in message and "interface name" in message
+    assert topo.to_dict() == before
+
+
+def test_validate_aggregates_invalid_interface_names() -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    topo.add_link("s1", "h2")
+    data = topo.to_dict()
+    for link, names in zip(data["links"], ((42, []), ("bad/name", "bad:name")), strict=True):
+        link["a"]["iface_name"], link["b"]["iface_name"] = names
+    restored = Topology.from_dict(data)
+    with pytest.raises(TopologyError) as excinfo:
+        restored.validate()
+    for index in (0, 1):
+        for side in ("a", "b"):
+            assert f"link[{index}] endpoint {side}" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize("name", ["界" * 5, "名" + "x" * 12])
+def test_imported_utf8_interface_names_are_preserved(name: str, side: str) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1", port_a=0, port_b=0)
+    data = topo.to_dict()
+    data["links"][0][side]["iface_name"] = name
+    assert len(name.encode("utf-8")) == 15
+    restored = Topology.from_dict(data)
+    restored.validate()
+    assert restored.to_dict() == data
 
 
 def test_links_property_returns_immutable_view() -> None:
