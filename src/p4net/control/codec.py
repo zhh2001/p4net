@@ -154,11 +154,19 @@ def parse_range(
     value: tuple[Any, Any],
     bitwidth: int,
 ) -> tuple[bytes, bytes]:
-    """Accept (low, high). Returns (encoded_low, encoded_high)."""
+    """Encode inclusive (low, high) bounds with low <= high.
+
+    Raises:
+        EncodingError: If an endpoint is invalid or the lower bound exceeds the upper.
+    """
     if not (isinstance(value, tuple) and len(value) == 2):
         raise EncodingError(f"range value must be a 2-tuple of (low, high), got {value!r}")
     low, high = value
-    return encode_value(low, bitwidth), encode_value(high, bitwidth)
+    enc_low = encode_value(low, bitwidth)
+    enc_high = encode_value(high, bitwidth)
+    if int.from_bytes(enc_low, "big") > int.from_bytes(enc_high, "big"):
+        raise EncodingError("range lower bound must not exceed upper bound")
+    return enc_low, enc_high
 
 
 def canonicalize(data: bytes) -> bytes:

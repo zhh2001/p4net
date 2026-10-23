@@ -329,6 +329,57 @@ def test_parse_range_rejects_non_tuple() -> None:
         parse_range([10, 20], 8)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    ("value", "bitwidth"),
+    [
+        ((1, 0), 1),
+        ((256, 255), 9),
+        ((65535, 0), 16),
+        (((1 << 128) - 1, 0), 128),
+        (("100", "20"), 16),
+        (("0x100", "0xff"), 16),
+        ((b"\x01\x00", b"\xff"), 16),
+        ((b"\x00\x02", b"\x01"), 16),
+        ((256, "0xff"), 16),
+        (("10.0.1.0", "10.0.0.255"), 32),
+        (("00:00:00:00:01:00", "00:00:00:00:00:ff"), 48),
+        (("::100", "::ff"), 128),
+    ],
+)
+def test_parse_range_rejects_reversed_bounds(value: tuple[object, object], bitwidth: int) -> None:
+    with pytest.raises(EncodingError, match=r"lower bound.*upper bound"):
+        parse_range(value, bitwidth)
+
+
+@pytest.mark.parametrize(
+    ("value", "bitwidth", "expected"),
+    [
+        ((0, 0), 1, (0, 0)),
+        ((511, 511), 9, (511, 511)),
+        (((1 << 128) - 1, (1 << 128) - 1), 128, ((1 << 128) - 1, (1 << 128) - 1)),
+        ((0, 1), 1, (0, 1)),
+        ((255, 256), 9, (255, 256)),
+        (("20", "100"), 16, (20, 100)),
+        (("0xff", "0x100"), 16, (255, 256)),
+        ((b"\xff", b"\x01\x00"), 16, (255, 256)),
+        ((b"\x01", b"\x00\x01"), 16, (1, 1)),
+        (("255", 256), 16, (255, 256)),
+        (("10.0.0.255", "10.0.1.0"), 32, (0x0A0000FF, 0x0A000100)),
+        (("00:00:00:00:00:ff", "00:00:00:00:01:00"), 48, (255, 256)),
+        (("::ff", "::100"), 128, (255, 256)),
+    ],
+)
+def test_parse_range_compares_numeric_bounds(
+    value: tuple[object, object], bitwidth: int, expected: tuple[int, int]
+) -> None:
+    encoded = parse_range(value, bitwidth)
+    assert tuple(int.from_bytes(bound, "big") for bound in encoded) == expected
+
+
+def test_parse_range_preserves_encoded_byte_widths() -> None:
+    assert parse_range((b"\x01", b"\x00\x02"), 16) == (b"\x01", b"\x00\x02")
+
+
 # ---------------------------------------------------------------------------
 # canonicalize
 # ---------------------------------------------------------------------------

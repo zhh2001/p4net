@@ -1,4 +1,4 @@
-"""Full-domain RANGE keys use wildcard encoding in real BMv2 operations."""
+"""RANGE encoding and validation with real BMv2 table operations."""
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ from unittest.mock import patch
 import pytest
 
 from p4net import Network
+from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
-from p4net.control import AsyncP4RuntimeClient
+from p4net.control import AsyncP4RuntimeClient, EncodingError
 from p4net.topo import Topology
 
 pytestmark = [
@@ -129,6 +130,86 @@ async def test_full_range_crud_and_forwarding(network: Network, client_kind: str
         assert set(remaining["match"]) == {"hdr.ethernet.dstAddr"}
         assert int.from_bytes(remaining["match"]["hdr.ethernet.dstAddr"], "big") == 1
         await write("delete", reverse)
+        assert await read() == []
+    finally:
+        if client_kind == "async":
+            await client.disconnect()
+
+
+@pytest.mark.parametrize("client_kind", ["sync", "async"])
+async def test_reversed_range_never_writes(network: Network, client_kind: str) -> None:
+    switch = next(iter(network.switches.values()))
+    sync = switch.client
+    client = (
+        AsyncP4RuntimeClient(
+            grpc_address=("127.0.0.1", switch.descriptor.grpc_port),
+            device_id=switch.descriptor.device_id,
+            info_index=sync.index,
+            election_id=(sync.election_id[0] + 1, 0),
+        )
+        if client_kind == "async"
+        else sync
+    )
+    if client_kind == "async":
+        await client.connect()
+
+    async def write(operation: str, *args: Any, **kwargs: Any) -> None:
+        result = getattr(client, f"{operation}_table_entry")(_TABLE, *args, **kwargs)
+        if client_kind == "async":
+            await result
+
+    async def read() -> list[dict[str, Any]]:
+        if client_kind == "async":
+            return [entry async for entry in client.list_table_entries(_TABLE)]
+        return client.list_table_entries(_TABLE)
+
+    forward = {
+        "hdr.ethernet.dstAddr": "00:00:00:00:00:02",
+        "hdr.ethernet.srcAddr": (0, 0),
+        "hdr.ethernet.etherType": (0, 65535),
+    }
+    reverse = dict(forward, **{"hdr.ethernet.dstAddr": "00:00:00:00:00:01"})
+    invalid = dict(forward, **{"hdr.ethernet.etherType": (0x900, 0x800)})
+    singleton = dict(forward, **{"hdr.ethernet.etherType": (0x800, 0x800)})
+    try:
+        await write("insert", forward, _ACTION, {"port": 2}, priority=17)
+        await write("insert", reverse, _ACTION, {"port": 1}, priority=17)
+        assert all(network.pingall().values())
+
+        def entry_key(entry: dict[str, Any]) -> bytes:
+            return entry["match"]["hdr.ethernet.dstAddr"]
+
+        before = sorted(await read(), key=entry_key)
+        for operation in ("insert", "modify", "delete"):
+            args = (invalid,) if operation == "delete" else (invalid, _ACTION, {"port": 2})
+            with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+                with pytest.raises(EncodingError, match=r"lower bound.*upper bound"):
+                    await write(operation, *args, priority=17)
+                rpc.assert_not_called()
+        if client_kind == "sync":
+            cli = CommandDispatcher(network)
+            for operation in ("add", "del"):
+                command = (
+                    f"{switch.name} table {operation} {_TABLE} match: "
+                    "hdr.ethernet.dstAddr=00:00:00:00:00:02,"
+                    "hdr.ethernet.srcAddr=0&&&0,hdr.ethernet.etherType=0x900..0x800 "
+                )
+                if operation == "add":
+                    command += f"action: {_ACTION} params: port=2 "
+                with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+                    output = cli.dispatch(command + "priority: 17")
+                    assert output.startswith("error: EncodingError:") and "upper bound" in output
+                    rpc.assert_not_called()
+        assert sorted(await read(), key=entry_key) == before
+        assert all(network.pingall().values())
+
+        await write("insert", singleton, _ACTION, {"port": 2}, priority=18)
+        (entry,) = [entry for entry in await read() if entry["priority"] == 18]
+        assert entry["match"]["hdr.ethernet.etherType"] == (b"\x08\x00", b"\x08\x00")
+        assert all(network.pingall().values())
+        await write("delete", singleton, priority=18)
+        await write("delete", forward, priority=17)
+        await write("delete", reverse, priority=17)
         assert await read() == []
     finally:
         if client_kind == "async":

@@ -224,6 +224,8 @@ Match values follow the field types in the target switch's P4Info:
 
 Each component accepts the field's supported value formats, including decimal or hexadecimal integers, IP addresses, and MAC addresses. Write composite values without spaces, or quote the whole value when including spaces.
 
+Range bounds must satisfy `low <= high`. Equal bounds match one value. Reversed bounds report an `EncodingError`.
+
 For a 16-bit range field, `key=0..65535` matches every value. Such wildcard fields are omitted from entries shown by `table dump`; the table still requires a priority.
 
 For exact/LPM-only tables, omit `priority:`. Tables with optional, ternary or range keys require it when inserting entries, including entries that omit an optional field as a wildcard. For a table with an exact destination MAC, a ternary source MAC, and a range of EtherTypes:
