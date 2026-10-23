@@ -84,7 +84,8 @@ See the [control-plane API](api/control.md).
 6. Add configured IPv4 and IPv6 default routes.
 7. Start each BMv2 switch and wait for that process to own its gRPC and Thrift listeners before starting the next switch.
 8. Connect one synchronous P4Runtime client per switch and install its pipeline.
-9. Create the `RunningHost` and `RunningSwitch` handles exposed by `host()`, `switch()`, `hosts`, and `switches`.
+9. Wait for configured IPv6 addresses to finish duplicate address detection, with a five-second budget shared by all hosts. A duplicate address or an expired wait fails startup.
+10. Create the `RunningHost` and `RunningSwitch` handles exposed by `host()`, `switch()`, `hosts`, and `switches`.
 
 A failed startup rolls back the resources already created. `await net.astart()` registers cleanup on the calling thread before submitting the startup work to a worker thread. Use the main thread's event loop for automatic signal handling. Cancelling startup waits for the worker and cleanup before propagating cancellation. A concurrent shutdown waits for startup before releasing resources.
 

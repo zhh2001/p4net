@@ -220,23 +220,6 @@ def test_fractional_ping_timeout_preserves_probe_count(tmp_path: Path, ipv6: boo
                     "permanent",
                 ]
             )
-        if ipv6:
-            for name in (h1, h2):
-                deadline = time.monotonic() + 5
-                while True:
-                    state = (
-                        net.host(name)
-                        .exec(
-                            ["ip", "-6", "addr", "show", "dev", f"{name}-eth0"],
-                            capture_output=True,
-                        )
-                        .stdout
-                    )
-                    assert b"dadfailed" not in state
-                    if b"tentative" not in state:
-                        break
-                    assert time.monotonic() < deadline
-                    time.sleep(0.02)
         assert net.ping(h1, addresses[1], count=3, timeout=0.25) is True
         verb = "ping6" if ipv6 else "ping"
         assert CommandDispatcher(net).dispatch(f"{h2} {verb} {h1} 3 0.25") == "OK"

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
 import signal
+import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, call
 
@@ -58,6 +63,21 @@ def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
         m = MagicMock(name=f"ns-{name}")
         m.name = name
         m.exists = True
+        addresses: dict[str, str] = {}
+
+        def execute(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            if argv[:4] == ["ip", "-6", "addr", "add"]:
+                addresses[argv[-1]] = str(ipaddress.IPv6Interface(argv[4]).ip)
+            data = [
+                {"ifname": iface, "addr_info": [{"local": address}]}
+                for iface, address in addresses.items()
+            ]
+            output = (
+                json.dumps(data).encode() if argv == ["ip", "-j", "-6", "addr", "show"] else b""
+            )
+            return subprocess.CompletedProcess(argv, 0, stdout=output, stderr=b"")
+
+        m.exec.side_effect = execute
         return m
 
     ns_factory.side_effect = make_ns
@@ -1588,3 +1608,207 @@ async def test_duplicate_astart_preserves_running_network(
             bmv2.stop.assert_not_called()
     finally:
         await net.astop()
+
+
+_IPV6_QUERY = ["ip", "-j", "-6", "addr", "show"]
+
+
+def _mock_ipv6_status(patched: dict[str, Any], query: Any) -> None:
+    make_ns = patched["ns_factory"].side_effect
+
+    def make_status_ns(name: str) -> MagicMock:
+        namespace = make_ns(name)
+        execute = namespace.exec.side_effect
+
+        def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            if argv == _IPV6_QUERY:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout=json.dumps(query(name)).encode(), stderr=b""
+                )
+            return execute(argv, **kwargs)
+
+        namespace.exec.side_effect = run
+        return namespace
+
+    patched["ns_factory"].side_effect = make_status_ns
+
+
+def _ipv6_state(host: str = "h1", address: str = "fd00::1", **flags: bool) -> list[dict[str, Any]]:
+    return [{"ifname": f"{host}-eth0", "addr_info": [{"local": address, **flags}]}]
+
+
+def _mock_ipv6_clock(mocker: MockerFixture) -> SimpleNamespace:
+    now = [0.0]
+
+    def advance(seconds: float) -> None:
+        now[0] += seconds
+
+    clock = SimpleNamespace(
+        monotonic=lambda: now[0], sleep=MagicMock(side_effect=advance), time_ns=time.time_ns
+    )
+    mocker.patch("p4net.network.orchestrator.time", clock)
+    return clock
+
+
+def test_ipv4_start_skips_ipv6_status(patched: dict[str, Any], mocker: MockerFixture) -> None:
+    clock = _mock_ipv6_clock(mocker)
+    query = MagicMock(side_effect=AssertionError("IPv4 startup queried IPv6"))
+    _mock_ipv6_status(patched, query)
+    with Network(_make_simple_topology()):
+        query.assert_not_called()
+        clock.sleep.assert_not_called()
+
+
+def test_start_waits_for_address_after_pipeline_setup(
+    patched: dict[str, Any], mocker: MockerFixture
+) -> None:
+    clock = _mock_ipv6_clock(mocker)
+    states = iter([[], _ipv6_state(tentative=True), _ipv6_state()])
+    network = Network(_make_v6_only_topology())
+
+    def query(name: str) -> list[dict[str, Any]]:
+        assert not network.is_running
+        assert not network.hosts
+        patched["clients"][0].set_pipeline_config.assert_called_once()
+        return next(states)
+
+    _mock_ipv6_status(patched, query)
+    try:
+        network.start()
+        assert network.is_running
+        assert clock.monotonic() > 0
+    finally:
+        network.stop()
+
+
+def test_ipv6_readiness_uses_resolved_interfaces_and_addresses(
+    patched: dict[str, Any], mocker: MockerFixture
+) -> None:
+    _mock_ipv6_clock(mocker)
+    topology = Topology()
+    topology.add_host("h1", ip6="fd00::1/64")
+    topology.add_switch("s1", Path("first.p4"))
+    topology.add_switch("s2", Path("second.p4"))
+    topology.add_link("h1", "s1", ip6_a="fd00:38::a/64")
+    topology.add_link("h1", "s2", ip6_a="fd00:39::b/64")
+    query = MagicMock(
+        return_value=[
+            {
+                "ifname": "h1-eth0",
+                "addr_info": [
+                    {"local": "fe80::bad", "dadfailed": True},
+                    {"local": "fd00:0038:0:0:0:0:0:000a"},
+                ],
+            },
+            {"ifname": "h1-eth1", "addr_info": [{"local": "FD00:39::B"}]},
+        ]
+    )
+    _mock_ipv6_status(patched, query)
+    with Network(topology) as network:
+        assert network.is_running
+        query.assert_called_once_with("h1")
+
+
+def test_ipv6_dad_failure_rolls_back_all_resources(patched: dict[str, Any]) -> None:
+    _mock_ipv6_status(patched, lambda name: _ipv6_state(dadfailed=True, tentative=True))
+    network = Network(_make_v6_only_topology())
+    with pytest.raises(NetworkError, match="duplicate address detection") as error:
+        network.start()
+    assert "h1/h1-eth0" in str(error.value) and "fd00::1" in str(error.value)
+    assert not network.is_running and not network.hosts and not network.switches
+    assert not network._namespaces and not network._veth_pairs
+    patched["clients"][0].disconnect.assert_called_once()
+    patched["bmv2s"][0].stop.assert_called_once()
+    patched["veths"][0].destroy.assert_called_once()
+    patched["unregister"].assert_called_once_with(network)
+
+
+@pytest.mark.parametrize("state", ["missing", "tentative", "wrong-interface", "wrong-address"])
+def test_ipv6_unready_address_times_out_and_rolls_back(
+    patched: dict[str, Any], mocker: MockerFixture, state: str
+) -> None:
+    _mock_ipv6_clock(mocker)
+    mocker.patch("p4net.network.orchestrator._IPV6_READY_TIMEOUT", 0.1)
+    records = _ipv6_state(tentative=True)
+    if state == "missing":
+        records = []
+    elif state == "wrong-interface":
+        records = [{"ifname": "lo", "addr_info": [{"local": "fd00::1"}]}]
+    elif state == "wrong-address":
+        records = _ipv6_state(address="fd00::2")
+    _mock_ipv6_status(patched, lambda name: records)
+    network = Network(_make_v6_only_topology())
+    with pytest.raises(NetworkError, match="IPv6 addresses not ready") as error:
+        network.start()
+    assert "h1/h1-eth0" in str(error.value) and "fd00::1" in str(error.value)
+    assert not network.is_running and not network._namespaces and not network._veth_pairs
+    patched["bmv2s"][0].stop.assert_called_once()
+
+
+def test_ipv6_status_command_timeout_rolls_back(patched: dict[str, Any]) -> None:
+    query = MagicMock(side_effect=subprocess.TimeoutExpired(_IPV6_QUERY, 5))
+    _mock_ipv6_status(patched, query)
+    network = Network(_make_v6_only_topology())
+    with pytest.raises(NetworkError, match="IPv6 addresses not ready") as error:
+        network.start()
+    assert isinstance(error.value.__cause__, subprocess.TimeoutExpired)
+    assert not network.is_running and not network._namespaces
+
+
+def test_ipv6_hosts_share_one_wait_budget(patched: dict[str, Any], mocker: MockerFixture) -> None:
+    clock = _mock_ipv6_clock(mocker)
+    mocker.patch("p4net.network.orchestrator._IPV6_READY_TIMEOUT", 0.1)
+    topology = Topology()
+    for name, address in (("h1", "fd00::1/64"), ("h2", "fd00::2/64")):
+        topology.add_host(name, ip6=address)
+    topology.add_link("h1", "h2")
+    network = Network(topology)
+
+    def query(name: str) -> list[dict[str, Any]]:
+        remaining = network._namespaces[name].exec.call_args.kwargs["timeout"]
+        if remaining < 0.08:
+            raise subprocess.TimeoutExpired(_IPV6_QUERY, remaining)
+        clock.sleep(0.08)
+        return _ipv6_state(name, "fd00::1" if name == "h1" else "fd00::2")
+
+    _mock_ipv6_status(patched, query)
+    with pytest.raises(NetworkError, match="h2/h2-eth0"):
+        network.start()
+    assert not network.is_running and not network._namespaces
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_ipv6_wait_cancellation_and_shutdown_clean_up(
+    patched: dict[str, Any], cancel: bool
+) -> None:
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def query(name: str) -> list[dict[str, Any]]:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(timeout=5)
+        return _ipv6_state(tentative=not cancel)
+
+    _mock_ipv6_status(patched, query)
+    network = Network(_make_v6_only_topology())
+    startup = asyncio.create_task(network.astart())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        if cancel:
+            startup.cancel()
+        else:
+            network.stop()
+        await asyncio.sleep(0)
+        assert not network.is_running
+        release.set()
+        with pytest.raises(asyncio.CancelledError if cancel else NetworkError):
+            await asyncio.wait_for(startup, timeout=2)
+        await network.astop()
+        assert not network._namespaces and not network._veth_pairs
+        patched["clients"][0].disconnect.assert_called_once()
+        patched["bmv2s"][0].stop.assert_called_once()
+    finally:
+        release.set()
+        await asyncio.gather(startup, return_exceptions=True)
+        await network.astop()

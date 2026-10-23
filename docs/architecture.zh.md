@@ -84,7 +84,8 @@ flowchart TB
 6. 添加已配置的 IPv4 和 IPv6 默认路由。
 7. 逐台启动 BMv2，确认当前进程持有 gRPC 和 Thrift 监听套接字后，再启动下一台交换机。
 8. 为每台交换机连接一个同步 P4Runtime 客户端，下发流水线。
-9. 创建 `RunningHost` 和 `RunningSwitch` 对象，供 `host()`、`switch()`、`hosts` 和 `switches` 访问。
+9. 等待已配置的 IPv6 地址完成重复地址检测，所有主机共用五秒等待时间。检测失败或等待超时则启动失败。
+10. 创建 `RunningHost` 和 `RunningSwitch` 对象，供 `host()`、`switch()`、`hosts` 和 `switches` 访问。
 
 启动失败时，回收已经创建的资源。`await net.astart()` 先在调用线程注册清理，再将启动工作提交到工作线程。需要自动处理退出信号时，使用主线程的事件循环。取消启动时，会等待工作线程和清理结束，再传播取消异常。启动与关闭同时发生时，关闭过程会先等待启动线程结束，再释放资源。
 

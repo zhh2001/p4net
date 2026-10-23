@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
+import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
 import threading
 import time
@@ -54,6 +57,8 @@ from p4net.topo import Host, Link, Topology
 from p4net.topo.exceptions import TopologyError
 
 logger = logging.getLogger(__name__)
+
+_IPV6_READY_TIMEOUT = 5.0
 
 _DURATION_UNITS_NS: dict[str, int] = {
     "ns": 1,
@@ -239,12 +244,14 @@ class Network:
         Validates the topology (unless ``unsafe=True``), compiles each P4
         source, creates host namespaces and veth pairs, configures
         addresses and impairment, launches BMv2 processes, opens
-        P4Runtime clients, and pushes pipeline configs. On failure,
-        rolls back via :meth:`_do_stop` before re-raising.
+        P4Runtime clients, and pushes pipeline configs. Waits up to five
+        seconds for configured IPv6 addresses to finish duplicate address
+        detection. On failure, rolls back via :meth:`_do_stop` before re-raising.
 
         Raises:
             NetworkAlreadyRunningError: if already running or starting.
-            NetworkError: if shutdown is in progress or interrupts startup.
+            NetworkError: if shutdown interrupts startup, or configured IPv6
+                addresses fail duplicate address detection or remain unready.
         """
         self._run_start(self._prepare_start())
 
@@ -599,7 +606,10 @@ class Network:
             )
             logger.info("P4Runtime client connected to %r as primary", sw_name)
 
-        # 11. RunningHost / RunningSwitch facades
+        # 11. Configured IPv6 addresses must be usable before startup succeeds.
+        self._wait_for_ipv6_addresses()
+
+        # 12. RunningHost / RunningSwitch facades
         for h_name, host in self._topology.hosts.items():
             self._running_hosts[h_name] = RunningHost(
                 host,
@@ -615,6 +625,61 @@ class Network:
                 self._compile_results[sw_name],
             )
         logger.info("Network.start: ready")
+
+    def _wait_for_ipv6_addresses(self) -> None:
+        pending = {
+            (host, iface): ipaddress.IPv6Interface(cidr).ip
+            for host, interfaces in self._host_iface_ip6.items()
+            for iface, cidr in interfaces.items()
+            if cidr is not None
+        }
+        if not pending:
+            return
+        timeout = _IPV6_READY_TIMEOUT
+        deadline = time.monotonic() + timeout
+
+        def not_ready() -> NetworkError:
+            addresses = ", ".join(
+                f"{host}/{iface} ({address})" for (host, iface), address in pending.items()
+            )
+            return NetworkError(f"IPv6 addresses not ready after {timeout:g}s: {addresses}")
+
+        while pending:
+            with self._stop_lock:
+                if self._stop_future is not None:
+                    raise NetworkError("Network startup was interrupted by shutdown")
+            for host in dict.fromkeys(name for name, _ in pending):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise not_ready()
+                try:
+                    result = self._namespaces[host].exec(
+                        ["ip", "-j", "-6", "addr", "show"],
+                        capture_output=True,
+                        timeout=remaining,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    raise not_ready() from exc
+                for interface in json.loads(result.stdout):
+                    key = (host, interface["ifname"])
+                    if key not in pending:
+                        continue
+                    for address in interface.get("addr_info", []):
+                        if ipaddress.IPv6Address(address["local"]) != pending[key]:
+                            continue
+                        if address.get("dadfailed", False):
+                            raise NetworkError(
+                                f"IPv6 address {pending[key]} on {host}/{key[1]} "
+                                "failed duplicate address detection"
+                            )
+                        if not address.get("tentative", False):
+                            del pending[key]
+                        break
+            if pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise not_ready()
+                time.sleep(min(0.05, remaining))
 
     def _wire_link(self, link: Link, first_link_seen: set[str]) -> None:
         name_a = link.a.iface_name

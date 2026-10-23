@@ -28,14 +28,28 @@ name, mode = sys.argv[1:]
 
 async def main():
     topo = Topology()
-    topo.add_host(name, ip="10.247.0.1/24")
+    topo.add_host(name, ip="10.247.0.1/24",
+                  ip6="fd00:38::1/64" if mode == "starting-ipv6" else None)
+    if mode == "starting-ipv6":
+        topo.add_host(name + "a", ip6="fd00:38::2/64")
+        topo.add_link(name, name + "a")
     net = Network(topo)
     if mode.startswith("starting-"):
         def pause():
             print("ready", flush=True)
             assert sys.stdin.readline() == "release\\n"
 
-        if mode == "starting-namespace":
+        if mode == "starting-ipv6":
+            execute = NetworkNamespace.exec
+            paused = False
+            def execute_paused(self, argv, **kwargs):
+                nonlocal paused
+                if argv == ["ip", "-j", "-6", "addr", "show"] and not paused:
+                    paused = True
+                    pause()
+                return execute(self, argv, **kwargs)
+            NetworkNamespace.exec = execute_paused
+        elif mode == "starting-namespace":
             create = NetworkNamespace.create
             def create_paused(self):
                 create(self)
@@ -72,7 +86,15 @@ asyncio.run(main())
 
 
 @pytest.mark.parametrize(
-    "mode", ["worker-first", "main-first", "astart", "starting-validate", "starting-namespace"]
+    "mode",
+    [
+        "worker-first",
+        "main-first",
+        "astart",
+        "starting-validate",
+        "starting-namespace",
+        "starting-ipv6",
+    ],
 )
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
 def test_signal_waits_for_namespace_cleanup(mode: str, signum: signal.Signals) -> None:
@@ -106,6 +128,8 @@ def test_signal_waits_for_namespace_cleanup(mode: str, signum: signal.Signals) -
         output, errors = proc.communicate(timeout=15)
         assert proc.returncode == -signum, (proc.returncode, output, errors)
         assert not namespace.exists(), f"namespace {name} survived {signum.name}"
+        if mode == "starting-ipv6":
+            assert not (namespace.parent / (name + "a")).exists()
     finally:
         if proc.poll() is None:
             with contextlib.suppress(ProcessLookupError):
