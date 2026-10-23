@@ -46,7 +46,7 @@ These objects manage individual resources. `Network` determines their creation a
 
 `Host`, `P4Switch`, `LinkEndpoint`, and `Link` are frozen data classes. They describe addresses, switch configuration, link endpoints, and impairments. `Topology` is a mutable builder that collects these descriptions, validates them, serializes them, and exports Graphviz diagrams. Building a description creates no network resources.
 
-Host ports are assigned from 0, switch ports from 1. Generated interface names have the form `<node>-eth<port>`. Names longer than Linux's 15-character limit are rejected.
+Host ports are assigned from 0, switch ports from 1. Automatic allocation skips the switch's configured CPU port, which is reserved for controller traffic. Assigning it explicitly to a link reports a `TopologyError`; `Topology.validate()` also rejects this conflict in imported topologies. Generated interface names have the form `<node>-eth<port>`. Names longer than Linux's 15-character limit are rejected.
 
 Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 

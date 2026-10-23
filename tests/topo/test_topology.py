@@ -167,6 +167,96 @@ def test_link_explicit_ports_respected() -> None:
     assert link.b.port == 42
 
 
+@pytest.mark.parametrize("cpu_port", [1, 2, 510])
+@pytest.mark.parametrize("switch_first", [False, True])
+def test_auto_ports_skip_cpu_port_and_survive_round_trip(cpu_port: int, switch_first: bool) -> None:
+    topo = Topology()
+    topo.add_switch("s1", Path("p.p4"), cpu_port=cpu_port)
+    expected = [port for port in range(1, 7) if port != cpu_port][:5]
+    for index, port in enumerate(expected[:4]):
+        host = topo.add_host(f"h{index}")
+        link = topo.add_link("s1", host) if switch_first else topo.add_link(host, "s1")
+        switch, host_endpoint = (link.a, link.b) if switch_first else (link.b, link.a)
+        assert switch.port == port
+        assert host_endpoint.port == 0
+    topo.validate()
+    restored = Topology.from_dict(topo.to_dict())
+    restored.validate()
+    restored.add_host("h4")
+    assert restored.add_link("h4", "s1").b.port == expected[4]
+
+
+@pytest.mark.parametrize("cpu_port", [1, 255, 510])
+@pytest.mark.parametrize("switch_first", [False, True])
+def test_explicit_cpu_port_rejected_without_adding_link(cpu_port: int, switch_first: bool) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"), cpu_port=cpu_port)
+    with pytest.raises(TopologyError, match="CPU port"):
+        if switch_first:
+            topo.add_link("s1", "h1", port_a=cpu_port)
+        else:
+            topo.add_link("h1", "s1", port_b=cpu_port)
+    assert topo.links == ()
+    assert topo.add_link("h1", "s1").b.port == (2 if cpu_port == 1 else 1)
+
+
+@pytest.mark.parametrize("side", ["a", "b"])
+def test_switch_link_rejects_either_cpu_port(side: str) -> None:
+    topo = Topology()
+    topo.add_switch("s1", Path("p.p4"), cpu_port=1)
+    topo.add_switch("s2", Path("p.p4"), cpu_port=2)
+    with pytest.raises(TopologyError, match="CPU port"):
+        topo.add_link("s1", "s2", port_a=1 if side == "a" else 3, port_b=2 if side == "b" else 3)
+    assert topo.links == ()
+
+
+def test_switch_link_auto_ports_skip_each_switch_cpu_port() -> None:
+    topo = Topology()
+    topo.add_switch("s1", Path("p.p4"), cpu_port=1)
+    topo.add_switch("s2", Path("p.p4"), cpu_port=2)
+    first = topo.add_link("s1", "s2")
+    second = topo.add_link("s1", "s2")
+    assert (first.a.port, first.b.port) == (2, 1)
+    assert (second.a.port, second.b.port) == (3, 3)
+    topo.validate()
+
+
+def test_cpu_port_is_reserved_only_on_its_switch() -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"), cpu_port=1)
+    topo.add_switch("s2", Path("p.p4"), cpu_port=2)
+    link = topo.add_link("h1", "s1", port_a=1, port_b=2)
+    assert (link.a.port, link.b.port) == (1, 2)
+    topo.add_link("s1", "s2", port_a=3, port_b=1)
+    topo.validate()
+
+
+@pytest.mark.parametrize("switch_first", [False, True])
+@pytest.mark.parametrize("source", ["dictionary", "direct"])
+def test_validate_rejects_cpu_port_from_imported_or_direct_link(
+    switch_first: bool, source: str
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"), cpu_port=510)
+    if switch_first:
+        topo.add_link("s1", "h1", port_a=1)
+    else:
+        topo.add_link("h1", "s1", port_b=1)
+    if source == "dictionary":
+        data = topo.to_dict()
+        data["links"][0]["a" if switch_first else "b"]["port"] = 510
+        topo = Topology.from_dict(data)
+    else:
+        switch = LinkEndpoint(node="s1", port=510, iface_name="s1-eth510")
+        host = LinkEndpoint(node="h1", port=0, iface_name="h1-eth0")
+        topo._links[0] = Link(a=switch, b=host) if switch_first else Link(a=host, b=switch)
+    with pytest.raises(TopologyError, match="CPU port"):
+        topo.validate()
+
+
 def test_iface_name_format() -> None:
     t = Topology()
     t.add_host("h1")

@@ -255,6 +255,9 @@ class Topology:
         per-direction impairment fields like ``delay_a_to_b`` shape only
         the direction from the ``a``-side veth toward the ``b`` side.
 
+        Automatic port allocation skips each switch's CPU port. Explicitly
+        assigning that port to a link raises :class:`TopologyError`.
+
         Args:
             a: First endpoint (host or switch name, or a node object).
             b: Second endpoint.
@@ -408,6 +411,16 @@ class Topology:
             for which, ep in (("a", link.a), ("b", link.b)):
                 if ep.node not in self._hosts and ep.node not in self._switches:
                     errors.append(f"link[{i}] endpoint {which} references unknown node {ep.node!r}")
+                switch = self._switches.get(ep.node)
+                if (
+                    switch is not None
+                    and switch.cpu_port is not None
+                    and ep.port == switch.cpu_port
+                ):
+                    errors.append(
+                        f"link[{i}] endpoint {which} uses CPU port {switch.cpu_port} "
+                        f"on switch {switch.name!r}"
+                    )
             if link.a.node == link.b.node:
                 errors.append(f"link[{i}] connects node {link.a.node!r} to itself")
 
@@ -706,6 +719,14 @@ class Topology:
 
     def _auto_port(self, node: NodeKind, requested: int | None) -> int:
         if requested is not None:
+            if (
+                isinstance(node, P4Switch)
+                and node.cpu_port is not None
+                and requested == node.cpu_port
+            ):
+                raise TopologyError(
+                    f"switch {node.name!r} CPU port {requested} cannot be used by a link"
+                )
             return requested
         used = {
             ep.port
@@ -713,6 +734,8 @@ class Topology:
             for ep in (link.a, link.b)
             if ep.node == node.name and ep.port is not None
         }
+        if isinstance(node, P4Switch) and node.cpu_port is not None:
+            used.add(node.cpu_port)
         candidate = 1 if isinstance(node, P4Switch) else 0
         while candidate in used:
             candidate += 1
