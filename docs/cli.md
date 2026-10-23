@@ -224,7 +224,7 @@ Match values follow the field types in the target switch's P4Info:
 
 Each component accepts the field's supported value formats, including decimal or hexadecimal integers, IP addresses, and MAC addresses. Write composite values without spaces, or quote the whole value when including spaces.
 
-For exact/LPM-only tables, omit `priority:`. Tables with ternary or range keys require it when inserting entries. For a table with an exact destination MAC, a ternary source MAC, and a range of EtherTypes:
+For exact/LPM-only tables, omit `priority:`. Tables with optional, ternary or range keys require it when inserting entries, including entries that omit an optional field as a wildcard. For a table with an exact destination MAC, a ternary source MAC, and a range of EtherTypes:
 
 ```text
 p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17

@@ -436,7 +436,9 @@ class AsyncP4RuntimeClient:
         table_id = idx.table_id(table)
         requires_priority = idx.table_requires_priority(table)
         if requires_priority and priority is None and update_type != "DELETE":
-            raise EncodingError(f"table {table!r} has ternary/range fields; priority required")
+            raise EncodingError(
+                f"table {table!r} has optional/ternary/range fields; priority required"
+            )
         if not requires_priority and priority is not None:
             raise EncodingError(f"table {table!r} is exact/lpm-only; priority must be None")
         fms = idx.encode_match(table, match)

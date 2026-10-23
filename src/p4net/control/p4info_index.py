@@ -182,13 +182,18 @@ class P4InfoIndex:
         return list(self._registers_by_name)
 
     def table_requires_priority(self, name: str) -> bool:
-        """True iff the table has a TERNARY or RANGE match field."""
+        """True if the table has an OPTIONAL, TERNARY or RANGE match field."""
         t = self._tables_by_name.get(name)
         if t is None:
             raise NoSuchTableError(f"no table named {name!r}")
         p4info_pb2 = _import_p4info()
         return any(
-            mf.match_type in (p4info_pb2.MatchField.TERNARY, p4info_pb2.MatchField.RANGE)
+            mf.match_type
+            in (
+                p4info_pb2.MatchField.OPTIONAL,
+                p4info_pb2.MatchField.TERNARY,
+                p4info_pb2.MatchField.RANGE,
+            )
             for mf in t.match_fields
         )
 

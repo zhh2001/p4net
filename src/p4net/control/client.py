@@ -427,7 +427,8 @@ class P4RuntimeClient:
                 ``("<value>", "<mask>")``.
             action: Fully qualified action name.
             params: Action parameters keyed by P4 param name.
-            priority: Required for tables with ternary or range keys.
+            priority: Required for tables with optional, ternary or range keys,
+                including entries that omit optional fields as wildcards.
             timeout: Per-call gRPC deadline in seconds.
 
         Raises:
@@ -508,7 +509,7 @@ class P4RuntimeClient:
         requires_priority = index.table_requires_priority(table)
         if requires_priority and priority is None and update_type != "DELETE":
             raise EncodingError(
-                f"table {table!r} has ternary/range match fields; priority is required"
+                f"table {table!r} has optional/ternary/range match fields; priority is required"
             )
         if not requires_priority and priority is not None:
             raise EncodingError(f"table {table!r} is exact/lpm-only; priority must be None")

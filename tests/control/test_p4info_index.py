@@ -147,7 +147,23 @@ def test_table_requires_priority(p4info: p4info_pb2.P4Info) -> None:
     assert idx.table_requires_priority("MyIngress.exact_acl") is False
     assert idx.table_requires_priority("MyIngress.ternary_acl") is True
     assert idx.table_requires_priority("MyIngress.range_acl") is True
-    assert idx.table_requires_priority("MyIngress.optional_acl") is False
+    assert idx.table_requires_priority("MyIngress.optional_acl") is True
+
+
+@pytest.mark.parametrize("optional_first", [False, True])
+@pytest.mark.parametrize("other_kind", [p4info_pb2.MatchField.EXACT, p4info_pb2.MatchField.LPM])
+def test_optional_field_requires_priority_in_mixed_table(
+    p4info: p4info_pb2.P4Info, optional_first: bool, other_kind: int
+) -> None:
+    table = next(t for t in p4info.tables if t.preamble.name == "MyIngress.optional_acl")
+    other = table.match_fields.add()
+    other.id = 2
+    other.name = "hdr.ipv4.dstAddr"
+    other.bitwidth = 32
+    other.match_type = other_kind
+    if not optional_first:
+        table.match_fields.reverse()
+    assert P4InfoIndex(p4info).table_requires_priority("MyIngress.optional_acl") is True
 
 
 def test_table_names_and_action_names(p4info: p4info_pb2.P4Info) -> None:

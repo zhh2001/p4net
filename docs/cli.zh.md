@@ -224,7 +224,7 @@ ok
 
 各部分可以使用字段支持的值格式，包括十进制或十六进制整数、IP 地址和 MAC 地址。组合值内不加空格，需要空格时用引号包住整个值。
 
-仅含 exact/LPM 字段的表不填写 `priority:`，含 ternary 或 range 字段的表在插入时需要优先级。下面的表按目标 MAC 做 exact 匹配、按源 MAC 做 ternary 匹配，并对 EtherType 做 range 匹配：
+仅含 exact/LPM 字段的表不填写 `priority:`，含 optional、ternary 或 range 字段的表在插入时需要优先级，省略 optional 字段作通配匹配的条目也一样。下面的表按目标 MAC 做 exact 匹配、按源 MAC 做 ternary 匹配，并对 EtherType 做 range 匹配：
 
 ```text
 p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17

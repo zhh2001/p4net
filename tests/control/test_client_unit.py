@@ -116,6 +116,15 @@ def _build_p4info() -> p4info_pb2.P4Info:
     mft.bitwidth = 32
     mft.match_type = p4info_pb2.MatchField.TERNARY
     t_tern.action_refs.add().id = 1001
+    t_opt = p.tables.add()
+    t_opt.preamble.id = 2003
+    t_opt.preamble.name = "MyIngress.optional_acl"
+    mf_opt = t_opt.match_fields.add()
+    mf_opt.id = 1
+    mf_opt.name = "hdr.ethernet.etherType"
+    mf_opt.bitwidth = 16
+    mf_opt.match_type = p4info_pb2.MatchField.OPTIONAL
+    t_opt.action_refs.add().id = 1001
     return p
 
 
@@ -801,6 +810,60 @@ def test_priority_forbidden_for_lpm_table(
                 {"port": 2},
                 priority=5,
             )
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
+@pytest.mark.parametrize("wildcard", [False, True])
+def test_optional_table_write_preserves_priority(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    operation: str,
+    wildcard: bool,
+) -> None:
+    client = _push_pipeline(connected_client)
+    stub: MagicMock = connected_client[1]["stub"]
+    match = {} if wildcard else {"hdr.ethernet.etherType": 0x0800}
+    method = getattr(client, f"{operation}_table_entry")
+    try:
+        if operation == "delete":
+            method("MyIngress.optional_acl", match, priority=17)
+        else:
+            method("MyIngress.optional_acl", match, "NoAction", priority=17)
+        stub.Write.assert_called_once()
+        request = stub.Write.call_args.args[0]
+        update = request.updates[0]
+        assert update.type == p4runtime_pb2.Update.Type.Value(operation.upper())
+        entry = update.entity.table_entry
+        assert entry.table_id == 2003
+        assert entry.priority == 17
+        assert entry.HasField("action") == (operation != "delete")
+        if wildcard:
+            assert len(entry.match) == 0
+        else:
+            (field,) = entry.match
+            assert field.field_id == 1
+            assert field.HasField("optional")
+            assert field.optional.value == b"\x08\x00"
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify"])
+@pytest.mark.parametrize("wildcard", [False, True])
+def test_optional_table_missing_priority_does_not_write(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    operation: str,
+    wildcard: bool,
+) -> None:
+    client = _push_pipeline(connected_client)
+    stub: MagicMock = connected_client[1]["stub"]
+    method = getattr(client, f"{operation}_table_entry")
+    match = {} if wildcard else {"hdr.ethernet.etherType": 0x0800}
+    try:
+        with pytest.raises(EncodingError, match=r"optional.*priority is required"):
+            method("MyIngress.optional_acl", match, "NoAction")
+        stub.Write.assert_not_called()
     finally:
         client.disconnect()
 

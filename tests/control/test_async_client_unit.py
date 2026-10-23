@@ -53,6 +53,15 @@ def _make_p4info_index() -> P4InfoIndex:
     mf.bitwidth = 32
     mf.match_type = p4info_pb2.MatchField.LPM
     t.action_refs.add().id = 1001
+    t_opt = p.tables.add()
+    t_opt.preamble.id = 2002
+    t_opt.preamble.name = "MyIngress.optional_acl"
+    mf_opt = t_opt.match_fields.add()
+    mf_opt.id = 1
+    mf_opt.name = "hdr.ethernet.etherType"
+    mf_opt.bitwidth = 16
+    mf_opt.match_type = p4info_pb2.MatchField.OPTIONAL
+    t_opt.action_refs.add().id = 1001
     r = p.registers.add()
     r.preamble.id = 4001
     r.preamble.name = "MyIngress.test_register"
@@ -880,6 +889,60 @@ async def test_delete_table_entry_uses_delete_type(
         await client.delete_table_entry("MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.0.0/24"})
         req = patched_aio["stub"].Write.call_args.args[0]
         assert req.updates[0].type == p4runtime_pb2.Update.Type.DELETE
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
+@pytest.mark.parametrize("wildcard", [False, True])
+async def test_optional_table_write_preserves_priority(
+    patched_aio: dict[str, Any], operation: str, wildcard: bool
+) -> None:
+    client = await _connect(patched_aio)
+    method = getattr(client, f"{operation}_table_entry")
+    match = {} if wildcard else {"hdr.ethernet.etherType": 0x0800}
+    try:
+        if operation == "delete":
+            await method("MyIngress.optional_acl", match, priority=17)
+        else:
+            await method(
+                "MyIngress.optional_acl",
+                match,
+                "MyIngress.set_egress_port",
+                {"port": 2},
+                priority=17,
+            )
+        rpc = patched_aio["stub"].Write
+        rpc.assert_awaited_once()
+        update = rpc.call_args.args[0].updates[0]
+        assert update.type == p4runtime_pb2.Update.Type.Value(operation.upper())
+        entry = update.entity.table_entry
+        assert entry.table_id == 2002
+        assert entry.priority == 17
+        assert entry.HasField("action") == (operation != "delete")
+        if wildcard:
+            assert len(entry.match) == 0
+        else:
+            (field,) = entry.match
+            assert field.field_id == 1
+            assert field.HasField("optional")
+            assert field.optional.value == b"\x08\x00"
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["insert", "modify"])
+@pytest.mark.parametrize("wildcard", [False, True])
+async def test_optional_table_missing_priority_does_not_write(
+    patched_aio: dict[str, Any], operation: str, wildcard: bool
+) -> None:
+    client = await _connect(patched_aio)
+    method = getattr(client, f"{operation}_table_entry")
+    match = {} if wildcard else {"hdr.ethernet.etherType": 0x0800}
+    try:
+        with pytest.raises(EncodingError, match=r"optional.*priority required"):
+            await method("MyIngress.optional_acl", match, "MyIngress.set_egress_port", {"port": 2})
+        patched_aio["stub"].Write.assert_not_awaited()
     finally:
         await client.disconnect()
 
