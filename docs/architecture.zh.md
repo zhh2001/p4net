@@ -1,197 +1,168 @@
 ---
-description: p4net 由六个 Python 包组成，本文逐层介绍其职责、设计取舍，以及一个数据包从主机到主机的完整数据通路。
+description: p4net 各包的职责、网络启停和资源回收流程，以及数据包经过主机与交换机的路径。
 ---
 
 # 架构
 
-p4net 是建立在 `p4c`、BMv2 与 Linux 内核之上的六个 Python 包。本页说明每个包的职责、为何如此组织，以及它们在运行时如何协作。
+p4net 用 Python 描述拓扑，通过 `p4c` 编译 P4 程序，在 Linux 系统中运行主机和 BMv2 交换机。六个包分别负责拓扑描述、编译、系统资源、控制面操作、网络编排和命令行交互。
 
 ## 分层架构
 
 ```mermaid
 flowchart TB
-    CLI[p4net.cli<br/>P4NetShell, dispatcher]
-    NET[p4net.network<br/>Network orchestrator]
-    CTL[p4net.control<br/>P4Runtime client, codec]
-    CMP[p4net.compiler<br/>p4c + cache]
-    TPO[p4net.topo<br/>Topology DSL]
-    RT[p4net.runtime<br/>netns, veth, tc, BMv2 process]
+    CLI[p4net.cli<br/>命令与交互终端]
+    NET[p4net.network<br/>网络启停]
+    CTL[p4net.control<br/>P4Runtime 客户端与编解码]
+    CMP[p4net.compiler<br/>p4c 与编译缓存]
+    TPO[p4net.topo<br/>拓扑描述]
+    RT[p4net.runtime<br/>命名空间、veth、tc、BMv2]
     CLI --> NET
+    CLI --> TPO
+    CLI --> CTL
     NET --> CTL
     NET --> CMP
     NET --> TPO
     NET --> RT
-    CTL --> RT
 ```
 
-上层依赖下层。`cli` 与 `control` 共享对 `runtime` 的传递依赖（CLI 用它在主机命名空间内执行命令；control 客户端依赖它，因为 BMv2 是 `runtime` 管理的进程），但二者之间没有直接依赖。
+箭头表示包之间的主要调用关系。`network` 创建和释放运行资源，通过运行节点对象供 CLI 和用户代码访问。CLI 还使用控制面的编解码函数显示字段值。`control` 与交换机的 P4Runtime 服务通信，BMv2 进程由 `runtime` 管理。各包的异常还共用 `runtime.exceptions` 中的 `P4NetError` 基类。
 
 ## 六个包
 
 ### `p4net.runtime`
 
-系统原语：
+提供编排器使用的 Linux 资源和进程操作：
 
-- **`NetworkNamespace`** —— `ip netns add/del/exec` 的生命周期封装。`exec` 与 `popen` 通过 `ip netns exec <name> <argv>` 调用 `subprocess`，而非在 Python 中调用 `setns()`。原因见下文「设计原则」。
-- **`VethPair`** —— 创建一对内核 veth、把任一端搬入命名空间、设置地址（IPv4 与 IPv6）、MAC、MTU 与链路状态。底层通过 `pyroute2` 发起 netlink 调用。
-- **`apply_netem` / `clear_qdisc`** —— 在指定命名空间的某个接口上执行 `tc qdisc add/del root netem rate=... delay=... loss ...`。幂等。
-- **`BMv2Switch`** —— 用 `Popen` 包装 `simple_switch_grpc` 的生命周期。构造 argv（端口到接口的映射、gRPC 绑定地址、可选 Thrift、`--cpu-port`、日志等级），等待 gRPC 端口可连，提供基于信号的停机方法。
-- **`NSProcess`** —— 对 `subprocess.Popen` 的最小封装，用于命名空间内运行的进程；提供 `pid`、`poll`、`wait`、`terminate`、`kill`，以及为兼容旧调用而保留的空操作 `close()`。
-- **`disable_ipv6` / `enable_ipv6`** —— 按接口的 sysctl 帮助函数（`net.ipv6.conf.<iface>.{disable_ipv6,accept_ra,autoconf}`），通过 `ns.exec(["sysctl", "-w", ...])` 写入。
+- `NetworkNamespace` 通过 `pyroute2` 创建和删除命名空间，`exec()` 和 `popen()` 通过 `ip netns exec` 执行命令。
+- `VethPair` 通过 `pyroute2` 创建接口，将任一端移入命名空间，并配置地址、MAC、MTU 和接口状态。
+- `apply_netem()` 使用 `tc qdisc replace` 配置出方向的时延、抖动、丢包和速率。`clear_qdisc()` 删除根 qdisc，未配置 qdisc 时可重复调用。
+- `BMv2Switch` 启动 `simple_switch_grpc`，构造参数，管理日志文件和进程退出。`wait_until_ready()` 检查子进程仍在运行，且同时持有 gRPC 和 Thrift 监听套接字。监听套接字属于其他进程时，启动失败。
+- `NSProcess` 封装命名空间内启动的进程，提供 `pid`、`poll()`、`wait()`、`terminate()` 和 `kill()`。`close()` 为兼容旧调用而保留，不执行操作。
+- `disable_ipv6()` 和 `enable_ipv6()` 写入主机命名空间或 root 命名空间中的接口 sysctl 配置。
 
-runtime 层不承担任何编排职责。每个原语遇到失败立即抛出明确的异常；顺序与清理由调用者负责。
-
-API：[`p4net.runtime`](api/runtime.md)。
+这些对象分别管理单个资源，创建和回收的顺序由 `Network` 决定。详见[运行时 API](api/runtime.md)。
 
 ### `p4net.topo`
 
-描述性 DSL——纯数据，不涉及任何系统调用：
+`Host`、`P4Switch`、`LinkEndpoint` 和 `Link` 是冻结的数据类，保存地址、交换机配置、链路端点和链路参数。`Topology` 是可修改的构造器，负责汇集描述、校验、序列化和导出 Graphviz 图。构造描述不会创建网络资源。
 
-- **`Host`** —— 名称、IPv4（`ip`、`default_route`）、IPv6（`ip6`、`default_route6`）、MAC。字段在 `__post_init__` 中校验。
-- **`P4Switch`** —— 名称、`p4_src`、架构（`v1model`）、`device_id`、`grpc_port`、`thrift_port`、`cpu_port`、`log_level`、`pcap_enabled`。
-- **`LinkEndpoint`** —— 节点名、端口号、接口名，以及链路级的 `ip` / `ip6` / `mac` 覆盖。
-- **`Link`** —— 对称的 `bandwidth` / `delay` / `jitter` / `loss_pct`，或逐方向的 `*_a_to_b` / `*_b_to_a`（非对称）。同一参数同时设置对称与非对称值会被校验拒绝。
-- **`Topology`** —— 构造器。`add_host`、`add_switch`、`add_link`、`validate()`、`to_dict()` / `from_dict()`、`to_graphviz()` / `render_graphviz()`。主机端口号自动从 0 起分配，交换机端口号从 1 起；接口名形如 `<node>-eth<port>`，长度被截断到 Linux 规定的 15 字符上限。
+主机端口号从 0 开始分配，交换机端口号从 1 开始。自动生成的接口名形如 `<node>-eth<port>`，超过 Linux 的 15 字符上限时会报错。
 
-`Topology.validate()` 会在 `Network.start()` 时（除非传 `unsafe=True`）自动运行，也会在每次 `topology graph` 调用时运行。它检查端点引用、端口冲突、交换机 device_id / gRPC 端口 / Thrift 端口冲突、接口名长度、同一 `/N` 内的 IPv4 与 IPv6 地址冲突，以及链路参数一致性（例如 `jitter_a_to_b` 必须搭配 `delay_a_to_b` 或对称的 `delay`）。
+链路参数支持三种形式：对称值、`delay_a_to_b` 这样的逐方向值，以及 `delay_a_to_b_extra` 这样的附加值。附加值需要对称基础值。例如，`delay="100ms"` 加 `delay_a_to_b_extra="100ms"`，得到 `a` 到 `b` 方向 200 ms、反向 100 ms 的时延。对称值不能与同一参数的直接逐方向覆盖值混用。
 
-API：[`p4net.topo`](api/topo.md)。
+描述对象在构造时检查字段值和参数组合。`Topology.validate()` 进一步检查端点引用、自环、端口和设备 ID 冲突、交换机服务端口冲突、接口名及主机地址冲突。网络启动时会调用它，除非设置了 `unsafe=True`。CLI 执行 `topology graph` 前也会校验。
+
+网络启动后，拓扑描述仍可修改，但修改不会改变运行资源。详见[拓扑变更限制](known-limitations.md#4-不支持运行中拓扑变更)和[拓扑 API](api/topo.md)。
 
 ### `p4net.compiler`
 
-每次查询缓存前，先运行 `p4c -E` 解析引用文件和宏。缓存键包含源码的绝对路径、源码字节、预处理结果、目标架构、编译器版本和参数列表。命中时复用 `~/.cache/p4net/compiler/` 中的 BMv2 JSON 和 P4Info；未命中时，用 `p4c -e` 编译参与缓存键计算的同一份预处理结果。
+`P4Compiler` 每次查询缓存前都会运行 `p4c -E`。缓存键包含源码绝对路径、源码字节、预处理结果、目标架构、编译器版本和参数列表。命中缓存时复用 BMv2 JSON 和 P4Info，未命中时用 `p4c -e` 编译参与缓存键计算的同一份预处理结果。
 
-API：[`p4net.compiler`](api/compiler.md)。
+默认缓存目录是 `~/.cache/p4net/compiler/`。`CompileResult` 记录产物路径、源码哈希、编译器版本，以及是否跳过了后端编译。详见[编译器 API](api/compiler.md)。
 
 ### `p4net.control`
 
-P4Runtime gRPC 客户端与 codec 帮助函数：
+`P4RuntimeClient` 提供同步连接、仲裁、流水线下发、表项操作、计数器、组播组和 PacketIn/PacketOut。`AsyncP4RuntimeClient` 使用 `grpc.aio`，通过协程执行 RPC 和处理数据包。BMv2 寄存器操作则通过 `simple_switch_CLI` 访问配置的 Thrift 地址。
 
-- **`P4RuntimeClient`** —— 每个设备一个 gRPC 通道。在 `connect()` 时执行主控权选举握手（选举 ID 取毫秒级时间戳，重跑同一脚本总是能稳定夺得主控者地位），推送流水线配置，提供表项 CRUD、计数器读取、组播组管理，以及通过 StreamChannel 进行的 CPU 端口数据包 I/O。
-- **`P4InfoIndex`** —— 名称到 ID 的查询、匹配字段位宽与类型解析、`encode_match`、`decode_match`（把 P4Runtime 规范字节渲染为 IPv4/IPv6/MAC/十进制人类可读字符串）、`encode_action`、控制器报头 schema（`packet_in_metadata_schema`、`packet_out_metadata_schema`）。
-- **codec 帮助函数** —— `encode_int`、`encode_ipv4`、`encode_mac`、`encode_value`（自动分发）、`decode_int`、`decode_ipv4`、`decode_ipv6`、`decode_mac`、`parse_lpm`、`parse_ternary`、`parse_range`、`format_exact`、`format_lpm`、`format_ternary`、`format_range`、`canonicalize`。位宽感知的格式化器对 32 位字段渲染为 IPv4，48 位为 MAC，128 位为 IPv6，其余位宽为十进制。
+`P4InfoIndex` 查询名称、ID、匹配类型、位宽和控制器元数据。编解码函数负责值的编码及匹配字段的格式化。格式化时，32 位字段按 IPv4 展示，48 位按 MAC 展示，128 位按 IPv6 展示，其余位宽使用十进制。
 
-同步客户端的 StreamChannel 结束或报错后，会清除连接状态并关闭 gRPC 通道。此后发起新操作会抛出 `ConnectionError`，可调用 `connect()` 在同一客户端上重新连接。旧通道正在清理时，`connect()` 和 `disconnect()` 会等待清理完成。初次仲裁期间断流时，`connect()` 会立即报错。
+`Network` 创建同步客户端时，用毫秒时间戳作为选举 ID 的高位。直接构造 `P4RuntimeClient` 时，默认值是 `(1, 0)`。客户端能否获得主控权，取决于与同一设备上其他客户端的仲裁结果。需要明确指定选举 ID 时，参见[连接与主控权](async-client.md#连接与主控权)。
 
-交换机以 `PERMISSION_DENIED` 拒绝同步写入或流水线更新时，客户端会抛出 `NotPrimaryError`，并将原始 RPC 错误保留为异常原因。失去主控权不会关闭连接，仍可读取。重新获得主控权后，可通过同一连接继续写入。
+同步客户端的 StreamChannel 结束或报错后，会清除连接状态并关闭通道。可在同一客户端上调用 `connect()` 重连。旧通道正在清理时，生命周期方法会等待清理完成。交换机以 `PERMISSION_DENIED` 拒绝写入或流水线更新时，客户端抛出 `NotPrimaryError`，连接仍可用于读取。
 
-API：[`p4net.control`](api/control.md)。
+详见[控制面 API](api/control.md)。
 
 ### `p4net.network`
 
-编排器。`Network(topology)` 把所有层组合在一起：
+`Network(topology)` 管理运行拓扑所需的资源。同步 `start()` 按以下顺序执行：
 
-1. 校验拓扑（除非 `unsafe=True`）。
-2. 分配 `log_dir`（用户指定或新建临时目录）与 `pcap_dir`。
-3. 通过 `P4Compiler.compile()` 编译每个交换机的 P4 源码。
-4. 注册退出钩子，将网络加入清理注册表。在主线程中还会安装 SIGINT/SIGTERM 处理器。
-5. 为每个主机创建一个 Linux 命名空间，把 `lo` 拉起。
-6. 对每条链路：创建 veth 对，把主机侧搬入对应命名空间，设置 IPv6 sysctl 门控（设置了 `ip6` 则启用，否则禁用），配置地址 / MAC / MTU，把接口拉起。逐方向应用 `tc netem`。
-7. 按主机配置添加 IPv4 与 IPv6 默认路由。
-8. 为每个交换机启动一个 `simple_switch_grpc` 进程，等待 gRPC 端口可连。
-9. 为每个交换机打开一个 `P4RuntimeClient`，推送流水线配置。
-10. 构造用户通过 `net.host(name)` / `net.switch(name)` 访问的 `RunningHost` / `RunningSwitch` 代理对象。
+1. 校验拓扑，除非设置了 `unsafe=True`，然后准备日志目录和可选的抓包目录。
+2. 编译各交换机的 P4 源码。
+3. 将网络加入进程退出清理注册表。在主线程中还会安装 SIGINT/SIGTERM 处理器。
+4. 为每台主机创建命名空间，启用回环接口。
+5. 创建 veth 对，将主机侧接口移入对应命名空间，配置 IPv6、地址、MAC、MTU 和接口状态，再应用各方向的链路参数。
+6. 添加已配置的 IPv4 和 IPv6 默认路由。
+7. 逐台启动 BMv2，确认当前进程持有 gRPC 和 Thrift 监听套接字后，再启动下一台交换机。
+8. 为每台交换机连接一个同步 P4Runtime 客户端，下发流水线。
+9. 创建 `RunningHost` 和 `RunningSwitch` 对象，供 `host()`、`switch()`、`hosts` 和 `switches` 访问。
 
-`stop()`（由 `__exit__`、atexit、信号或显式调用触发）按相反顺序回卷：用户启动的 xterm、P4Runtime 客户端、BMv2 进程、veth 对、命名空间，最后把自己从清理注册表中移除。每一步都包在带日志的 `try/except` 中——任一步失败都不会泄漏其余资源。
+启动失败时，回收已经创建的资源。`await net.astart()` 先在调用线程注册清理，再将启动工作提交到工作线程。需要自动处理退出信号时，使用主线程的事件循环。取消启动时，会等待工作线程和清理结束，再传播取消异常。启动与关闭同时发生时，关闭过程会先等待启动线程结束，再释放资源。
 
-`await net.astart()` 先在调用线程注册清理，再提交启动工作。使用主线程的事件循环时，会安装信号处理器。关闭网络会先等待启动线程结束，再释放资源。取消 `astart()` 时，会等待启动和清理结束后再传播取消异常。
+`RunningHost` 提供命名空间内的命令执行和连通性检查。`RunningSwitch` 提供 BMv2 进程、编译结果、同步客户端，以及延迟创建并缓存的异步客户端。异步客户端需要连接后才能使用。
 
-异步 P4Runtime 连接在客户端所属的事件循环中关闭。`await net.astop()` 等待连接关闭后，再由工作线程释放其余网络资源。在事件循环中调用同步 `stop()` 时，会启动后台清理并返回。用法见[关闭网络](async-client.md#关闭网络)。
+`await net.astop()` 等待清理完成，包括在缓存的异步客户端所属的事件循环中关闭连接。保持这些事件循环运行，直到关闭完成。在事件循环内调用 `stop()`，会启动后台清理并返回；在事件循环之外调用，则等待清理完成。详见[异步生命周期指南](async-client.md#关闭网络)。
 
-`fork()` 后，子进程使用空的网络清理注册表和新的锁。子进程退出或收到信号时，不会清理父进程的网络。子进程中新登记的网络由它自己的注册表管理。
-
-`Network` 还托管高层帮助方法：`ping`、`pingall`、`pingall6`、`xterm`，它们走 `RunningHost.ping` 与 `RunningHost.popen` 路径。
-
-API：[`p4net.network`](api/network.md)。
+详见[网络 API](api/network.md)。
 
 ### `p4net.cli`
 
-交互式 Shell：
+命令行入口加载包含 `topology` 对象的 Python 文件，启动网络，再调用可选的 `setup(net)` 函数。随后进入交互终端，或在 `--no-shell` 模式下等待信号。
 
-- **`CommandDispatcher`** —— 纯解析器与执行器。接受一个 `Network`，以及一行输入文本，返回格式化好的字符串。不涉及任何交互逻辑；单元测试直接打它。
-- **`P4NetShell`** —— 基于 `prompt_toolkit` 的 REPL：`FileHistory` 位于 `~/.p4net_history`；`NestedCompleter` 同时识别命令、主机名、交换机名与子动词；Ctrl-C 取消当前输入，Ctrl-D 干净退出。
-- **`build_network_completer`** —— 动态读取 dispatcher 的 `_top_level_handlers`、`_host_handlers`、`_switch_handlers` 键，从而无需修改 completer 即可让新命令自动出现。
-- **`p4net.cli.main`** —— 由 `argparse` 驱动的控制台脚本。通过 `importlib.util.spec_from_file_location` 按路径加载拓扑文件，拉起网络，调用 `setup(net)`（如有），然后进入 Shell（默认）或阻塞在 `signal.pause()` 上（`--no-shell`）。
+`CommandDispatcher` 解析命令并操作运行网络。`P4NetShell` 提供历史记录和补全，Ctrl-C 取消当前输入，Ctrl-D 退出终端。`topology graph` 将拓扑描述导出为 DOT，或通过 Graphviz 渲染。
 
-API：[`p4net.cli`](api/cli.md)。
+详见 [CLI 指南](cli.md)和 [CLI API](api/cli.md)。
 
 ## 设计原则
 
-### BMv2 在 root 命名空间，主机各自占用私有命名空间
+### BMv2 与主机的命名空间布局 { #bmv2-在-root-命名空间主机各自占用私有命名空间 }
 
-这是 Mininet 的做法。每台主机有独立的 `ip netns`；BMv2 数据平面进程运行在 root 命名空间。理由：
+每台主机使用独立的网络命名空间。BMv2 运行在 root 网络命名空间，连接 veth 在 root 命名空间中的接口。交换机之间的链路两端都留在该命名空间。
 
-- **gRPC 连通性更简单**。P4Runtime 客户端从 root 命名空间直接连 `127.0.0.1:<grpc_port>`，无需穿越 veth。把 BMv2 放进命名空间会强制每个交换机额外加一对控制面 veth。
-- **监听端口冲突更少**。每个 BMv2 进程在 root 命名空间绑定 gRPC 与 Thrift 端口；交换机之间的端口冲突在任何进程启动之前就被 `Topology.validate()` 拦下了。
-- **数据包流向已经被内核隔离**。veth 对端位于主机命名空间，BMv2 进程操作的是 root 一侧。命名空间隔离能避免的风险，这里本来就不存在。
+控制客户端通过 `127.0.0.1:<grpc_port>` 连接交换机，交换机通过接入的接口转发实验流量。这样既分离了各主机的网络协议栈，又保留了本机控制连接。拓扑校验检查同一描述中的服务端口冲突，BMv2 启动时还会检查监听套接字是否被其他进程占用。
 
-### `subprocess.Popen(["ip", "netns", "exec", ...])` 而非 `pyroute2.NSPopen`
+### 在命名空间中执行命令 { #subprocesspopenip-netns-exec--而非-pyroute2nspopen }
 
-phase 7 复现了一个死锁：`pyroute2.NSPopen` 在子进程中 `fork()` 之后调用 `setns()`，并在 `execve()` 之前回到 Python。如果父进程已经启动了线程（例如 P4Runtime 客户端的 StreamChannel 消费者），那些线程的状态会被 fork 到子进程；在子进程触及 GIL 或分配内存时就可能死锁。修复方式是改用 `subprocess.Popen` 调用 `ip netns exec <name> <argv>`——内核侧的封装做的是 `clone()` 加 `execve()`，中间不再回到 Python，没有 fork-then-Python 的窗口。
+主机命令通过 `subprocess.run()` 或 `subprocess.Popen()` 执行 `ip netns exec <name> <argv>`。外部程序 `ip` 先进入命名空间，再执行目标命令。p4net 在这条路径上不使用 `pyroute2.NSPopen`，也不传入 Python `preexec_fn`。
 
-p4net 中所有命名空间内执行路径——主机命令、ping、xterm、测试中的 tcpdump、sysctl 门控——都走这条路。
+这使已经启动 P4Runtime 线程的进程，无需在创建子进程与执行目标命令之间运行 Python 命名空间辅助代码。Python 文档说明了 [`preexec_fn` 在多线程程序中的限制](https://docs.python.org/3/library/subprocess.html#popen-constructor)。命名空间创建、接口配置和监听套接字检查仍使用 `pyroute2`。
 
 ### 内容寻址的编译缓存
 
-缓存键包含编译器的预处理结果，因此每次调用都会检查嵌套引用、宏展开和 `-I` 路径选中的头文件。即使已有旧产物，引用文件缺失时也会报告编译错误。仅修改源码的时间戳、不修改内容，仍可命中缓存。
+引用头文件、宏展开或 `-I` 路径选中的头文件发生变化时，预处理结果和缓存键也会变化。即使已有旧产物，引用文件缺失仍会导致预处理失败。仅修改文件时间戳，不修改内容，仍可命中缓存。
 
-缓存命中时运行预处理，跳过后端编译。多套拓扑使用同一份源码和参数时，共用缓存产物。缓存位于 `~/.cache/p4net/compiler/<hash>/`；向 `compile()` 传入 `force=True` 可强制重新编译。
+预处理和后端编译在缓存锁之外执行。多个调用分别在临时目录中编译，目录锁保护最终的产物检查和发布。JSON 或 P4Info 缺失、为空时会重新编译。设置 `force=True` 后，旧条目会保留到新产物准备完成，再加锁替换；发布失败时恢复旧条目。
 
-强制重编译时，先保留旧缓存并生成完整的新产物，再加锁替换。替换失败时恢复旧条目。
+### 资源回收 { #清理是一等公民 }
 
-缓存中的 BMv2 JSON 或 P4Info 缺失、为空时，会重新编译。多个调用可以并行编译，各自保存临时产物。写入缓存时，先锁定缓存目录并重新检查目标条目：若其他调用已写入完整产物，就直接复用；否则移除不完整的条目，再将本次产物整体移入。
+退出 `with Network(...)` 块、进程正常退出、收到 SIGINT/SIGTERM，或显式调用 `stop()` / `astop()`，都会触发清理。主线程的事件循环运行时，信号处理器先等待 `astop()`，再恢复原处理器并重新投递信号。事件循环之外使用同步清理。
 
-### 清理是一等公民
+回收顺序为：
 
-网络清理可以通过以下方式触发：
+1. `Network` 跟踪的用户进程，包括通过 `net.xterm()` 打开的终端。
+2. 缓存的异步 P4Runtime 客户端，然后是同步客户端。
+3. BMv2 进程。`BMv2Switch.stop()` 先发送 SIGTERM，默认等待 5 秒，超时后升级为 SIGKILL。
+4. veth 对，然后是主机命名空间。
+5. 清理注册表项和运行节点对象。
 
-1. **`__exit__`**：用户使用 `with` 语法时。
-2. **`atexit`**：脚本未使用上下文管理器但正常退出时。
-3. **SIGINT / SIGTERM** 处理器在主线程中执行。事件循环运行时等待 `astop()`，其他情况下调用 `stop()`。清理完成后恢复原处理器，重新投递信号。
-4. **显式调用 `net.stop()` 或 `await net.astop()`**。
+重复调用清理方法会共用关闭过程。单个资源回收报错时会记录日志，并继续处理其余资源。`fork()` 后，子进程使用空的网络注册表和独立的信号清理状态，不会因自身清理而停止父进程的网络。gRPC 连接的限制见 [fork 说明](known-limitations.md#1-grpc-连接与进程创建)。
 
-`stop()` 完全幂等，且能容忍部分状态：连续调两次是空操作；在 `start()` 失败之后调用，会把已经成功的步骤都清理干净。回收顺序为：
+### 接口启用前的 IPv6 配置 { #ipv6-sysctl-在拉起接口之前 }
 
-1. 用户启动的进程（`xterm` 等）。
-2. P4Runtime 客户端（`disconnect`、StreamChannel 的 `_teardown`）。
-3. BMv2 进程（先 `SIGTERM`，等 2 秒后 `SIGKILL`）。
-4. veth 对（在 root 命名空间执行 `ip link del`）。
-5. 网络命名空间（`ip netns del`）。
-6. 从清理注册表中注销。
+启用主机接口前，编排器先检查该接口最终使用的 IPv6 地址。没有地址时设置 `disable_ipv6=1`；有地址时设置 `disable_ipv6=0`、`accept_ra=0`、`autoconf=0`，再配置地址并启用接口。
 
-### IPv6 sysctl 在拉起接口之前
+后一组设置关闭路由通告处理和 SLAAC。链路本地地址的生成由独立的内核参数 `addr_gen_mode` 控制，p4net 不修改它，因此启用 IPv6 的接口还可能获得链路本地地址。详见 [Linux IPv6 sysctl 文档](https://docs.kernel.org/networking/ip-sysctl.html#proc-sys-net-ipv6-variables)。
 
-在 `disable_ipv6=0` 的情况下，Linux 内核会在每个接口拉起时自动生成一个 `fe80::` link-local 地址。对 p4net 这种用户必须显式启用 IPv6 的实验环境，这个自动地址只是噪声：它会在 punt 路径上引发 MLD 报文、让 `<host> ifconfig` 多出未声明的地址、在邻居发现上浪费时间。
+### 链路参数的方向 { #非对称损伤通过映射到-veth-一侧的-tc-qdisc-实现 }
 
-编排器在执行 `ip link set up` **之前**写入按接口的 sysctl。如果主机描述符或链路端点设置了 `ip6`，`enable_ipv6(ns, iface)` 写入 `disable_ipv6=0`、`accept_ra=0`、`autoconf=0`（这样 SLAAC 不开，只保留显式配置的地址）。否则写入 `disable_ipv6=1`，内核就完全跳过自动 link-local 的生成。
+声明链路时，`a`、`b` 的顺序决定方向。`*_a_to_b` 参数应用在 `a` 接口的出方向，`*_b_to_a` 参数应用在 `b` 接口的出方向，端点是主机还是交换机不影响这一规则。
 
-### 非对称损伤通过映射到 veth 一侧的 `tc qdisc` 实现
+例如，`topology.add_link(h1, s1, delay_a_to_b="200ms")` 让离开 `h1` 的流量延迟 200 ms。再设置 `topology.add_link(h2, s1, delay_b_to_a="20ms")`，让交换机发往 `h2` 的流量延迟 20 ms。两项配置为 `h1` 到 `h2` 的请求路径增加了 220 ms 时延。实际 RTT 还包括转发、排队和主机调度耗时，测量方法见[性能评测](performance.md)。
 
-当你设置 `Link(a=h1, b=s1, delay_a_to_b="200ms")` 时，编排器把 `tc netem delay 200ms` 应用在 a 侧的 veth 接口——也就是位于 `h1` 命名空间内的那一端。从 `h1` 出向 `s1` 的流量经过这个接口时被延迟 200ms，到达 BMv2 入口时晚了 200ms。b 侧（root 命名空间里的 `s1-eth1`）没有 qdisc，所以反向（`s1` → `h1`）没有任何整形。
+## ICMP 数据通路 { #数据通路一个-icmp-走完全程 }
 
-实测验证：`delay_a_to_b="200ms"`（h1 → s1）加 `delay_b_to_a="20ms"`（s1 → h2——注意对 `Link(h2, s1)` 而言 b → a 就是 s1 → h2）测得 ping RTT 为 `220.981/221.288/222.048 ms (min/avg/max)`，正好等于两段单向延迟之和，抖动来自内核调度，亚毫秒级别。
+[快速入门示例](examples/quick-start.md)将两台主机接到同一台交换机的端口 1 和 2，初始化函数设置静态 ARP。使用默认次数和超时调用 `h1.ping(h2)` 时：
 
-## 数据通路：一个 ICMP 走完全程
+1. `RunningHost.ping()` 通过 `ip netns exec h1` 运行 `ping -4 -c 1 -W 2 -w 3 10.0.0.2`。
+2. 主机内核从 `h1-eth0` 发出 ICMP 回显请求，数据包到达对端接口 `s1-eth1`。
+3. BMv2 解析以太网头，P4 入口控制将输入端口 1 对应的输出端口设为 2。
+4. 数据帧从 `s1-eth2` 发出，到达第二台主机命名空间中的 `h2-eth0`。
+5. `h2` 沿反向路径发送回显应答，P4 程序将输入端口 2 对应的输出端口设为 1。
+6. ping 收到应答，以状态码 0 退出，`RunningHost.ping()` 返回 `True`。
 
-在端口互换拓扑里执行 `h1.ping(h2)` 时发生了什么：
+端口互换程序只解析以太网头，IPv4、IPv6 和 ARP 帧都通过相同的转发路径。配置 IPv6 主机地址后，IPv6 ping 使用 `-6` 和同一组接口。
 
-1. `h1.ping(h2)` 通过 `subprocess.run(["ip", "netns", "exec", "h1", ...])` 在 `h1` 命名空间内运行 `ping -4 -c 1 -W 2 -w 3 10.0.0.2`。
-2. 内核侧的 ping 构造一个 ICMP echo，交给 `h1-eth0`。
-3. 数据包穿过 veth 对，到达 root 命名空间里的 `s1-eth1`。
-4. BMv2 解析器提取以太网报头。入口控制看到 `std.ingress_port == 1`，设置 `std.egress_spec = 2`，流水线把数据包从端口 2 也就是 `s1-eth2` 发出。
-5. 数据包穿过第二对 veth，进入 `h2` 命名空间，到达 `h2-eth0`。
-6. `h2` 内核协议栈解析 ICMP，构造响应（`setup(net)` 注入的静态 ARP 让地址解析直接命中），响应沿原路反向穿回：`h2-eth0 → s1-eth2 → BMv2（端口 2 → 端口 1）→ s1-eth1 → h1-eth0`。
-7. `h1` 的 ping 进程看到响应，以 rc=0 退出，`RunningHost.ping` 返回 `True`。
+## 当前支持范围 { #显式不支持的功能 }
 
-IPv6 ICMP 走完全相同的路径，只是多一个 `-6` 标志，且 P4 程序中解析的是 `hdr.ipv6`。
+p4net 当前用于本机 Linux 实验，运行目标是 `simple_switch_grpc` 和 `v1model` 架构。主机通过网络命名空间隔离，运行时无需容器。控制接口包括 P4Runtime，以及用于寄存器操作的 BMv2 Thrift CLI。
 
-## 显式不支持的功能
-
-以下都是 v0.x 阶段的有意取舍。可能在 v0.3.0 或更后版本变成支持项的，见[路线图](roadmap.md)。
-
-- **Docker、Podman、任何容器运行时**。基于 netns 的主机模型存在的意义就是绕过容器层的开销与故障模式。
-- **OpenFlow、Open vSwitch**。p4net 是 P4 优先的；OpenFlow 的可编程性与 P4 的匹配-动作图合不到一起。
-- **PSA 架构、Tofino 目标、硬件交换机**。v0.x 只跑 BMv2 v1model。
-- **运行时拓扑变更**。`Topology` 在 `Network.start()` 时即冻结。运行时增删主机/链路需要彻底重启。
-- **跨多机的分布式仿真**。把两套 p4net 跨网络联起来不在 v0.x 范围；这是 v1.0 才会讨论的事。
-- **gNMI、gNOI、OpenConfig**。控制平面只实现 P4Runtime。
+项目尚未内置 OpenFlow/Open vSwitch 集成、硬件交换机目标、分布式编排或 gNMI/gNOI/OpenConfig 客户端。PSA 支持需要集成匹配的编译器和运行目标。在线资源变更需要额外的编排接口，单独修改拓扑描述不会完成这些操作。详见[已知限制](known-limitations.md)和[路线图](roadmap.md)。

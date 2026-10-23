@@ -1,197 +1,168 @@
 ---
-description: How p4net is structured — the six packages, design principles behind each, and the data path of a single packet from host to host.
+description: Package responsibilities, network startup and cleanup, and the path of a packet through p4net.
 ---
 
 # Architecture
 
-p4net is six Python packages on top of `p4c`, BMv2, and the Linux kernel. This page explains what each package does, why it exists, and how they compose at runtime.
+p4net describes a topology in Python, compiles its P4 programs with `p4c`, and runs hosts and BMv2 switches on a Linux system. Six packages separate topology data, compilation, system resources, control-plane operations, orchestration, and the CLI.
 
 ## Layered architecture
 
 ```mermaid
 flowchart TB
-    CLI[p4net.cli<br/>P4NetShell, dispatcher]
-    NET[p4net.network<br/>Network orchestrator]
-    CTL[p4net.control<br/>P4Runtime client, codec]
-    CMP[p4net.compiler<br/>p4c + cache]
-    TPO[p4net.topo<br/>Topology DSL]
-    RT[p4net.runtime<br/>netns, veth, tc, BMv2 process]
+    CLI[p4net.cli<br/>Shell and commands]
+    NET[p4net.network<br/>Network lifecycle]
+    CTL[p4net.control<br/>P4Runtime clients and codecs]
+    CMP[p4net.compiler<br/>p4c and artifact cache]
+    TPO[p4net.topo<br/>Topology descriptions]
+    RT[p4net.runtime<br/>Namespaces, veth, tc, BMv2]
     CLI --> NET
+    CLI --> TPO
+    CLI --> CTL
     NET --> CTL
     NET --> CMP
     NET --> TPO
     NET --> RT
-    CTL --> RT
 ```
 
-Higher layers depend on lower layers. The `cli` and `control` layers share a transitive dependency on `runtime` (the CLI to spawn host commands; the control client because BMv2 lives in a `runtime`-managed process), but they don't import each other.
+The arrows show the main calls between packages. `network` creates and releases runtime resources, then gives the CLI and user code access through running-node handles. The CLI also uses control-plane codecs to display field values. `control` communicates with the switch's P4Runtime server; it does not manage the BMv2 process. The packages also share the `P4NetError` base class from `runtime.exceptions`.
 
 ## The six packages
 
 ### `p4net.runtime`
 
-System primitives:
+This package provides the Linux and process operations used by the orchestrator:
 
-- **`NetworkNamespace`** — `ip netns add/del/exec` lifecycle. The `exec` and `popen` methods shell out to `ip netns exec <name> <argv>` rather than calling `setns()` from Python. (See *Design principles* below for why.)
-- **`VethPair`** — creates a kernel veth pair, moves either end into a namespace, sets addresses (IPv4 and IPv6), MAC, MTU, and link state. Backed by `pyroute2` for the netlink calls.
-- **`apply_netem` / `clear_qdisc`** — `tc qdisc add/del root netem rate=... delay=... loss ...` on a single interface inside a target namespace. Idempotent.
-- **`BMv2Switch`** — `Popen`-wrapped `simple_switch_grpc` lifecycle. Builds the argv (port-to-iface map, gRPC bind address, optional Thrift, `--cpu-port`, log level), waits for the gRPC port to accept connections, exposes signal-based teardown.
-- **`NSProcess`** — minimal wrapper around `subprocess.Popen` for processes that live in a namespace; supports `pid`, `poll`, `wait`, `terminate`, `kill`, plus a no-op `close()` preserved for API stability with earlier phases.
-- **`disable_ipv6` / `enable_ipv6`** — per-interface sysctl helpers (`net.ipv6.conf.<iface>.{disable_ipv6,accept_ra,autoconf}`). Run via `ns.exec(["sysctl", "-w", ...])`.
+- `NetworkNamespace` creates and removes namespaces through `pyroute2`. Its `exec()` and `popen()` methods run commands through `ip netns exec`.
+- `VethPair` creates interfaces, moves either end into a namespace, and configures addresses, MAC, MTU, and link state through `pyroute2`.
+- `apply_netem()` uses `tc qdisc replace` to set egress delay, jitter, loss, and rate. `clear_qdisc()` removes the root qdisc and accepts an already absent qdisc.
+- `BMv2Switch` starts `simple_switch_grpc`, builds its arguments, and manages its log file and shutdown. `wait_until_ready()` checks that the child is alive and owns both its gRPC and Thrift listeners. A listener owned by another process is a startup error.
+- `NSProcess` wraps a process started inside a namespace. It provides `pid`, `poll()`, `wait()`, `terminate()`, and `kill()`. `close()` is retained as a no-op for compatibility.
+- `disable_ipv6()` and `enable_ipv6()` write per-interface sysctl settings in a host namespace or the root namespace.
 
-The runtime layer carries no orchestration. Each primitive fails fast with an explicit exception; the caller is responsible for ordering and cleanup.
-
-API: [`p4net.runtime`](api/runtime.md).
+These objects manage individual resources. `Network` determines their creation and cleanup order. See the [runtime API](api/runtime.md).
 
 ### `p4net.topo`
 
-Descriptive DSL — pure data, no system calls:
+`Host`, `P4Switch`, `LinkEndpoint`, and `Link` are frozen data classes. They describe addresses, switch configuration, link endpoints, and impairments. `Topology` is a mutable builder that collects these descriptions, validates them, serializes them, and exports Graphviz diagrams. Building a description creates no network resources.
 
-- **`Host`** — name, IPv4 (`ip`, `default_route`), IPv6 (`ip6`, `default_route6`), MAC. Field validation in `__post_init__`.
-- **`P4Switch`** — name, `p4_src`, architecture (`v1model`), `device_id`, `grpc_port`, `thrift_port`, `cpu_port`, `log_level`, `pcap_enabled`.
-- **`LinkEndpoint`** — node name, port number, interface name, optional per-link `ip` / `ip6` / `mac` overrides.
-- **`Link`** — symmetric `bandwidth` / `delay` / `jitter` / `loss_pct`, or per-direction `*_a_to_b` / `*_b_to_a` (asymmetric). Mixing symmetric and asymmetric on the same parameter is a validation error.
-- **`Topology`** — builder. `add_host`, `add_switch`, `add_link`, `validate()`, `to_dict()` / `from_dict()`, `to_graphviz()` / `render_graphviz()`. Auto-allocates host port numbers (starting at 0) and switch port numbers (starting at 1), interface names of the form `<node>-eth<port>` clamped to Linux's 15-character ifname limit.
+Host ports are assigned from 0, switch ports from 1. Generated interface names have the form `<node>-eth<port>`. Names longer than Linux's 15-character limit are rejected.
 
-`Topology.validate()` runs at `Network.start()` time (unless `unsafe=True`) and at every `topology graph` invocation. It checks endpoint references, port collisions, switch device-id / gRPC-port / Thrift-port collisions, interface name lengths, IPv4 address collisions inside the same `/N`, IPv6 address collisions inside the same `/N`, and link parameter consistency (e.g. `jitter_a_to_b` requires `delay_a_to_b` or the symmetric `delay`).
+Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 
-API: [`p4net.topo`](api/topo.md).
+Construction checks field values and parameter combinations. `Topology.validate()` additionally checks endpoint references, self-links, port and device-ID collisions, switch service-port collisions, interface names, and host address conflicts. Network startup calls it unless `unsafe=True`. The CLI also validates before `topology graph`.
+
+The builder remains mutable after startup. Editing it does not change running resources. See [topology changes](known-limitations.md#4-live-topology-mutation-not-supported) and the [topology API](api/topo.md).
 
 ### `p4net.compiler`
 
-Runs `p4c -E` to resolve includes and macros before each cache lookup. The key covers the absolute source path, source bytes, preprocessed input, architecture, compiler version, and argument list. Cache hits reuse the BMv2 JSON and P4Info under `~/.cache/p4net/compiler/`. On a miss, `p4c -e` compiles the same preprocessed snapshot used to calculate the key.
+`P4Compiler` runs `p4c -E` before every cache lookup. The key includes the absolute source path, source bytes, preprocessed input, architecture, compiler version, and argument list. A cache hit reuses the BMv2 JSON and P4Info. On a miss, `p4c -e` compiles the same preprocessed snapshot used for the key.
 
-API: [`p4net.compiler`](api/compiler.md).
+The default cache is `~/.cache/p4net/compiler/`. Each `CompileResult` records the artifact paths, source hash, compiler version, and whether backend compilation was skipped. See the [compiler API](api/compiler.md).
 
 ### `p4net.control`
 
-P4Runtime gRPC client and codec helpers:
+`P4RuntimeClient` provides synchronous connection, arbitration, pipeline installation, table operations, counters, multicast groups, and PacketIn/PacketOut. `AsyncP4RuntimeClient` uses `grpc.aio` for awaited RPC operations and async packet handling. BMv2 register operations use `simple_switch_CLI` through the configured Thrift address.
 
-- **`P4RuntimeClient`** — one gRPC channel per device. Performs the master-arbitration handshake on `connect()` (election ID is millisecond-since-epoch so re-running the same script always claims primary), pushes pipeline configs, runs the table CRUD primitives, reads counters, manages multicast groups, drives the StreamChannel for CPU-port packet I/O.
-- **`P4InfoIndex`** — name → ID lookups, match-field bitwidth and match-type resolution, `encode_match`, `decode_match` (renders raw P4Runtime canonical bytes back into IPv4/IPv6/MAC/decimal human strings), `encode_action`, controller-header schemas (`packet_in_metadata_schema`, `packet_out_metadata_schema`).
-- **codec helpers** — `encode_int`, `encode_ipv4`, `encode_mac`, `encode_value` (auto-dispatch), `decode_int`, `decode_ipv4`, `decode_ipv6`, `decode_mac`, `parse_lpm`, `parse_ternary`, `parse_range`, `format_exact`, `format_lpm`, `format_ternary`, `format_range`, `canonicalize`. Width-aware formatting selects IPv4 for 32-bit fields, MAC for 48-bit, IPv6 for 128-bit, decimal for everything else.
+`P4InfoIndex` resolves names, IDs, match types, bit widths, and controller metadata. The codec functions encode values and format decoded matches. The formatters use IPv4 for 32-bit fields, MAC for 48-bit fields, IPv6 for 128-bit fields, and decimal for other widths.
 
-When the synchronous client's StreamChannel ends or fails, it clears its connected state and closes the gRPC channel. New operations raise `ConnectionError`. Call `connect()` to establish a new stream on the same client. `connect()` and `disconnect()` wait for channel cleanup already in progress. If the stream ends during the initial arbitration, `connect()` fails immediately.
+`Network` supplies its synchronous clients with a millisecond timestamp as the high part of the election ID. A directly constructed `P4RuntimeClient` defaults to `(1, 0)`. Primary status depends on arbitration with the other clients connected to that device. See the [async client guide](async-client.md#connections-and-primary-status) for explicit election IDs.
 
-If the switch rejects a synchronous write or pipeline update with `PERMISSION_DENIED`, the client raises `NotPrimaryError` and preserves the original RPC error as its cause. Losing primary status leaves the connection open for reads. Writes can resume on the same connection after the switch grants primary status again.
+When the synchronous StreamChannel ends or fails, the client clears its connection state and closes the channel. Call `connect()` on the same client to reconnect. Lifecycle calls wait for channel cleanup already in progress. A write or pipeline update rejected with `PERMISSION_DENIED` raises `NotPrimaryError`; the connection remains available for reads.
 
-API: [`p4net.control`](api/control.md).
+See the [control-plane API](api/control.md).
 
 ### `p4net.network`
 
-The orchestrator. `Network(topology)` composes every layer:
+`Network(topology)` owns the resources needed to run a description. The synchronous `start()` performs these steps:
 
-1. Validate the topology (unless `unsafe=True`).
-2. Allocate `log_dir` (explicit or fresh tempdir) and `pcap_dir`.
-3. Compile each switch's P4 source via `P4Compiler.compile()`.
-4. Install the exit hook and add the network to the cleanup registry. On the main thread, also install SIGINT/SIGTERM handlers.
-5. Create one Linux namespace per host; bring `lo` up.
-6. For each link: create the veth pair, move the host-side end into its namespace, set the IPv6 sysctl gate (enable if `ip6` is set, disable otherwise), configure addresses / MAC / MTU, bring the interface up. Apply `tc netem` per direction.
-7. Add IPv4 and IPv6 default routes per host as configured.
-8. Launch one `simple_switch_grpc` process per switch, wait for the gRPC port to become reachable.
-9. Open one `P4RuntimeClient` per switch, push the pipeline config.
-10. Build the `RunningHost` / `RunningSwitch` proxies the user consumes via `net.host(name)` / `net.switch(name)`.
+1. Validate the topology unless `unsafe=True`, then allocate log and optional pcap directories.
+2. Compile each switch's P4 source.
+3. Register the network for process-exit cleanup. On the main thread, install SIGINT/SIGTERM handling as well.
+4. Create a namespace for each host and bring up its loopback interface.
+5. Create veth pairs, move host ends into their namespaces, configure IPv6 settings, addresses, MAC, MTU, and link state, then apply directional impairments.
+6. Add configured IPv4 and IPv6 default routes.
+7. Start each BMv2 switch and wait for that process to own its gRPC and Thrift listeners before starting the next switch.
+8. Connect one synchronous P4Runtime client per switch and install its pipeline.
+9. Create the `RunningHost` and `RunningSwitch` handles exposed by `host()`, `switch()`, `hosts`, and `switches`.
 
-`stop()` (called from `__exit__`, atexit, signal, or explicitly) unwinds everything in reverse: spawned xterms, P4Runtime clients, BMv2 processes, veth pairs, namespaces, then unregisters from the cleanup registry. Each step is wrapped in a logged `try/except` so one failure can't leak the rest.
+A failed startup rolls back the resources already created. `await net.astart()` registers cleanup on the calling thread before submitting the startup work to a worker thread. Use the main thread's event loop for automatic signal handling. Cancelling startup waits for the worker and cleanup before propagating cancellation. A concurrent shutdown waits for startup before releasing resources.
 
-`await net.astart()` registers cleanup on the calling thread before submitting startup to a worker. Use the main thread's event loop to install signal handlers. Shutdown waits for any startup worker before releasing resources. Cancelling `astart()` waits for startup and cleanup before propagating cancellation.
+`RunningHost` exposes namespace commands and connectivity checks. `RunningSwitch` exposes the BMv2 process, compilation result, synchronous client, and a lazily created, cached async client. The async client must be connected before use.
 
-Async P4Runtime clients are disconnected on their owning event loops. `await net.astop()` waits for those disconnects before tearing down the remaining resources, and runs synchronous cleanup in a worker thread. Calling `stop()` inside an event loop starts background cleanup and returns. See [Shutting down a network](async-client.md#shutting-down-a-network).
+`await net.astop()` waits for cleanup, including disconnecting cached async clients on their owning event loops. Keep those loops running until shutdown finishes. Inside an event loop, `stop()` starts background cleanup and returns. Outside an event loop, it waits for cleanup. See the [async lifecycle guide](async-client.md#shutting-down-a-network).
 
-After `fork()`, the child starts with an empty cleanup registry and a new registry lock. Child exit and signal handlers leave the parent's networks untouched. Networks registered in the child use its own cleanup registry.
-
-`Network` also owns the high-level helpers: `ping`, `pingall`, `pingall6`, `xterm`. They route through `RunningHost.ping` and `RunningHost.popen`.
-
-API: [`p4net.network`](api/network.md).
+See the [network API](api/network.md).
 
 ### `p4net.cli`
 
-Interactive shell:
+The command entry point loads a Python file containing a `topology` object, starts its network, and calls an optional `setup(net)` function. It then starts the interactive shell or waits for a signal with `--no-shell`.
 
-- **`CommandDispatcher`** — pure parser/executor. Takes a `Network`, accepts a single input line, returns formatted text. No interactive concerns; unit-tested directly.
-- **`P4NetShell`** — `prompt_toolkit` REPL: `FileHistory` at `~/.p4net_history`, `NestedCompleter` over commands / host names / switch names / sub-verbs, Ctrl-C cancels the current input, Ctrl-D exits cleanly.
-- **`build_network_completer`** — dynamically reads the dispatcher's `_top_level_handlers`, `_host_handlers`, `_switch_handlers` keys so new commands light up at the prompt without editing the completer.
-- **`p4net.cli.main`** — `argparse`-driven console script. Loads a topology file by path via `importlib.util.spec_from_file_location`, brings the network up, calls `setup(net)` if defined, then either runs the shell (default) or blocks on `signal.pause()` (`--no-shell`).
+`CommandDispatcher` parses and executes commands against the running network. `P4NetShell` adds history, completion, Ctrl-C to cancel the current input, and Ctrl-D to leave the shell. The `topology graph` command exports the description as DOT or renders it with Graphviz.
 
-API: [`p4net.cli`](api/cli.md).
+See the [CLI guide](cli.md) and [CLI API](api/cli.md).
 
 ## Design principles
 
 ### BMv2 in the root namespace, hosts in private namespaces
 
-This is the Mininet pattern. Every host gets its own `ip netns`; the BMv2 dataplane processes live in the root namespace. Justifications:
+Each host has its own network namespace. BMv2 runs in the root network namespace and attaches to the root-side veth interfaces. Switch-to-switch links keep both ends in that namespace.
 
-- **Simpler gRPC reachability.** The P4Runtime client connects to `127.0.0.1:<grpc_port>` from the root namespace without crossing a veth. Putting BMv2 in a namespace would force a control-plane veth per switch.
-- **Lower listen-port juggling.** Every BMv2 process binds its gRPC and Thrift ports in the root namespace; collisions across switches are caught by `Topology.validate()` before any process starts.
-- **The kernel already isolates packet flow.** The veth peers are in the host namespaces; the BMv2 process operates on the root-namespace end of each pair. There's no cross-flow risk that namespace isolation would prevent.
+The control clients reach the switch through `127.0.0.1:<grpc_port>`. The switch forwards experiment traffic through its attached interfaces. This separates the host network stacks while keeping control-plane connections local. Topology validation catches service-port collisions within a description; BMv2 startup also detects listeners owned by other processes.
 
-### `subprocess.Popen(["ip", "netns", "exec", ...])` over `pyroute2.NSPopen`
+### Running namespace commands { #subprocesspopenip-netns-exec--over-pyroute2nspopen }
 
-Phase 7 of development reproduced a deadlock: `pyroute2.NSPopen` does `fork()` followed by `setns()` in the child, then calls back into Python before `execve()`. When the parent process has already started threads (e.g. the P4Runtime client's StreamChannel consumer), those threads' state is forked into the child, where reaching the GIL or allocating memory can deadlock. The fix was to invoke `ip netns exec <name> <argv>` as a regular `subprocess.Popen` — the kernel's wrapper does `clone()` with the right flags and `execve()`s without running Python in between, so there's no fork-then-Python window.
+Host commands use `subprocess.run()` or `subprocess.Popen()` with `ip netns exec <name> <argv>`. The external `ip` program enters the namespace before executing the requested command. p4net does not use `pyroute2.NSPopen` for this path or supply a Python `preexec_fn`.
 
-Every namespace-side execution path in p4net (host commands, ping, xterm, tcpdump in tests, sysctl gating) goes through this route.
+This avoids running a Python namespace helper between process creation and command execution in an application that already has P4Runtime threads. Python documents the [threading restriction on `preexec_fn`](https://docs.python.org/3/library/subprocess.html#popen-constructor). Namespace creation, interface setup, and listener inspection still use `pyroute2`.
 
 ### Content-addressed compiler cache
 
-The cache key includes the compiler's preprocessed input, so changes to nested includes, macro expansion, and headers selected through `-I` are checked on every call. A missing include raises a compilation error even if earlier artifacts exist. Touching a source without changing its contents still allows a cache hit.
+Changes to included headers, macro expansion, or headers selected through `-I` affect the preprocessed input and therefore the cache key. A missing include fails preprocessing even if older artifacts exist. Changing only a file's timestamp can still yield a cache hit.
 
-Cache hits run preprocessing but skip backend compilation. Multiple topologies using the same source and arguments share the cached artifacts. The cache lives at `~/.cache/p4net/compiler/<hash>/`; pass `force=True` to `compile()` to rebuild an entry.
+Preprocessing and backend compilation run outside the cache lock. Concurrent calls compile into separate staging directories. A directory lock protects the final artifact check and publication. Missing or empty JSON/P4Info artifacts cause a rebuild. `force=True` retains the previous entry until the new artifacts are ready, then replaces it under the lock and restores it if publication fails.
 
-Forced rebuilds retain the previous artifacts during compilation. Once fresh outputs are complete, the compiler replaces the entry under the cache lock. If replacement fails, the previous entry is restored.
+### Resource cleanup { #cleanup-is-first-class }
 
-Missing or empty BMv2 JSON or P4Info files trigger a rebuild. Concurrent calls compile into separate staging directories. A short lock on the cache directory protects the final check and replacement of incomplete entries. Each writer either reuses complete artifacts from another call or publishes its own with an atomic directory rename.
+Cleanup runs when a `with Network(...)` block exits, at normal process exit, on SIGINT/SIGTERM, or through an explicit `stop()`/`astop()` call. In a running main-thread event loop, signal handling awaits `astop()` before restoring the previous handler and redelivering the signal. Outside an event loop, it uses synchronous cleanup.
 
-### Cleanup is first-class
+The cleanup order is:
 
-Network cleanup can be triggered through:
+1. User processes tracked by `Network`, including terminals opened with `net.xterm()`.
+2. Cached async P4Runtime clients, followed by synchronous clients.
+3. BMv2 processes. `BMv2Switch.stop()` sends SIGTERM and waits 5 seconds by default before escalating to SIGKILL.
+4. Veth pairs, then host namespaces.
+5. Cleanup registry entries and running-node handles.
 
-1. **`__exit__`** when the user wraps `Network` in `with`.
-2. **`atexit`** when the script exits normally without the context manager.
-3. **SIGINT / SIGTERM** handlers on the main thread. In a running event loop they await `astop()`; otherwise they call `stop()`. They restore the previous handler and redeliver the signal after cleanup.
-4. **Explicit `net.stop()` or `await net.astop()`**.
-
-`stop()` is fully idempotent and tolerant of partial state — running it twice is a no-op; running it after a failed `start()` cleans up whatever did succeed before the exception. The teardown order is:
-
-1. Spawned user processes (`xterm`, etc.).
-2. P4Runtime clients (`disconnect`, `_teardown` on the StreamChannel).
-3. BMv2 processes (`SIGTERM`, then `SIGKILL` after a 2-second wait).
-4. veth pairs (`ip link del` from the root namespace).
-5. Network namespaces (`ip netns del`).
-6. Cleanup registry deregistration.
+Repeated cleanup calls share the shutdown operation. Cleanup logs an error from one resource and continues with the others. After `fork()`, the child has an empty network registry and its own signal-cleanup state, so its cleanup does not stop the parent's networks. See the [fork limitation](known-limitations.md#1-grpc-connections-and-process-creation) for gRPC connections.
 
 ### IPv6 sysctl gating before interface up
 
-The Linux kernel auto-generates a link-local `fe80::` address on every interface that is brought up while `disable_ipv6=0`. For p4net's purposes — a controlled lab where users explicitly opt into IPv6 — that auto-generated address is noise: it prompts MLD chatter on the punt path, populates `<host> ifconfig` with addresses the user didn't ask for, and wastes time on neighbor solicitation.
+Before bringing up a host interface, the orchestrator checks its resolved IPv6 address. Without one, it sets `disable_ipv6=1`. With one, it sets `disable_ipv6=0`, `accept_ra=0`, and `autoconf=0`, then configures the address and brings the interface up.
 
-The orchestrator sets the per-interface sysctl **before** running `ip link set up`. If the host descriptor or the link endpoint has `ip6` set, `enable_ipv6(ns, iface)` writes `disable_ipv6=0`, `accept_ra=0`, `autoconf=0` (so SLAAC stays off and only the explicit address is present). Otherwise `disable_ipv6=1` is written, and the kernel skips the auto link-local generation entirely.
+The latter settings disable router-advertisement processing and SLAAC. Link-local address generation has a separate kernel setting, `addr_gen_mode`; p4net leaves it unchanged. An IPv6-enabled interface can therefore also acquire a link-local address. See the [Linux IPv6 sysctl documentation](https://docs.kernel.org/networking/ip-sysctl.html#proc-sys-net-ipv6-variables).
 
-### Asymmetric impairment via direction-mapped veth-side `tc qdisc`
+### Directional link impairments { #asymmetric-impairment-via-direction-mapped-veth-side-tc-qdisc }
 
-When you set `Link(a=h1, b=s1, delay_a_to_b="200ms")`, the orchestrator applies `tc netem delay 200ms` to the `a`-side veth interface — the one that lives in `h1`'s namespace. Egress from `h1` toward `s1` flows through that interface, picks up the delay, and arrives 200 ms later at the BMv2 ingress. The `b`-side (`s1-eth1` in the root namespace) carries no qdisc, so the reverse direction (`s1` → `h1`) is unshaped.
+For a link declared with endpoints `a` and `b`, `*_a_to_b` settings apply to egress on the `a` interface. `*_b_to_a` settings apply to egress on `b`. The endpoint order determines the direction, whether the endpoint is a host or a switch.
 
-Verified empirically: a `delay_a_to_b="200ms"` (h1 → s1) plus `delay_b_to_a="20ms"` (s1 → h2 — note that for `Link(h2, s1)`, b → a is s1 → h2) produced a measured ping RTT of `220.981/221.288/222.048 ms (min/avg/max)` — exactly the 220 ms one-way pair, with sub-ms jitter from kernel scheduling.
+For example, `topology.add_link(h1, s1, delay_a_to_b="200ms")` delays traffic leaving `h1`. Adding `topology.add_link(h2, s1, delay_b_to_a="20ms")` delays traffic leaving `s1` toward `h2`. Together these settings add 220 ms of configured delay to the request path from `h1` to `h2`. Measured RTT also includes forwarding, queuing, and host scheduling. See [performance measurements](performance.md).
 
 ## Data flow walk-through
 
-What happens when `h1.ping(h2)` runs in a port-swap topology:
+The [quick-start example](examples/quick-start.md) connects two hosts to ports 1 and 2 of one switch. Its setup function installs static ARP entries. For `h1.ping(h2)` with the default count and timeout:
 
-1. `h1.ping(h2)` runs `ping -4 -c 1 -W 2 -w 3 10.0.0.2` inside `h1`'s namespace via `subprocess.run(["ip", "netns", "exec", "h1", ...])`.
-2. The kernel's ping crafts an ICMP echo and hands it to `h1-eth0`.
-3. The packet traverses the veth pair to `s1-eth1` in the root namespace.
-4. BMv2's parser extracts the Ethernet header. The ingress control sees `std.ingress_port == 1`, sets `std.egress_spec = 2`, and the pipeline emits the packet on port 2 — `s1-eth2`.
-5. The packet crosses the second veth pair into `h2`'s namespace, arriving on `h2-eth0`.
-6. The kernel's IP stack resolves the ICMP, replies (the static ARP from `setup(net)` short-circuits the resolution), and the reply takes the reverse path: `h2-eth0 → s1-eth2 → BMv2 (port 2 → port 1) → s1-eth1 → h1-eth0`.
-7. `h1`'s ping process sees the reply, exits with rc=0, and `RunningHost.ping` returns `True`.
+1. `RunningHost.ping()` runs `ping -4 -c 1 -W 2 -w 3 10.0.0.2` through `ip netns exec h1`.
+2. The host kernel sends the ICMP echo request through `h1-eth0` to the peer interface `s1-eth1`.
+3. BMv2 parses the Ethernet header. The P4 ingress control selects output port 2 for input port 1.
+4. The frame leaves through `s1-eth2` and reaches `h2-eth0` in the second host namespace.
+5. `h2` sends the echo reply along the reverse path. The P4 program maps input port 2 to output port 1.
+6. The ping command receives a reply and exits with status 0. `RunningHost.ping()` returns `True`.
 
-The same path applies to IPv6 ICMP, modulo the `-6` flag and the `hdr.ipv6` extraction in the P4 program.
+The port-swap program parses only Ethernet headers. IPv4, IPv6, and ARP frames use the same forwarding path. With IPv6 host addresses configured, IPv6 ping uses `-6` and the same interfaces.
 
-## What's deliberately not supported
+## Current scope { #whats-deliberately-not-supported }
 
-These are intentional v0.x non-goals. See the [Roadmap](roadmap.md) for items that may move into v0.3.0 or later.
+p4net currently runs local Linux experiments with `simple_switch_grpc` and the `v1model` architecture. Host isolation uses network namespaces rather than a container runtime. The control interfaces are P4Runtime and the BMv2 Thrift CLI for register operations.
 
-- **Docker, Podman, any container runtime.** The whole point of netns-based hosts is to skip the container layer's overhead and failure modes.
-- **OpenFlow, Open vSwitch.** p4net is P4-first; OpenFlow programmability doesn't compose with P4's match-action graph in a useful way.
-- **PSA architecture, Tofino targets, hardware switches.** v0.x exercises only the BMv2 v1model architecture.
-- **Live topology mutation.** `Topology` is frozen at `Network.start()`. Add/remove hosts and links during a run requires a full restart.
-- **Distributed simulation across multiple hosts.** Federating two p4net instances across a network is out of scope; a v1.0 conversation.
-- **gNMI, gNOI, OpenConfig.** Only P4Runtime is implemented for the control plane.
+The project has no built-in OpenFlow/Open vSwitch integration, hardware-switch target, distributed orchestration, or gNMI/gNOI/OpenConfig client. PSA support needs compiler and runtime integration. Live resource changes need an orchestration interface beyond editing the topology description. See [known limitations](known-limitations.md) and the [roadmap](roadmap.md).
