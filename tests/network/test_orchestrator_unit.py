@@ -109,6 +109,32 @@ def test_imported_unassigned_port_rejected_before_runtime_resources(
         network.stop()
 
 
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize("missing", ["omitted", "null", "empty"])
+def test_imported_unassigned_interface_name_rejected_before_runtime_resources(
+    patched: dict[str, Any], tmp_path: Path, side: str, missing: str
+) -> None:
+    data = _make_simple_topology().to_dict()
+    if missing == "omitted":
+        data["links"][0][side].pop("iface_name")
+    else:
+        data["links"][0][side]["iface_name"] = None if missing == "null" else ""
+    topo = Topology.from_dict(data)
+    before = topo.to_dict()
+    logs = tmp_path / "logs"
+    network = Network(topo, log_dir=logs)
+    try:
+        with pytest.raises(TopologyError, match="has no assigned interface name"):
+            network.start()
+        for name in ("ns_factory", "veth_factory", "bmv2_factory", "client_factory"):
+            patched[name].assert_not_called()
+        patched["compiler"].compile.assert_not_called()
+        assert not logs.exists()
+        assert topo.to_dict() == before
+    finally:
+        network.stop()
+
+
 @pytest.fixture
 def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
     """Patch every primitive Network calls; return a dict of MagicMocks."""

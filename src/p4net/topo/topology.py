@@ -404,7 +404,7 @@ class Topology:
 
         All configured gRPC and Thrift ports must be distinct across the topology,
         including the two ports of each switch. Every link endpoint must have
-        an assigned port.
+        an assigned port and a non-empty interface name.
         """
         errors: list[str] = []
 
@@ -474,10 +474,14 @@ class Topology:
                 else:
                     port_owners[port] = (sw.name, field_name)
 
-        # 5. Interface name length.
+        # 5. Interface names are assigned and within Linux's length limit.
         for i, link in enumerate(self._links):
             for which, ep in (("a", link.a), ("b", link.b)):
-                if ep.iface_name is not None and len(ep.iface_name) > _IFNAME_MAX_LEN:
+                if ep.iface_name is None or ep.iface_name == "":
+                    errors.append(
+                        f"link[{i}] endpoint {which} ({ep.node!r}) has no assigned interface name"
+                    )
+                elif len(ep.iface_name) > _IFNAME_MAX_LEN:
                     errors.append(
                         f"link[{i}] endpoint {which}: interface name "
                         f"{ep.iface_name!r} exceeds {_IFNAME_MAX_LEN} chars"
@@ -641,8 +645,9 @@ class Topology:
     def from_dict(cls, data: dict[str, Any]) -> Topology:
         """Reconstruct a :class:`Topology` from a :meth:`to_dict` payload.
 
-        Endpoint ports are restored as stored. Call :meth:`validate` to check
-        that every endpoint has an assigned port.
+        Endpoint ports and interface names are restored as stored. Call
+        :meth:`validate` to check that every endpoint has an assigned port
+        and a non-empty interface name.
         """
         topo = cls()
         for name, host_data in data.get("hosts", {}).items():
