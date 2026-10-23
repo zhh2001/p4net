@@ -64,6 +64,27 @@ p4net = "p4net.cli.main:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/p4net"]
 
+[tool.hatch.build.targets.sdist]
+only-include = [
+  ".editorconfig",
+  ".github",
+  ".gitignore",
+  ".pre-commit-config.yaml",
+  "CHANGELOG.md",
+  "CODE_OF_CONDUCT.md",
+  "CONTRIBUTING.md",
+  "LICENSE",
+  "README.md",
+  "SECURITY.md",
+  "docs",
+  "examples",
+  "mkdocs.yml",
+  "pyproject.toml",
+  "src/p4net",
+  "tests",
+  "tools",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

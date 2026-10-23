@@ -55,8 +55,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
 
-      - name: Build wheel
-        run: python -m build --wheel
+      - name: Build distributions
+        run: |
+          printf '%s\n' 'Archive selection check' > local-build-note.txt
+          python -m build
+
+      - name: Verify source distribution contents
+        run: |
+          python - <<'PY'
+          import subprocess
+          import tarfile
+          from pathlib import Path
+
+          tracked = set(subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0"))
+          tracked.discard("")
+          (sdist,) = Path("dist").glob("*.tar.gz")
+          with tarfile.open(sdist) as archive:
+              (root,) = {name.split("/")[0] for name in archive.getnames()}
+              included = {
+                  str(Path(member.name).relative_to(root))
+                  for member in archive.getmembers()
+                  if member.isfile()
+              }
+              assert not (missing := tracked - included), f"Missing project files: {sorted(missing)}"
+              unexpected = included - tracked - {"PKG-INFO"}
+              assert not unexpected, f"Unexpected files: {sorted(unexpected)}"
+              for name in tracked:
+                  content = archive.extractfile(f"{root}/{name}")
+                  assert content is not None, name
+                  assert content.read() == Path(name).read_bytes(), name
+          print(f"Verified {len(tracked)} project files in {sdist.name}")
+          PY
 
       - name: Install wheel into a clean venv
         run: |
