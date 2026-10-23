@@ -757,7 +757,7 @@ class CommandDispatcher:
         return "ok"
 
     def _cmd_switch_packet_listen(self, switch_name: str, switch: object, tokens: list[str]) -> str:
-        kv = _parse_kv_pairs(tokens)
+        kv = _parse_kv_pairs(tokens) if tokens else {}
         for k in kv:
             if k not in ("count", "timeout"):
                 raise CLIUsageError(

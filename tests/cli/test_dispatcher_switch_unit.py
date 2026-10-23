@@ -914,3 +914,36 @@ def test_packet_listen_interruption_deregisters(network: MagicMock) -> None:
     ):
         CommandDispatcher(network).dispatch("s1 packet listen timeout=1")
     deregister.assert_called_once()
+
+
+def test_packet_listen_without_options_uses_default_timeout(network: MagicMock) -> None:
+    deregister = MagicMock()
+    client = network.switches["s1"].client
+    client.on_packet_in.return_value = deregister
+    with patch("threading.Event.wait", return_value=False) as wait:
+        output = CommandDispatcher(network).dispatch("s1 packet listen")
+    assert output == "(no packets within 10.0s)"
+    assert wait.call_args.kwargs == {"timeout": 10.0}
+    client.on_packet_in.assert_called_once()
+    deregister.assert_called_once()
+
+
+def test_packet_listen_without_options_captures_only_one_packet(network: MagicMock) -> None:
+    deregister = MagicMock()
+    client = network.switches["s1"].client
+
+    def register(handler):
+        handler(b"first", {"ingress_port": 1})
+        handler(b"second", {"ingress_port": 2})
+        return deregister
+
+    client.on_packet_in.side_effect = register
+    assert CommandDispatcher(network).dispatch("s1 packet listen") == "[ingress_port=1] 6669727374"
+    deregister.assert_called_once()
+
+
+@pytest.mark.parametrize("options", ['""', ",", "garbage", "timeout=", "count=", "unknown=1"])
+def test_packet_listen_malformed_options_still_fail(network: MagicMock, options: str) -> None:
+    with pytest.raises(CLIUsageError):
+        CommandDispatcher(network).dispatch(f"s1 packet listen {options}")
+    network.switches["s1"].client.on_packet_in.assert_not_called()

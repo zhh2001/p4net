@@ -394,7 +394,16 @@ def test_cli_packet_send_then_listen(network: Network) -> None:
     assert listen_marker.hex() in out_listen
 
 
-def test_cli_packet_listen_timeout_validation_and_capture(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param("count=1 timeout=2", id="explicit"),
+        pytest.param("", id="defaults"),
+        pytest.param("count=1", id="default-timeout"),
+        pytest.param("timeout=2", id="default-count"),
+    ],
+)
+def test_cli_packet_listen_timeout_validation_and_capture(tmp_path: Path, arguments: str) -> None:
     suffix = _suffix()
     h1, s1 = f"h{suffix}", f"s{suffix}"
     topology = Topology()
@@ -435,7 +444,7 @@ def test_cli_packet_listen_timeout_validation_and_capture(tmp_path: Path) -> Non
             ThreadPoolExecutor(max_workers=1) as executor,
         ):
             sender = executor.submit(send)
-            output = dispatcher.dispatch(f"{s1} packet listen count=1 timeout=2")
+            output = dispatcher.dispatch(f"{s1} packet listen {arguments}")
             sender.result(timeout=5)
         assert "[ingress_port=1]" in output
         assert marker.hex() in output

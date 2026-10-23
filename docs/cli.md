@@ -286,6 +286,7 @@ ok
 Collect new `PacketIn` messages while the command runs. Return when `count` packets arrive or the total `timeout` elapses. Defaults are `count=1` and `timeout=10.0` seconds. `count` must be a positive integer. `timeout` must be finite, non-negative, and within the system wait limit; `0` means no waiting. At timeout, any packets already collected are displayed.
 
 ```text
+p4net> s1 packet listen
 p4net> s1 packet listen count=2 timeout=3
 ```
 
