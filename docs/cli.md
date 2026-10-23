@@ -122,7 +122,7 @@ p4net> topology graph /tmp/topo.svg layout=TB format=svg
 
 Ping from the named host. A target host name resolves to that host's primary IPv4 address. Other targets are passed to `ping`; a string containing `:` selects IPv6. Use `ping6` to resolve a host name to IPv6.
 
-The defaults are `count=1` and `timeout=2.0` seconds. The timeout is passed to `ping -W` as a whole number of seconds. p4net also sets an overall deadline using `ping -w`. The result is `OK` when `ping` exits successfully and `FAIL` otherwise.
+The defaults are `count=1` and `timeout=2.0` seconds. The timeout accepts fractional seconds, such as `0.25`, and is passed to `ping -W`. p4net also sets an overall deadline using `ping -w`, allowing time for all `count` requests at the default one-second interval. The result is `OK` when `ping` exits successfully and `FAIL` otherwise.
 
 ```text
 p4net> h1 ping h2

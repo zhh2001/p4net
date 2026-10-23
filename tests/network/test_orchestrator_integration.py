@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from p4net import Network
+from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
 from p4net.network import RunningHost
 from p4net.runtime import BMv2StartupError
@@ -176,6 +177,69 @@ def test_two_hosts_one_switch_with_table_programming(tmp_path: Path) -> None:
         cell = sw.client.read_counter("MyIngress.ingress_pkts", 2)
         assert isinstance(cell, CounterData)
         assert cell.packet_count >= 1
+
+
+@pytest.mark.parametrize("ipv6", [False, True])
+def test_fractional_ping_timeout_preserves_probe_count(tmp_path: Path, ipv6: bool) -> None:
+    suffix = _suffix()
+    h1, h2, s1 = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(h1, ip="10.0.0.1/24", ip6="fd00::1/64", mac="00:00:00:00:00:01")
+    topo.add_host(h2, ip="10.0.0.2/24", ip6="fd00::2/64", mac="00:00:00:00:00:02")
+    with socket.socket() as grpc, socket.socket() as thrift:
+        grpc.bind(("127.0.0.1", 0))
+        thrift.bind(("127.0.0.1", 0))
+        topo.add_switch(
+            s1,
+            _TWO_PORT_SWAP,
+            grpc_port=grpc.getsockname()[1],
+            thrift_port=thrift.getsockname()[1],
+        )
+    topo.add_link(h1, s1, port_b=1)
+    topo.add_link(h2, s1, port_b=2)
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    with Network(topo, log_dir=tmp_path / "logs", compiler=compiler) as net:
+        family = "-6" if ipv6 else "-4"
+        addresses = ["fd00::1", "fd00::2"] if ipv6 else ["10.0.0.1", "10.0.0.2"]
+        for source, address, mac in (
+            (h1, addresses[1], "00:00:00:00:00:02"),
+            (h2, addresses[0], "00:00:00:00:00:01"),
+        ):
+            net.host(source).exec(
+                [
+                    "ip",
+                    family,
+                    "neigh",
+                    "replace",
+                    address,
+                    "lladdr",
+                    mac,
+                    "dev",
+                    f"{source}-eth0",
+                    "nud",
+                    "permanent",
+                ]
+            )
+        if ipv6:
+            for name in (h1, h2):
+                deadline = time.monotonic() + 5
+                while True:
+                    state = (
+                        net.host(name)
+                        .exec(
+                            ["ip", "-6", "addr", "show", "dev", f"{name}-eth0"],
+                            capture_output=True,
+                        )
+                        .stdout
+                    )
+                    assert b"dadfailed" not in state
+                    if b"tentative" not in state:
+                        break
+                    assert time.monotonic() < deadline
+                    time.sleep(0.02)
+        assert net.ping(h1, addresses[1], count=3, timeout=0.25) is True
+        verb = "ping6" if ipv6 else "ping"
+        assert CommandDispatcher(net).dispatch(f"{h2} {verb} {h1} 3 0.25") == "OK"
 
 
 @pytest.mark.parametrize("capture_enabled", [False, True])

@@ -9,6 +9,7 @@ orchestrator's internals.
 
 from __future__ import annotations
 
+import math
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -135,6 +136,9 @@ class RunningHost:
     ) -> bool:
         """Run ``ping`` and return whether at least one reply arrived.
 
+        ``timeout`` is passed to ``ping -W`` in seconds, including fractions.
+        The overall deadline also covers the default one-second send interval.
+
         Auto-selects IPv4 vs IPv6 based on the target string (``:`` → IPv6),
         or pass ``force_ipv6=True`` to force the IPv6 path. When ``dst`` is a
         :class:`RunningHost`, the IPv4 primary is preferred (least surprise
@@ -154,15 +158,16 @@ class RunningHost:
         # the command terminates even when every echo request goes unanswered
         # (e.g. under 100%-loss netem); without it iputils-ping can hang
         # indefinitely waiting for the last reply.
-        deadline = max(int(count) * int(timeout) + 1, int(timeout) + 1)
+        probes = int(count)
+        deadline = math.ceil(max(probes * timeout, probes - 1 + timeout)) + 1
         result = self._namespace.exec(
             [
                 "ping",
                 "-6" if is_v6 else "-4",
                 "-c",
-                str(int(count)),
+                str(probes),
                 "-W",
-                str(int(timeout)),
+                str(timeout).removesuffix(".0"),
                 "-w",
                 str(deadline),
                 target,

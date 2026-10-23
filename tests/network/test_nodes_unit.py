@@ -78,6 +78,29 @@ def test_running_host_ping_string_returns_true_on_zero_rc() -> None:
     assert argv[-1] == "10.0.0.2"
 
 
+@pytest.mark.parametrize("target", ["10.0.0.2", "fd00::2"])
+@pytest.mark.parametrize("timeout", [0.25, 1.75, 2.9999999, 0.0001])
+def test_running_host_ping_preserves_fractional_timeout(target: str, timeout: float) -> None:
+    rh = _make_host()
+    rh.ping(target, timeout=timeout)
+    argv = rh.namespace.exec.call_args.args[0]
+    assert float(argv[argv.index("-W") + 1]) == timeout
+
+
+@pytest.mark.parametrize(
+    "count,timeout,minimum_deadline",
+    [(5, 0.25, 4.25), (4, 0.75, 3.75), (2, 1.75, 3.5), (3, 2.25, 6.75)],
+)
+def test_running_host_ping_deadline_covers_probes(
+    count: int, timeout: float, minimum_deadline: float
+) -> None:
+    rh = _make_host()
+    rh.ping("10.0.0.2", count=count, timeout=timeout)
+    argv = rh.namespace.exec.call_args.args[0]
+    deadline = int(argv[argv.index("-w") + 1])
+    assert minimum_deadline < deadline < minimum_deadline + 2
+
+
 def test_running_host_ping_returns_false_on_nonzero_rc() -> None:
     rh = _make_host()
     rh.namespace.exec = MagicMock(  # type: ignore[method-assign]

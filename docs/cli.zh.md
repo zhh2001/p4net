@@ -122,7 +122,7 @@ p4net> topology graph /tmp/topo.svg layout=TB format=svg
 
 从指定主机发起 ping。目标是拓扑中的主机名时，解析为该主机的主 IPv4 地址。其他目标直接传给 `ping`，字符串中包含 `:` 时使用 IPv6。按主机名发起 IPv6 ping 使用 `ping6`。
 
-默认 `count=1`、`timeout=2.0` 秒。超时值按整秒传给 `ping -W`，p4net 还会用 `ping -w` 设置整个命令的截止时间。`ping` 成功退出时显示 `OK`，否则显示 `FAIL`。
+默认 `count=1`、`timeout=2.0` 秒。超时值支持小数秒，例如 `0.25`，并传给 `ping -W`。p4net 还会用 `ping -w` 设置整个命令的截止时间，为默认一秒间隔的 `count` 次请求预留时间。`ping` 成功退出时显示 `OK`，否则显示 `FAIL`。
 
 ```text
 p4net> h1 ping h2
