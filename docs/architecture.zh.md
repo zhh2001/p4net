@@ -84,7 +84,7 @@ API：[`p4net.control`](api/control.md)。
 1. 校验拓扑（除非 `unsafe=True`）。
 2. 分配 `log_dir`（用户指定或新建临时目录）与 `pcap_dir`。
 3. 通过 `P4Compiler.compile()` 编译每个交换机的 P4 源码。
-4. 在主线程上注册 atexit 与 SIGINT/SIGTERM 处理器；把自己加入清理注册表。
+4. 注册退出钩子，将网络加入清理注册表。在主线程中还会安装 SIGINT/SIGTERM 处理器。
 5. 为每个主机创建一个 Linux 命名空间，把 `lo` 拉起。
 6. 对每条链路：创建 veth 对，把主机侧搬入对应命名空间，设置 IPv6 sysctl 门控（设置了 `ip6` 则启用，否则禁用），配置地址 / MAC / MTU，把接口拉起。逐方向应用 `tc netem`。
 7. 按主机配置添加 IPv4 与 IPv6 默认路由。
@@ -93,6 +93,8 @@ API：[`p4net.control`](api/control.md)。
 10. 构造用户通过 `net.host(name)` / `net.switch(name)` 访问的 `RunningHost` / `RunningSwitch` 代理对象。
 
 `stop()`（由 `__exit__`、atexit、信号或显式调用触发）按相反顺序回卷：用户启动的 xterm、P4Runtime 客户端、BMv2 进程、veth 对、命名空间，最后把自己从清理注册表中移除。每一步都包在带日志的 `try/except` 中——任一步失败都不会泄漏其余资源。
+
+`await net.astart()` 先在调用线程注册清理，再提交启动工作。使用主线程的事件循环时，会安装信号处理器。关闭网络会先等待启动线程结束，再释放资源。取消 `astart()` 时，会等待启动和清理结束后再传播取消异常。
 
 异步 P4Runtime 连接在客户端所属的事件循环中关闭。`await net.astop()` 等待连接关闭后，再由工作线程释放其余网络资源。在事件循环中调用同步 `stop()` 时，会启动后台清理并返回。用法见[关闭网络](async-client.md#关闭网络)。
 
@@ -141,12 +143,12 @@ p4net 中所有命名空间内执行路径——主机命令、ping、xterm、�
 
 ### 清理是一等公民
 
-四条冗余的回收路径都通向同一个 `Network.stop()`：
+网络清理可以通过以下方式触发：
 
 1. **`__exit__`**：用户使用 `with` 语法时。
 2. **`atexit`**：脚本未使用上下文管理器但正常退出时。
-3. **SIGINT / SIGTERM** 处理器在主线程中先回收再重抛。
-4. **显式 `net.stop()`**：以上都不适用时。
+3. **SIGINT / SIGTERM** 处理器在主线程中执行。事件循环运行时等待 `astop()`，其他情况下调用 `stop()`。清理完成后恢复原处理器，重新投递信号。
+4. **显式调用 `net.stop()` 或 `await net.astop()`**。
 
 `stop()` 完全幂等，且能容忍部分状态：连续调两次是空操作；在 `start()` 失败之后调用，会把已经成功的步骤都清理干净。回收顺序为：
 

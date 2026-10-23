@@ -44,7 +44,7 @@ The sync and async clients have different call patterns and some different metho
 
 | Symbol | Tier | Scope |
 | --- | --- | --- |
-| `Network` | Stable | Lifecycle, host and switch access, `ping()`, `pingall()`, and `pingall6()`. In an event loop, `await net.astop()` waits for async clients and network resources to close. |
+| `Network` | Stable | Lifecycle, host and switch access, `ping()`, `pingall()`, and `pingall6()`. In an event loop, use `await net.astart()` and `await net.astop()` to wait for startup and shutdown. Cancellation waits for cleanup. |
 | `Network.xterm` | Experimental | Opens a host terminal through the available X display. |
 | `Network.boot_timestamps` | Stable | Returns a new dictionary mapping switch names to BMv2 start times in Unix microseconds. Editing the dictionary does not change the network. Raises `NetworkNotRunningError` when the network is not running. |
 | `RunningHost` | Stable | Host descriptor, namespace and interface access, addresses, command execution, and ping. |

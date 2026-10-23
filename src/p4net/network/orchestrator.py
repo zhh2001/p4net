@@ -6,8 +6,8 @@ connect P4Runtime, push pipelines). Any failure rolls back partial state
 via `_do_stop()` before re-raising. `Network.stop()` is fully idempotent.
 
 Cleanup safety net: the `_cleanup` module installs an atexit hook plus
-SIGINT/SIGTERM handlers (on the main thread only) that call `stop()` on
-every running `Network` before re-delivering the signal.
+SIGINT/SIGTERM handlers on the main thread. In an event loop, signal
+cleanup awaits `astop()` before re-delivering the signal.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from p4net.network._cleanup import (
     install_handlers,
     register,
     unregister,
+    wait_for_signal_cleanup,
 )
 from p4net.network.exceptions import (
     NetworkAlreadyRunningError,
@@ -148,6 +149,8 @@ class Network:
         self._spawned_processes: list[NSProcess] = []
         self._async_disconnects: list[tuple[str, asyncio.AbstractEventLoop, Future[None]]] = []
         self._stop_lock = threading.RLock()
+        self._start_future: Future[None] | None = None
+        self._start_thread_id: int | None = None
         self._stop_future: Future[None] | None = None
         self._stop_thread_id: int | None = None
 
@@ -240,20 +243,92 @@ class Network:
         rolls back via :meth:`_do_stop` before re-raising.
 
         Raises:
-            NetworkAlreadyRunningError: if already running.
+            NetworkAlreadyRunningError: if already running or starting.
+            NetworkError: if shutdown is in progress or interrupts startup.
         """
-        if self._running:
-            raise NetworkAlreadyRunningError("Network is already running")
+        self._run_start(self._prepare_start())
+
+    def _prepare_start(self, *, background: bool = False) -> Future[None]:
         with self._stop_lock:
+            if self._running or self._start_future is not None:
+                raise NetworkAlreadyRunningError("Network is already running or starting")
             if self._stop_future is not None and not self._stop_future.done():
                 raise NetworkError("Network shutdown is still running")
             self._stop_future = None
+            self._start_thread_id = None if background else threading.get_ident()
+            self._start_future = Future()
+            return self._start_future
+
+    def _end_start(self, future: Future[None]) -> None:
+        with self._stop_lock:
+            future.set_result(None)
+            self._start_future = None
+            self._start_thread_id = None
+
+    def _run_start(self, future: Future[None]) -> None:
+        with self._stop_lock:
+            self._start_thread_id = threading.get_ident()
         try:
+            with self._stop_lock:
+                if self._stop_future is not None:
+                    raise NetworkError("Network startup was interrupted by shutdown")
             self._do_start()
-            self._running = True
+            with self._stop_lock:
+                if self._stop_future is not None:
+                    raise NetworkError("Network startup was interrupted by shutdown")
+                self._running = True
         except BaseException:
             self._do_stop()
             raise
+        finally:
+            self._end_start(future)
+
+    def _register_cleanup(self) -> None:
+        if not self._registered:
+            install_handlers()
+            register(self)
+            self._registered = True
+
+    async def astart(self) -> None:
+        """Bring the topology up in a worker thread without blocking the event loop.
+
+        Call from the main thread's event loop to install SIGINT/SIGTERM
+        cleanup handlers. Cancellation waits for startup and then shuts
+        the network down before propagating. Startup failures roll back
+        partial resources and propagate their original exception.
+
+        Raises:
+            NetworkAlreadyRunningError: if already running or starting.
+            NetworkError: if shutdown is in progress or interrupts startup.
+        """
+        future = self._prepare_start(background=True)
+        try:
+            self._register_cleanup()
+            startup = asyncio.get_running_loop().run_in_executor(None, self._run_start, future)
+        except BaseException:
+            try:
+                self._do_stop()
+            finally:
+                self._end_start(future)
+            raise
+
+        cancelled = False
+        try:
+            while not startup.done():
+                try:
+                    await asyncio.shield(startup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            startup.result()
+        except BaseException:
+            await wait_for_signal_cleanup()
+            if cancelled and self._stop_future is not None:
+                await self.astop()
+                raise asyncio.CancelledError from None
+            raise
+        if cancelled:
+            await self.astop()
+            raise asyncio.CancelledError
 
     def stop(self) -> None:
         """Tear the network down. Repeated calls are safe.
@@ -261,6 +336,7 @@ class Network:
         Async clients close on their owning event loops. Inside an event
         loop, shutdown runs in a background thread; use :meth:`astop` to
         wait for it. Outside an event loop, this method waits for cleanup.
+        Startup already in progress finishes or rolls back before teardown.
         """
         try:
             asyncio.get_running_loop()
@@ -283,12 +359,20 @@ class Network:
                 ).start()
             else:
                 self._finish_stop(future)
-        if not in_event_loop and self._stop_thread_id != threading.get_ident():
+        if not in_event_loop and threading.get_ident() not in (
+            self._stop_thread_id,
+            self._start_thread_id,
+        ):
             future.result()
 
     def _finish_stop(self, future: Future[None]) -> None:
         self._stop_thread_id = threading.get_ident()
         try:
+            with self._stop_lock:
+                startup = self._start_future
+                start_thread_id = self._start_thread_id
+            if startup is not None and start_thread_id != threading.get_ident():
+                startup.result()
             self._do_stop()
         except BaseException as exc:
             future.set_exception(exc)
@@ -303,7 +387,11 @@ class Network:
         Client event loops must remain running until shutdown completes.
         Cancellation is propagated after cleanup finishes.
         """
-        shutdown = asyncio.create_task(asyncio.to_thread(self.stop))
+        with self._stop_lock:
+            self.stop()
+            future = self._stop_future
+        assert future is not None
+        shutdown = asyncio.wrap_future(future)
         cancelled = False
         while not shutdown.done():
             try:
@@ -443,9 +531,7 @@ class Network:
             )
 
         # 5. cleanup hooks
-        install_handlers()
-        register(self)
-        self._registered = True
+        self._register_cleanup()
 
         # 6. host namespaces; bring lo up
         for h_name in self._topology.hosts:

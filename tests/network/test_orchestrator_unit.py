@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call
@@ -12,7 +13,7 @@ from unittest.mock import MagicMock, call
 import pytest
 from pytest_mock import MockerFixture
 
-from p4net.network import Network, NetworkAlreadyRunningError, NodeNotFoundError
+from p4net.network import Network, NetworkAlreadyRunningError, NetworkError, NodeNotFoundError
 from p4net.network.orchestrator import (
     _add_durations,
     _format_duration_ns,
@@ -1312,3 +1313,220 @@ async def test_start_after_astop_can_be_stopped_again(
         assert not net.is_running
     for bmv2 in patched["bmv2s"]:
         bmv2.stop.assert_called_once()
+
+
+def _pause_startup(
+    patched: dict[str, Any], stage: str, *, fail: bool = False
+) -> tuple[asyncio.Event, threading.Event]:
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def pause() -> None:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(timeout=5), "startup was not released"
+        if fail:
+            raise RuntimeError("startup failed")
+
+    if stage == "compile":
+        compile_source = patched["compiler"].compile.side_effect
+
+        def compile_paused(*args: Any, **kwargs: Any) -> Any:
+            pause()
+            return compile_source(*args, **kwargs)
+
+        patched["compiler"].compile.side_effect = compile_paused
+    else:
+        make_ns = patched["ns_factory"].side_effect
+
+        def make_paused_ns(name: str) -> MagicMock:
+            ns = make_ns(name)
+            ns.exec.side_effect = lambda argv: pause()
+            return ns
+
+        patched["ns_factory"].side_effect = make_paused_ns
+    return entered, release
+
+
+async def test_astart_installs_handlers_on_caller_and_runs_startup_in_worker(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    caller = threading.get_ident()
+    threads: list[int] = []
+    patched["install_handlers"].side_effect = lambda: threads.append(threading.get_ident())
+    entered, release = _pause_startup(patched, "compile")
+    startup = asyncio.create_task(net.astart())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        assert threads == [caller]
+        patched["register"].assert_called_once_with(net)
+        assert not net.is_running
+        release.set()
+        await asyncio.wait_for(startup, timeout=2)
+        assert net.is_running
+        assert net.host("h1").name == "h1"
+        await net.astop()
+        await net.astart()
+        assert threads == [caller, caller]
+    finally:
+        release.set()
+        await asyncio.gather(startup, return_exceptions=True)
+        await net.astop()
+
+
+@pytest.mark.parametrize("stage", ["compile", "namespace"])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_cancelled_astart_waits_for_startup_and_rollback(
+    patched: dict[str, Any], tmp_path: Path, stage: str, fail: bool
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    entered, release = _pause_startup(patched, stage, fail=fail)
+    startup = asyncio.create_task(net.astart())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        for _ in range(2):
+            startup.cancel()
+            await asyncio.sleep(0)
+            assert not startup.done()
+        namespaces = list(net._namespaces.values())
+        for ns in namespaces:
+            ns.destroy.assert_not_called()
+        release.set()
+        error = RuntimeError if fail else asyncio.CancelledError
+        with pytest.raises(error):
+            await asyncio.wait_for(startup, timeout=2)
+        assert not net.is_running
+        assert not net._namespaces
+        assert not net._veth_pairs
+        assert not net._bmv2_switches
+        patched["unregister"].assert_called_once_with(net)
+        for ns in namespaces:
+            ns.destroy.assert_called_once()
+        for bmv2 in patched["bmv2s"]:
+            bmv2.stop.assert_called_once()
+    finally:
+        release.set()
+        await asyncio.gather(startup, return_exceptions=True)
+        await net.astop()
+
+
+@pytest.mark.parametrize("entry", ["sync", "async"])
+@pytest.mark.parametrize("stop_mode", ["stop", "astop"])
+async def test_shutdown_during_startup_waits_and_prevents_running_state(
+    patched: dict[str, Any], tmp_path: Path, entry: str, stop_mode: str
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    entered, release = _pause_startup(patched, "namespace")
+    startup = asyncio.create_task(
+        net.astart() if entry == "async" else asyncio.to_thread(net.start)
+    )
+    shutdown = None
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        namespaces = list(net._namespaces.values())
+        if stop_mode == "stop":
+            net.stop()
+        shutdown = asyncio.create_task(net.astop())
+
+        async def wait_for_stop_request() -> None:
+            while net._stop_future is None:
+                await asyncio.sleep(0.001)
+
+        await asyncio.wait_for(wait_for_stop_request(), timeout=2)
+        assert not shutdown.done()
+        for ns in namespaces:
+            ns.destroy.assert_not_called()
+        with pytest.raises(NetworkAlreadyRunningError):
+            await net.astart()
+        release.set()
+        with pytest.raises(NetworkError, match="interrupted by shutdown"):
+            await asyncio.wait_for(startup, timeout=2)
+        await asyncio.wait_for(shutdown, timeout=2)
+        assert not net.is_running
+        assert not net._namespaces
+        patched["unregister"].assert_called_once_with(net)
+        for ns in namespaces:
+            ns.destroy.assert_called_once()
+    finally:
+        release.set()
+        await asyncio.gather(startup, return_exceptions=True)
+        if shutdown is not None:
+            await shutdown
+        await net.astop()
+
+
+@pytest.mark.parametrize("stop_mode", ["stop", "astop"])
+async def test_shutdown_before_startup_worker_runs(
+    patched: dict[str, Any], tmp_path: Path, stop_mode: str
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    loop = asyncio.get_running_loop()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    release = threading.Event()
+    blocked = loop.run_in_executor(None, release.wait)
+    startup = asyncio.create_task(net.astart())
+    shutdown = None
+    try:
+        await asyncio.sleep(0)
+        patched["register"].assert_called_once_with(net)
+        if stop_mode == "stop":
+            net.stop()
+        shutdown = asyncio.create_task(net.astop())
+        await asyncio.sleep(0)
+        assert net._stop_future is not None
+        assert not shutdown.done()
+        release.set()
+        with pytest.raises(NetworkError, match="interrupted by shutdown"):
+            await asyncio.wait_for(startup, timeout=2)
+        await asyncio.wait_for(shutdown, timeout=2)
+        patched["ns_factory"].assert_not_called()
+        patched["compiler"].compile.assert_not_called()
+        patched["unregister"].assert_called_once_with(net)
+        assert not net.is_running
+    finally:
+        release.set()
+        await blocked
+        await asyncio.gather(startup, return_exceptions=True)
+        if shutdown is not None:
+            await shutdown
+        await net.astop()
+        executor.shutdown()
+
+
+async def test_astart_executor_failure_unregisters_and_allows_retry(
+    patched: dict[str, Any], tmp_path: Path, mocker: MockerFixture
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    loop = asyncio.get_running_loop()
+    submit = mocker.patch.object(
+        loop, "run_in_executor", side_effect=RuntimeError("executor closed")
+    )
+    with pytest.raises(RuntimeError, match="executor closed"):
+        await net.astart()
+    patched["unregister"].assert_called_once_with(net)
+    assert not net.is_running
+    mocker.stop(submit)
+    await net.astart()
+    await net.astop()
+
+
+@pytest.mark.parametrize("initial", ["start", "astart"])
+async def test_duplicate_astart_preserves_running_network(
+    patched: dict[str, Any], tmp_path: Path, initial: str
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    if initial == "start":
+        net.start()
+    else:
+        await net.astart()
+    try:
+        with pytest.raises(NetworkAlreadyRunningError):
+            await net.astart()
+        assert net.is_running
+        patched["unregister"].assert_not_called()
+        for bmv2 in patched["bmv2s"]:
+            bmv2.stop.assert_not_called()
+    finally:
+        await net.astop()

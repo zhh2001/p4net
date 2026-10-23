@@ -8,7 +8,7 @@ description: Connecting the async P4Runtime client, managing primary status, pro
 
 ## Complete example
 
-This program starts one switch and two hosts, inserts an IPv4 route, and reads it back. `Network.start()` compiles and installs the pipeline. The async client uses the sync client's P4Info index and a higher election ID to become primary.
+This program starts one switch and two hosts, inserts an IPv4 route, and reads it back. `await net.astart()` compiles and installs the pipeline in a worker thread. The async client uses the sync client's P4Info index and a higher election ID to become primary.
 
 Save the code as `async_demo.py` in the repository root:
 
@@ -30,7 +30,7 @@ topology.add_link(h2, s1, port_b=2)
 
 async def main() -> None:
     net = Network(topology)
-    await asyncio.to_thread(net.start)
+    await net.astart()
     try:
         sw = net.switch("s1")
         client = AsyncP4RuntimeClient(
@@ -159,11 +159,17 @@ An outer `asyncio.wait_for()` cancels the operation it is awaiting, so its final
 
 ## Shutting down a network
 
-Connect, use, and close an async client on the same event loop. The [gRPC AsyncIO documentation](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats) also requires async objects to be used on the thread where they were created. `Network.start()` is synchronous; use `await asyncio.to_thread(net.start)` inside a coroutine.
+Use `await net.astart()` to start a network inside a coroutine. It installs cleanup handlers on the calling thread, registers the network, and runs startup in a worker thread. Run the event loop on the main thread for automatic SIGINT/SIGTERM cleanup. Python only allows [signal handler registration on the main thread](https://docs.python.org/3/library/signal.html#signals-and-threads). The synchronous `net.start()` remains available.
+
+If `astart()` is cancelled, it waits for the startup worker and closes the network before propagating `CancelledError`. A startup failure rolls back partial resources and propagates the original exception. Shutdown requested through `stop()` or `astop()` waits for the startup worker before cleanup. The startup call raises `NetworkError` if it has not already completed.
+
+Connect, use, and close an async client on the same event loop. The [gRPC AsyncIO documentation](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats) also requires async objects to be used on the thread where they were created.
 
 `await net.astop()` closes the network's cached async clients before releasing network resources. Close clients you construct yourself with `async with` or `await client.disconnect()`, as the complete example does. Keep the clients' event loops running until shutdown finishes. If `astop()` is cancelled, it finishes cleanup before propagating `CancelledError`.
 
 Outside an event loop, `net.stop()` waits for cleanup. Inside an event loop, it starts cleanup in a background thread and returns. Use `await net.astop()` when you need to wait for shutdown.
+
+With a running event loop, the SIGINT/SIGTERM handler awaits network cleanup before restoring the previous handler and delivering the signal again. Outside an event loop, it uses synchronous cleanup.
 
 When the StreamChannel ends or fails, the client clears its connection and primary status and closes the channel. Call `connect()` on the same instance to reconnect. If the stream ends during initial arbitration, the connection wait ends immediately. `connect()` and `disconnect()` wait for any cleanup already in progress.
 

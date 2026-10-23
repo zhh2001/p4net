@@ -48,11 +48,11 @@ description: p4net 的版本里程碑、候选扩展，以及各项提议对应�
 
 ### AsyncNetwork
 
-`AsyncP4RuntimeClient` 支持并发 RPC，`await net.astop()` 已能等待网络关闭。`Network.start()` 是同步方法，依次启动 BMv2 交换机，等待当前交换机就绪后再启动下一台。
+`AsyncP4RuntimeClient` 支持并发 RPC。`await net.astart()` 在工作线程中启动网络，`await net.astop()` 等待网络关闭。同步方法 `Network.start()` 依次启动 BMv2 交换机，等待当前交换机就绪后再启动下一台。
 
-在协程中，使用 `await asyncio.to_thread(net.start)` 启动，使用 `await net.astop()` 关闭。清理完成前，保持异步客户端所属的事件循环运行。详见[异步生命周期指南](async-client.md#关闭网络)。
+在主线程的事件循环中调用 `astart()`，会在启动前安装信号清理处理器。取消启动时，会等待启动和清理结束后再传播取消异常。关闭完成前，保持异步客户端所属的事件循环运行。详见[异步生命周期指南](async-client.md#关闭网络)。
 
-后续的异步启动接口或 `AsyncNetwork` 可以基于现有关闭接口，协调事件循环中的启动、取消和回滚。设计时应保留可兼容的同步生命周期接口。
+后续的 `AsyncNetwork` 可以基于这些生命周期方法，提供异步上下文管理器或协调多个网络。这些新增功能可以保留同步生命周期接口。
 
 ## 长期搁置
 

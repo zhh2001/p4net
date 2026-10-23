@@ -84,7 +84,7 @@ The orchestrator. `Network(topology)` composes every layer:
 1. Validate the topology (unless `unsafe=True`).
 2. Allocate `log_dir` (explicit or fresh tempdir) and `pcap_dir`.
 3. Compile each switch's P4 source via `P4Compiler.compile()`.
-4. Install atexit and SIGINT/SIGTERM handlers on the main thread; add self to the cleanup registry.
+4. Install the exit hook and add the network to the cleanup registry. On the main thread, also install SIGINT/SIGTERM handlers.
 5. Create one Linux namespace per host; bring `lo` up.
 6. For each link: create the veth pair, move the host-side end into its namespace, set the IPv6 sysctl gate (enable if `ip6` is set, disable otherwise), configure addresses / MAC / MTU, bring the interface up. Apply `tc netem` per direction.
 7. Add IPv4 and IPv6 default routes per host as configured.
@@ -93,6 +93,8 @@ The orchestrator. `Network(topology)` composes every layer:
 10. Build the `RunningHost` / `RunningSwitch` proxies the user consumes via `net.host(name)` / `net.switch(name)`.
 
 `stop()` (called from `__exit__`, atexit, signal, or explicitly) unwinds everything in reverse: spawned xterms, P4Runtime clients, BMv2 processes, veth pairs, namespaces, then unregisters from the cleanup registry. Each step is wrapped in a logged `try/except` so one failure can't leak the rest.
+
+`await net.astart()` registers cleanup on the calling thread before submitting startup to a worker. Use the main thread's event loop to install signal handlers. Shutdown waits for any startup worker before releasing resources. Cancelling `astart()` waits for startup and cleanup before propagating cancellation.
 
 Async P4Runtime clients are disconnected on their owning event loops. `await net.astop()` waits for those disconnects before tearing down the remaining resources, and runs synchronous cleanup in a worker thread. Calling `stop()` inside an event loop starts background cleanup and returns. See [Shutting down a network](async-client.md#shutting-down-a-network).
 
@@ -141,12 +143,12 @@ Missing or empty BMv2 JSON or P4Info files trigger a rebuild. Concurrent calls c
 
 ### Cleanup is first-class
 
-Four redundant unwind paths target the same `Network.stop()`:
+Network cleanup can be triggered through:
 
 1. **`__exit__`** when the user wraps `Network` in `with`.
 2. **`atexit`** when the script exits normally without the context manager.
-3. **SIGINT / SIGTERM** handlers on the main thread re-raise after tearing down.
-4. **Explicit `net.stop()`** when neither of the above applies.
+3. **SIGINT / SIGTERM** handlers on the main thread. In a running event loop they await `astop()`; otherwise they call `stop()`. They restore the previous handler and redeliver the signal after cleanup.
+4. **Explicit `net.stop()` or `await net.astop()`**.
 
 `stop()` is fully idempotent and tolerant of partial state — running it twice is a no-op; running it after a failed `start()` cleans up whatever did succeed before the exception. The teardown order is:
 

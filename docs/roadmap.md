@@ -67,19 +67,19 @@ and start a new `Network`. See [topology changes](known-limitations.md#4-live-to
 
 ### AsyncNetwork
 
-`AsyncP4RuntimeClient` supports concurrent RPC operations, and
-`await net.astop()` already waits for network shutdown. `Network.start()` is
-synchronous and starts BMv2 switches sequentially, waiting for each switch to
-be ready before starting the next.
+`AsyncP4RuntimeClient` supports concurrent RPC operations. `await net.astart()`
+runs network startup in a worker thread, and `await net.astop()` waits for
+shutdown. The synchronous `Network.start()` starts BMv2 switches sequentially,
+waiting for each switch to be ready before starting the next.
 
-In a coroutine, use `await asyncio.to_thread(net.start)` for startup and
-`await net.astop()` for shutdown. Keep async clients' event loops running until
-cleanup finishes. See the [async lifecycle guide](async-client.md#shutting-down-a-network).
+Use `astart()` from the main thread's event loop to install signal cleanup
+before startup. Cancellation waits for startup and cleanup before propagating.
+Keep async clients' event loops running until shutdown finishes. See the
+[async lifecycle guide](async-client.md#shutting-down-a-network).
 
-A future async startup interface or `AsyncNetwork` could build on the existing
-shutdown API to coordinate startup, cancellation, and rollback within an event
-loop. An async design can retain the sync lifecycle while adding separate
-entry points.
+A future `AsyncNetwork` could build on these lifecycle methods, for example
+by adding an async context manager or coordinating multiple networks. Such
+additions can preserve the synchronous lifecycle.
 
 ## Indefinitely deferred
 

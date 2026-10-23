@@ -44,7 +44,7 @@ description: p4net 公开接口的稳定性等级、弃用规则和各包分类�
 
 | 符号 | 等级 | 范围 |
 | --- | --- | --- |
-| `Network` | 稳定 | 启停、主机和交换机访问、`ping()`、`pingall()`、`pingall6()`。在事件循环中，使用 `await net.astop()` 等待异步客户端及网络资源关闭。 |
+| `Network` | 稳定 | 启停、主机和交换机访问、`ping()`、`pingall()`、`pingall6()`。在事件循环中，使用 `await net.astart()` 和 `await net.astop()` 等待启动和关闭。取消时先完成清理。 |
 | `Network.xterm` | 实验性 | 通过可用的 X 显示服务打开主机终端。 |
 | `Network.boot_timestamps` | 稳定 | 每次返回一个新字典，将交换机名映射到 BMv2 启动时的 Unix 微秒时间戳。修改该字典不影响网络状态。网络未运行时抛出 `NetworkNotRunningError`。 |
 | `RunningHost` | 稳定 | 主机描述、命名空间和接口访问、地址、命令执行及 ping。 |

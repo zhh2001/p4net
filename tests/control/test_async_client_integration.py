@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -67,7 +68,8 @@ def _free_port() -> int:
 # ---------------------------------------------------------------------------
 
 
-async def test_basic_lifecycle(tmp_path: Path) -> None:
+@pytest.mark.parametrize("entry", ["astart", "worker"])
+async def test_basic_lifecycle(tmp_path: Path, entry: str) -> None:
     suffix = _suffix()
     s = f"s{suffix}"
     h = f"h{suffix}"
@@ -76,7 +78,10 @@ async def test_basic_lifecycle(tmp_path: Path) -> None:
     topo.add_switch(s, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
     topo.add_link(h, s, port_b=1)
     net = Network(topo, log_dir=tmp_path / "logs")
-    await asyncio.to_thread(net.start)
+    if entry == "astart":
+        await net.astart()
+    else:
+        await asyncio.to_thread(net.start)
     try:
         sw = net.switch(s)
         client = sw.async_client
@@ -95,7 +100,59 @@ async def test_basic_lifecycle(tmp_path: Path) -> None:
         await client.disconnect()
         assert not client.is_connected
     finally:
-        await asyncio.to_thread(net.stop)
+        await net.astop()
+
+
+async def test_cancelled_astart_cleans_up_real_switch_and_links(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    loop = asyncio.get_running_loop()
+    ready = asyncio.Event()
+    release = threading.Event()
+    wait_until_ready = BMv2Switch.wait_until_ready
+    switches: list[BMv2Switch] = []
+
+    def pause_after_ready(self: BMv2Switch, *args: Any, **kwargs: Any) -> None:
+        wait_until_ready(self, *args, **kwargs)
+        switches.append(self)
+        loop.call_soon_threadsafe(ready.set)
+        assert release.wait(timeout=5), "startup was not released"
+
+    mocker.patch.object(BMv2Switch, "wait_until_ready", pause_after_ready)
+    startup = asyncio.create_task(net.astart())
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=10)
+        namespaces = list(net._namespaces.values())
+        veths = list(net._veth_pairs)
+        assert namespaces and veths and switches
+        startup.cancel()
+        await asyncio.sleep(0)
+        assert not startup.done()
+        assert all(ns.exists for ns in namespaces)
+        assert all(sw.is_running() for sw in switches)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(startup, timeout=10)
+        assert not net.is_running
+        assert all(not ns.exists for ns in namespaces)
+        assert all(not sw.is_running() for sw in switches)
+        assert not net._veth_pairs
+        assert not net._clients
+        await net.astart()
+        assert net.is_running
+    finally:
+        release.set()
+        await asyncio.gather(startup, return_exceptions=True)
+        await net.astop()
 
 
 @pytest.mark.parametrize("mode", ["async", "worker", "owner"])
