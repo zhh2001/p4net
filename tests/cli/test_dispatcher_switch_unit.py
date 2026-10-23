@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from p4.config.v1 import p4info_pb2
@@ -840,3 +841,76 @@ def test_packet_missing_subverb(network: MagicMock) -> None:
 
 
 _KEEP_ALIVE: type = Any  # keep `Any` import live; used implicitly above
+
+
+@pytest.mark.parametrize("deliver_immediately", [False, True])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "-1",
+        "-0.01",
+        "nan",
+        "NaN",
+        "inf",
+        "-inf",
+        "1e309",
+        "1e308",
+        str(threading.TIMEOUT_MAX + 1),
+    ],
+)
+def test_packet_listen_invalid_timeout_never_registers(
+    network: MagicMock, value: str, deliver_immediately: bool
+) -> None:
+    client = network.switches["s1"].client
+    deregister = MagicMock()
+
+    def register(handler):
+        if deliver_immediately:
+            handler(b"packet", {})
+        return deregister
+
+    client.on_packet_in.side_effect = register
+    with pytest.raises(CLIUsageError, match="timeout") as error:
+        CommandDispatcher(network).dispatch(f"s1 packet listen timeout={value}")
+    assert str(error.value).startswith("s1 packet listen:")
+    client.on_packet_in.assert_not_called()
+    deregister.assert_not_called()
+
+
+@pytest.mark.parametrize("value", [None, "0", "0.05", "1e-3", str(threading.TIMEOUT_MAX)])
+def test_packet_listen_valid_timeout_captures_and_deregisters(
+    network: MagicMock, value: str | None
+) -> None:
+    client = network.switches["s1"].client
+    deregister = MagicMock()
+
+    def register(handler):
+        handler(b"\xde\xad\xbe\xef", {"ingress_port": 1})
+        return deregister
+
+    client.on_packet_in.side_effect = register
+    command = "s1 packet listen count=1" + (f" timeout={value}" if value is not None else "")
+    assert CommandDispatcher(network).dispatch(command) == "[ingress_port=1] deadbeef"
+    client.on_packet_in.assert_called_once()
+    deregister.assert_called_once()
+
+
+def test_packet_listen_zero_timeout_without_packets_deregisters(network: MagicMock) -> None:
+    deregister = MagicMock()
+    network.switches["s1"].client.on_packet_in.return_value = deregister
+    assert (
+        CommandDispatcher(network).dispatch("s1 packet listen timeout=0")
+        == "(no packets within 0.0s)"
+    )
+    deregister.assert_called_once()
+
+
+def test_packet_listen_interruption_deregisters(network: MagicMock) -> None:
+    deregister = MagicMock()
+    network.switches["s1"].client.on_packet_in.return_value = deregister
+    with (
+        patch("threading.Event.wait", side_effect=KeyboardInterrupt),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        CommandDispatcher(network).dispatch("s1 packet listen timeout=1")
+    deregister.assert_called_once()

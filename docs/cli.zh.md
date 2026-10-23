@@ -283,7 +283,7 @@ ok
 
 ### `<switch> packet listen [count=N] [timeout=T]`
 
-收集命令运行期间新到达的 `PacketIn`。收到 `count` 个包或达到总超时后返回，默认 `count=1`、`timeout=10.0` 秒。超时时会显示已经收集到的包。
+收集命令运行期间新到达的 `PacketIn`。收到 `count` 个包或达到总超时后返回，默认 `count=1`、`timeout=10.0` 秒。`count` 必须为正整数，`timeout` 必须有限、非负且不超过系统等待上限，`0` 表示不等待。超时时会显示已经收集到的包。
 
 ```text
 p4net> s1 packet listen count=2 timeout=3

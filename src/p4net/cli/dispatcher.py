@@ -777,6 +777,12 @@ class CommandDispatcher:
 
         import threading
 
+        if not math.isfinite(timeout) or not 0 <= timeout <= threading.TIMEOUT_MAX:
+            raise CLIUsageError(
+                f"{switch_name} packet listen: timeout must be finite and between "
+                f"0 and {threading.TIMEOUT_MAX} seconds"
+            )
+
         captured: list[tuple[bytes, dict[str, int]]] = []
         done = threading.Event()
         lock = threading.Lock()

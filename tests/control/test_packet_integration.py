@@ -19,13 +19,16 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from p4net import Network
 from p4net.cli import CommandDispatcher
+from p4net.cli.exceptions import CLIUsageError
 from p4net.compiler import P4Compiler
 from p4net.topo import Topology
 
@@ -389,3 +392,51 @@ def test_cli_packet_send_then_listen(network: Network) -> None:
     # Marker hex (32 chars) lives at offset 32 of the payload hex, which is
     # still within the dispatcher's 64-char truncation window.
     assert listen_marker.hex() in out_listen
+
+
+def test_cli_packet_listen_timeout_validation_and_capture(tmp_path: Path) -> None:
+    suffix = _suffix()
+    h1, s1 = f"h{suffix}", f"s{suffix}"
+    topology = Topology()
+    topology.add_host(h1, mac="00:00:00:00:00:01")
+    grpc, thrift = _two_free_ports()
+    topology.add_switch(s1, _CPU_PUNT_P4, grpc_port=grpc, thrift_port=thrift, cpu_port=_CPU_PORT)
+    topology.add_link(h1, s1, port_b=1)
+    with Network(
+        topology, compiler=P4Compiler(cache_dir=tmp_path / "compiler"), log_dir=tmp_path / "logs"
+    ) as network:
+        dispatcher = CommandDispatcher(network)
+        client = network.switch(s1).client
+        register = client.on_packet_in
+        with patch.object(client, "on_packet_in", wraps=register) as registration:
+            for value in ("-1", "nan", "inf", "1e308", str(threading.TIMEOUT_MAX + 1)):
+                with pytest.raises(CLIUsageError):
+                    dispatcher.dispatch(f"{s1} packet listen timeout={value}")
+            registration.assert_not_called()
+        assert dispatcher.dispatch(f"{s1} packet listen timeout=0") == "(no packets within 0.0s)"
+        assert client._packet_in_handlers == []
+        ready = threading.Event()
+        marker = uuid.uuid4().bytes
+        frame = _build_eth_frame(
+            b"\xff" * 6, bytes.fromhex("000000000001"), 0x88B5, marker + bytes(32)
+        )
+
+        def capture(handler):
+            deregister = register(handler)
+            ready.set()
+            return deregister
+
+        def send() -> None:
+            assert ready.wait(timeout=5)
+            _send_raw_in_host(h1, network, frame)
+
+        with (
+            patch.object(client, "on_packet_in", side_effect=capture),
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            sender = executor.submit(send)
+            output = dispatcher.dispatch(f"{s1} packet listen count=1 timeout=2")
+            sender.result(timeout=5)
+        assert "[ingress_port=1]" in output
+        assert marker.hex() in output
+        assert client._packet_in_handlers == []
