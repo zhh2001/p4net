@@ -1,331 +1,281 @@
 ---
-description: p4net 交互式 Shell 的命令参考——每条顶级、主机、交换机命令的语法说明与示例输出。
+description: p4net 命令行参考，介绍拓扑启动、连通性测试、主机命令、表项操作和控制器包收发。
 ---
 
 # CLI 参考
 
-本页记录 `p4net` 交互式 Shell——通过 `pip install -e '.[dev]'`
-安装的命令。Shell 包装一个 `Network`，提供主机命令、表项编程、
-计数器读取、组播控制等功能，无需写 Python 代码。
+`p4net` 命令启动拓扑后会进入交互式命令行，可在其中执行主机命令、测试连通性、配置交换机表项、读取计数器和管理组播组。[安装 p4net](getting-started/installation.md) 后即可使用该命令。
 
-## 启动 Shell
+## 启动命令行 { #启动-shell }
 
+拓扑文件必须定义模块级变量 `topology`，其值为 `Topology` 实例。文件还可以定义 `setup(net)`，在网络启动后、进入交互命令行前执行。[IPv4 转发示例](examples/l3-forwarding.md) 包含这两部分。
+
+使用安装了 p4net 的 Python 环境启动，两种入口等效：
+
+```bash
+sudo env "PATH=$PATH" p4net topology.py
+sudo env "PATH=$PATH" python -m p4net topology.py
 ```
-sudo p4net <topology.py>
-sudo python -m p4net <topology.py>
-```
 
-两种形式接受相同的参数：
+两种入口接受相同的参数：
 
-```
+```text
 usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
-             [--pcap-dir PCAP_DIR] [--extra-compile-arg ARG]
+             [--pcap-dir PCAP_DIR] [--extra-compile-arg ARG] [-v]
              topology_file
 ```
 
-- `--no-shell` —— 拉起网络、运行 `setup(net)`（如有）、阻塞至
-  `SIGINT`、然后清理。适用于脚本化实验环境。
-- `--unsafe` —— 跳过 `Topology.validate()`。仅在你确定拓扑没有
-  问题时使用。
-- `--log-dir DIR` —— BMv2 日志目录。默认是新建的临时目录。
-- `--pcap-dir DIR` —— BMv2 按端口保存抓包文件的目录。不指定时不抓包。
-  在 `Topology.add_switch()` 中设置 `pcap_enabled=False`，可关闭指定交换机的抓包。
-- `--extra-compile-arg ARG` —— 额外传给 `p4c` 的参数，可以多次
-  指定。
+| 参数 | 作用 |
+| --- | --- |
+| `-h`、`--help` | 显示启动参数说明并退出。 |
+| `--no-shell` | 启动网络、运行 `setup(net)`（如有），等待 `SIGINT` 或 `SIGTERM` 后关闭网络。 |
+| `--unsafe` | 启动前跳过 `Topology.validate()`。 |
+| `--log-dir DIR` | 将 BMv2 日志写入 `DIR`，默认新建临时目录。 |
+| `--pcap-dir DIR` | 将 BMv2 按端口抓取的数据包保存到 `DIR`，不指定时不抓包。 |
+| `--extra-compile-arg ARG` | 向 `p4c` 传递额外参数，可重复指定。值以 `-` 开头时使用 `--extra-compile-arg=-DDEBUG` 这样的形式。 |
+| `-v`、`--verbose` | 将日志级别设为 INFO，`-vv` 设为 DEBUG，默认级别为 WARNING。 |
 
-### 关于 `sudo` 与 `PATH`
+指定 `--pcap-dir` 后，可在 `Topology.add_switch()` 中设置 `pcap_enabled=False`，关闭某台交换机的抓包。
 
-`sudo` 默认会通过 `secure_path`（在 `/etc/sudoers` 中定义）剥离
-虚拟环境的 `PATH`。如果 `sudo p4net ...` 报 "command not found"，
-显式指定二进制路径：
+### 虚拟环境与 `sudo` { #关于-sudo-与-path }
 
-```
-sudo env "PATH=$PATH" p4net <topology.py>
-```
+如果系统的 `sudo` 用 `secure_path` 替换了 `PATH`，它可能找不到当前环境中的 `p4net`、Python 或外部工具。上面的启动命令通过 `env` 传入当前 `PATH`，使两个入口都使用当前环境。
 
-或者把 p4net 装到系统级目录，让二进制文件落在 `secure_path` 中。
+以下示例使用主机 `h1`、`h2` 和交换机 `s1`。IPv6 命令需要主机配置 IPv6 地址。表名、动作名、计数器和控制器元数据由加载的 P4 程序决定。`p4net>` 后的每条命令均在一行内输入。
 
-## 顶级命令
+## 网络命令 { #顶级命令 }
 
 ### `help` 与 `help <command>`
 
-列出所有命令，或打印某条命令的语法与说明：
+`help` 列出可用命令，指定主题后显示对应语法和说明：
 
-```
-p4net> help
-Commands
-  help                   List commands or show details for one.
-  exit                   Exit the shell.
-  ...
+```text
 p4net> help pingall
 pingall [count] [timeout]
 
 Ping every pair of hosts; print a result matrix.
 ```
 
+查询节点命令的帮助时，使用字面占位名，例如 `help <host> ping` 或 `help <switch> table add`。
+
 ### `exit`、`quit`
 
-拆掉网络并退出。在空行上按 `Ctrl-D` 等价。
+退出命令行并关闭网络。在空输入行上按 `Ctrl-D` 效果相同。
 
 ### `status`
 
-打印网络运行状态、主机/交换机数量、日志目录。
+显示网络是否运行、主机和交换机数量，以及 BMv2 日志目录。
 
 ### `hosts`
 
-列出每台主机的主 IPv4、主 IPv6、接口列表。没有对应地址的列以
-`-` 表示。
+列出每台主机配置的首个 IPv4 地址、首个 IPv6 地址及接口名。地址保留前缀长度，未配置的地址以 `-` 表示。
 
-```
+```text
 p4net> hosts
 name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  fd00::1/64   h1-eth0
-h2    10.0.0.2/24  -            h2-eth0
+h1    10.0.0.1/24  fd00::1/64  h1-eth0
+h2    10.0.0.2/24  fd00::2/64  h2-eth0
 ```
 
 ### `switches`
 
-列出每台交换机的 gRPC 地址与 BMv2 进程 PID。
+列出每台交换机的 gRPC 地址、BMv2 进程 PID 和日志文件路径。
 
 ### `pingall [count] [timeout]`
 
-对每一对主机执行 ping，打印结果矩阵。`count` 默认 1，`timeout`
-默认 1.0 秒。单元格含义：`1` 成功、`X` 失败、`-` 自身、`?` 未知。
+在配置了主 IPv4 地址的主机之间逐方向执行 ping。矩阵列出全部主机，行表示源主机，列表示目标主机。`count` 默认 `1`，`timeout` 默认 `2.0` 秒。`1` 表示成功，`X` 表示失败，`-` 表示自身。未配置 IPv4 的主机所涉及的方向不执行测试，以 `?` 表示。
 
-```
+```text
 p4net> pingall 2 2.0
-H \ H   h1   h2
-   h1    -    1
-   h2    1    -
+H \ H h1  h2
+h1  -   1
+h2  1   -
 2/2 succeeded
 ```
 
 ### `pingall6 [count] [timeout]`
 
-对设置了 `primary_ip6` 的主机两两执行 IPv6 ping，渲染矩阵格式
-与 `pingall` 一致。没有 IPv6 的主机被静默忽略。如果没有任何主机
-配置了 v6 地址，返回 `(no IPv6-equipped hosts in topology)`。
+在配置了主 IPv6 地址的主机之间执行 IPv6 ping，排除未配置 IPv6 的主机。默认参数和输出格式与 `pingall` 相同。如果没有主机配置 IPv6，返回 `(no IPv6-equipped hosts in topology)`。
 
-```
+```text
 p4net> pingall6
-H \ H   h1   h2
-   h1    -    1
-   h2    1    -
+H \ H h1  h2
+h1  -   1
+h2  1   -
 2/2 succeeded
 ```
 
 ### `topology graph [path] [layout=LR|TB|BT|RL] [format=png|svg|pdf|dot]`
 
-把拓扑渲染为 Graphviz DOT 图。
+校验拓扑并生成图。不指定 `path` 时显示 DOT 源码，指定路径时按所选格式写入文件，并返回文件的绝对路径。`layout` 设置 Graphviz 的 `rankdir`，默认 `LR`，`format` 默认 `png`。
 
-- 不带 `path`：把 DOT 源码打印到 stdout。
-- 带 `path` 且 `format=dot`：直接把源码写入文件，不调用 `dot`
-  （未安装 graphviz 时也能用）。
-- 带 `path` 且其他 format：调用系统 `dot` 把图渲染到文件，返回
-  渲染产物的绝对路径。
+`format=dot` 直接写入源码，其他格式需要系统安装 `dot`。
 
-`layout` 控制 `rankdir`，默认 `LR`；`format` 默认 `png`。dispatcher
-在渲染前调用 `Topology.validate()`，因此不合法的拓扑会得到清晰
-错误，而不是产生看似正常但实则误导的图。
-
-```
-p4net> topology graph layout=TB
-digraph p4net {
-  rankdir=TB;
-  node [fontname="monospace"];
-  "h1" [shape=ellipse, label="h1\n10.0.0.1/24\nfd00::1/64"];
-  "h2" [shape=ellipse, label="h2\n10.0.0.2/24"];
-  "s1" [shape=box, label="s1\ngrpc :50051"];
-  "h1" -> "s1" [arrowhead=none];
-  "h2" -> "s1" [arrowhead=none];
-}
-
-p4net> topology graph /tmp/topo.png
-/tmp/topo.png
+```text
+p4net> topology graph /tmp/topo.svg layout=TB format=svg
+/tmp/topo.svg
 ```
 
 ## 主机命令
 
 ### `<host> ping <target> [count] [timeout]`
 
-从 `<host>` 向 `<target>` 发 ping。`<target>` 优先按主机名解析
-（取其主 IP）；不匹配任何主机名的字符串会原样传给
-`iputils-ping`。默认 `count=1`、`timeout=1.0`。根据目标字符串
-中是否含有 `:` 自动选择 IPv4 或 IPv6。如果两栈都有，需要强制
-IPv6 时，使用 `<host> ping6`。
+从指定主机发起 ping。目标是拓扑中的主机名时，解析为该主机的主 IPv4 地址。其他目标直接传给 `ping`，字符串中包含 `:` 时使用 IPv6。按主机名发起 IPv6 ping 使用 `ping6`。
 
-```
+默认 `count=1`、`timeout=2.0` 秒。超时值按整秒传给 `ping -W`，p4net 还会用 `ping -w` 设置整个命令的截止时间。`ping` 成功退出时显示 `OK`，否则显示 `FAIL`。
+
+```text
 p4net> h1 ping h2
 OK
-p4net> h1 ping 8.8.8.8 1 0.5
-FAIL
+p4net> h1 ping 10.0.0.2 2 2
+OK
 ```
 
 ### `<host> ping6 <target> [count] [timeout]`
 
-显式 IPv6 ping。`<target>` 可以是主机名（解析为该主机的
-`primary_ip6`）或字面 IPv6 地址。如果目标是没有 `primary_ip6`
-的主机名，会报错。
+执行 IPv6 ping，默认参数与 `ping` 相同。主机名解析为该主机的主 IPv6 地址，未配置时会报错，也可以直接指定 IPv6 地址。
 
-```
+```text
 p4net> h1 ping6 h2
 OK
-p4net> h1 ping6 fd00::ff
-FAIL
+p4net> h1 ping6 fd00::2
+OK
 ```
 
 ### `<host> xterm`
 
-在主机命名空间内启动一个运行 `bash` 的 `xterm`。需要 `$DISPLAY`
-已设置；否则报错。编排器跟踪所启动的进程，并在
-`Network.stop()` 时把它终止。
+在主机命名空间内打开运行 `bash` 的 `xterm`。需要安装 `xterm`，并能通过 `DISPLAY` 连接图形会话。网络会跟踪该进程，并在关闭时终止它。
 
-```
+```text
 p4net> h1 xterm
 xterm spawned (pid=12345)
 ```
 
-（输出来自一台已设置 `$DISPLAY` 的主机；测试套件不会跑这个例子，
-因为 CI 没有 X server。）
+PID 随实际进程变化。
 
 ### `<host> cmd <argv>...`
 
-在主机命名空间内运行命令。引号遵循 Shell 规则（`shlex`）。
-stdout 先打印；stderr 行加前缀 `[stderr]`；非零退出码以
-`[exit N]` 形式追加在末尾。
+在主机命名空间内执行命令，超时为 30 秒。引号按 `shlex` 规则将文本组合为参数，随后直接执行命令。需要管道或重定向等 Shell 功能时，使用 `sh -c '...'`。
 
-```
-p4net> h1 cmd ip -br addr
-lo               UNKNOWN        127.0.0.1/8
-h1-eth0          UP             10.0.0.1/24
+先显示 stdout，再逐行显示带 `[stderr]` 前缀的 stderr。退出状态非零时，末尾追加 `[exit N]`。
+
+```text
+p4net> h1 cmd printf 'hello\n'
+hello
 ```
 
 ### `<host> ifconfig`
 
-`<host> cmd ip -br addr` 的简写。
+在主机命名空间内执行 `ip -br addr`，显示其 stdout。
 
 ## 交换机命令
 
 ### `<switch> log`
 
-打印该交换机 BMv2 日志文件的绝对路径。
+显示交换机的 BMv2 日志文件路径。`--log-dir` 使用相对路径时，这里也显示相对路径。
 
 ### `<switch> table list`
 
-列出该交换机所有表及其匹配键类型。
+列出已加载 P4Info 中的表，每行显示表名，以及匹配字段的类型和名称：
 
-```
+```text
 p4net> s1 table list
-MyIngress.ipv4_lpm
-  hdr.ipv4.dstAddr (lpm, 32 bits)
+MyIngress.ipv4_lpm  (lpm: hdr.ipv4.dstAddr)
 ```
 
 ### `<switch> table dump <table>`
 
-打印指定表的所有表项。IPv4（32 位）与 IPv6（128 位）的 match
-值以人类可读形式渲染（`10.0.0.1/24`、`fd00::/64`）；MAC（48 位）
-使用规范冒号形式；其他位宽渲染为十进制整数。Action 参数也按位宽
-解码：9 位的 `port` 显示为 `'2'`，而非 `b'\x02'`。
+显示指定表中的表项。值按字段位宽格式化：32 位显示为 IPv4 地址，128 位显示为 IPv6 地址，48 位显示为 MAC 地址，其他位宽显示为十进制数。匹配类型决定是否附带前缀长度、掩码或范围，动作参数也按位宽格式化。
 
-```
+表中只有一条 IPv4 转发表项时，输出如下：
+
+```text
 p4net> s1 table dump MyIngress.ipv4_lpm
 #0
   table:    MyIngress.ipv4_lpm
   match:    {'hdr.ipv4.dstAddr': '10.0.0.1/32'}
   action:   MyIngress.set_egress_port
   params:   {'port': '1'}
-
-p4net> s1 table dump MyIngress.ipv6_lpm
-#0
-  table:    MyIngress.ipv6_lpm
-  match:    {'hdr.ipv6.dstAddr': 'fd00::1/128'}
-  action:   MyIngress.set_egress_port
-  params:   {'port': '1'}
 ```
+
+空表返回 `(table 'MyIngress.ipv4_lpm' is empty)`。
 
 ### `<switch> table add <table> match: <kv>... action: <name> [params: <kv>...] [priority: <n>]`
 
-插入一条表项。`match:`、`action:`、`params:`、`priority:` 是段
-标记，每段内的 key=value 对可以用逗号分隔，逗号两侧空格皆可。
-完整示例：
+插入表项。`match:`、`action:`、`params:` 和 `priority:` 分别标记各部分。匹配字段和动作参数用 `key=value` 表示，多项之间可用空格或逗号分隔。
 
-```
-p4net> s1 table add MyIngress.ipv4_lpm \
-         match: hdr.ipv4.dstAddr=10.0.0.5/32 \
-         action: MyIngress.set_egress_port \
-         params: port=2
+```text
+p4net> s1 table add MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32 action: MyIngress.set_egress_port params: port=2
 ok
 ```
 
-ternary 或 range 类型的表需要显式提供 `priority:`；不含
-ternary/range 字段的表会拒绝 `priority:`。
+仅含 exact/LPM 字段的表不填写 `priority:`，含 ternary 或 range 字段的表在插入时需要优先级。CLI 目前将匹配值作为字符串传入，ternary 的 `(value, mask)` 和 range 的 `(low, high)` 二元组需通过 Python API 提供。
 
-### `<switch> table del <table> match: <kv>...`
+### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
 
-按匹配键删除一条表项。`match:` 语法与 `table add` 一致。
+按匹配键删除表项，各部分的语法与 `table add` 相同。条目带有优先级时，同时用 `priority: N` 指定原值。
+
+```text
+p4net> s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32
+ok
+```
 
 ### `<switch> table clear <table>`
 
-删除指定表的所有表项；返回删除条数。
+删除表中所有表项，返回 `cleared N entries`。
 
 ### `<switch> counter [reset] <name> [<index>]`
 
-读取或清零计数器条目。不带 `reset` 时打印 `pkts=N bytes=M`
-（按指定索引，或全部已有条目）。带 `reset` 时把条目清零。
+读取间接计数器，或用 `reset` 清零。指定索引时，读取结果为 `pkts=N bytes=M`。不指定索引时，以表格列出返回的计数单元，没有结果则显示 `(no populated cells)`。实际记录包数还是字节数由 P4 计数器类型决定，不指定索引的清零操作会清空所有返回的单元。
 
-```
-p4net> s1 counter MyIngress.ingress_pkts 0
-pkts=2 bytes=196
-p4net> s1 counter reset MyIngress.ingress_pkts 0
+```text
+p4net> s1 counter reset MyIngress.ingress_pkts 1
 ok
+p4net> s1 counter MyIngress.ingress_pkts 1
+pkts=0 bytes=0
 ```
 
 ### `<switch> mcast list`
 
-按 `<id>: [<port>, ...]` 形式列出所有组播组。
+按组 ID 顺序列出组播组，格式为 `<id>: [<port>, ...]`，没有组时显示 `(no multicast groups)`。
 
 ### `<switch> mcast add <id> <port,port,...>`
 
-创建带指定复制端口的组播组。
+创建组播组，指定复制端口。
 
-```
+```text
 p4net> s1 mcast add 1 1,2,3
 ok
 ```
 
 ### `<switch> mcast del <id>`
 
-删除组播组。
+删除指定的组播组。
 
 ### `<switch> packet send <hex_payload> [metadata: <k>=<v>[,<k>=<v>...]]`
 
-通过 StreamChannel 发送一个 `PacketOut`。`<hex_payload>` 是偶数
-长度的十六进制字符串，由 `bytes.fromhex` 解析。可选的 `metadata:`
-段按名称指定 P4Info 中定义的 `packet_out` 控制器字段；未给出的
-字段会被自动补零。
+将 `PacketOut` 放入 P4Runtime StreamChannel 的发送队列。载荷是完整数据包的十六进制字符串，元数据名称和位宽来自 P4Info 中的 `packet_out` 头，未提供的字段填零。
 
-```
-p4net> s1 packet send ffffffffffff000000000001880b48656c6c6f \
-         metadata: egress_port=1
+[CPU punt 示例](examples/cpu-punt.md) 提供了控制器包头和 CPU 端口配置，可使用以下命令发送 PacketOut：
+
+```text
+p4net> s1 packet send ffffffffffff000000000001880b48656c6c6f metadata: egress_port=1
 ok
 ```
 
 ### `<switch> packet listen [count=N] [timeout=T]`
 
-阻塞直至收到 `count` 个数据包或 `timeout` 秒后超时，先到先返回。
-默认 `count=1`、`timeout=10.0`。每个数据包渲染一行：
-`[ingress_port=N] <hex>...`，hex 部分截断到 64 字符。
+收集命令运行期间新到达的 `PacketIn`。收到 `count` 个包或达到总超时后返回，默认 `count=1`、`timeout=10.0` 秒。超时时会显示已经收集到的包。
 
-```
+```text
 p4net> s1 packet listen count=2 timeout=3
-[ingress_port=1] ffffffffffff000000000001...
-[ingress_port=1] 3333000000160000000000018611...
 ```
+
+每个包输出一行，先按名称排序显示 `[name=value]` 元数据字段，再显示十六进制内容。十六进制内容超过 64 个字符时截断并追加 `...`。没有包到达时，返回 `(no packets within 3.0s)`。
 
 ## 键盘快捷键
 
-- `Ctrl-C` —— 取消当前输入。若有命令正在执行，对应进程组会
-  收到信号，Shell 返回提示符。
-- 空行上的 `Ctrl-D` —— 干净退出（与 `exit` / `quit` 等价）。
-- `↑` / `↓` —— 历史浏览（持久化于 `~/.p4net_history`）。
-- `Tab` —— 顶级命令、主机名、交换机名以及子动词的补全。
+- `Ctrl-C`：取消正在编辑的输入行。
+- 空行上的 `Ctrl-D`：退出命令行并关闭网络。
+- `↑` / `↓`：浏览历史记录，历史保存在 `~/.p4net_history`。
+- `Tab`：补全网络命令、主机名、交换机名，以及 `ping`、`table` 等节点命令。
