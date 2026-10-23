@@ -7,13 +7,14 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from p4net import Network
 from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
-from p4net.control import AsyncP4RuntimeClient
+from p4net.control import AsyncP4RuntimeClient, EncodingError
 from p4net.topo import Topology
 
 pytestmark = [
@@ -123,3 +124,63 @@ async def test_optional_entries_preserve_priority_and_forward(
     finally:
         if client_kind == "async":
             await async_client.disconnect()
+
+
+@pytest.mark.parametrize("client_kind", ["sync", "async"])
+async def test_delete_missing_priority_keeps_entries_and_forwarding(
+    network: Network, client_kind: str
+) -> None:
+    switch = next(iter(network.switches.values()))
+    sync = switch.client
+    client = (
+        AsyncP4RuntimeClient(
+            grpc_address=("127.0.0.1", switch.descriptor.grpc_port),
+            device_id=switch.descriptor.device_id,
+            info_index=sync.index,
+            election_id=(sync.election_id[0] + 1, 0),
+        )
+        if client_kind == "async"
+        else sync
+    )
+    if client_kind == "async":
+        await client.connect()
+
+    async def write(operation: str, *args: Any, **kwargs: Any) -> None:
+        result = getattr(client, f"{operation}_table_entry")(_TABLE, *args, **kwargs)
+        if client_kind == "async":
+            await result
+
+    async def read() -> list[dict[str, Any]]:
+        if client_kind == "async":
+            return [entry async for entry in client.list_table_entries(_TABLE)]
+        return client.list_table_entries(_TABLE)
+
+    match = {"hdr.ethernet.etherType": 0x0800}
+    try:
+        await write("insert", {}, "MyIngress.forward", priority=1)
+        await write("insert", match, "MyIngress.forward", priority=20)
+        assert all(network.pingall().values())
+        before = sorted(await read(), key=lambda entry: entry["priority"])
+        for key in (match, {}):
+            with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+                with pytest.raises(EncodingError, match="priority"):
+                    await write("delete", key)
+                rpc.assert_not_called()
+        if client_kind == "sync":
+            cli = CommandDispatcher(network)
+            with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+                output = cli.dispatch(
+                    f"{switch.name} table del {_TABLE} match: hdr.ethernet.etherType=0x0800"
+                )
+                assert output.startswith("error: EncodingError:") and "priority" in output
+                rpc.assert_not_called()
+        assert sorted(await read(), key=lambda entry: entry["priority"]) == before
+        assert all(network.pingall().values())
+        await write("delete", match, priority=20)
+        (remaining,) = await read()
+        assert remaining["match"] == {} and remaining["priority"] == 1
+        await write("delete", {}, priority=1)
+        assert await read() == []
+    finally:
+        if client_kind == "async":
+            await client.disconnect()

@@ -419,6 +419,11 @@ class AsyncP4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
+        """Delete by match key and original priority.
+
+        Optional, ternary and range tables require ``priority``, including
+        wildcard entries. Omit it for exact/LPM-only tables.
+        """
         await self._write_entry(table, match, None, None, priority, "DELETE", timeout)
 
     async def _write_entry(
@@ -435,7 +440,7 @@ class AsyncP4RuntimeClient:
         idx = self.info_index
         table_id = idx.table_id(table)
         requires_priority = idx.table_requires_priority(table)
-        if requires_priority and priority is None and update_type != "DELETE":
+        if requires_priority and priority is None:
             raise EncodingError(
                 f"table {table!r} has optional/ternary/range fields; priority required"
             )

@@ -476,9 +476,13 @@ class P4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
-        """Delete an entry from ``table`` by match key.
+        """Delete an entry from ``table`` by match key and original priority.
+
+        Tables with optional, ternary or range keys require ``priority``,
+        including wildcard entries. Omit it for exact/LPM-only tables.
 
         Raises:
+            EncodingError: if a required priority is missing or a match is invalid.
             EntryNotFoundError: if no matching entry exists.
         """
         self._write_entry(
@@ -507,7 +511,7 @@ class P4RuntimeClient:
         assert index is not None
         table_id = index.table_id(table)
         requires_priority = index.table_requires_priority(table)
-        if requires_priority and priority is None and update_type != "DELETE":
+        if requires_priority and priority is None:
             raise EncodingError(
                 f"table {table!r} has optional/ternary/range match fields; priority is required"
             )

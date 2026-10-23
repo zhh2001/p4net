@@ -233,7 +233,7 @@ ok
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
 
-Delete an entry using its match key. Use the same match-value formats as `table add`, including `value&&&mask` and `low..high`. For entries with a priority, include the original value as `priority: N`.
+Delete an entry using its match key. Use the same match-value formats as `table add`, including `value&&&mask` and `low..high`. For tables with optional, ternary or range keys, supply the entry's original priority as `priority: N`, including for wildcard entries. Omitting a required priority reports an `EncodingError`. For exact/LPM-only tables, omit `priority:`.
 
 ```text
 p4net> s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32

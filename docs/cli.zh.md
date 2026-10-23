@@ -233,7 +233,7 @@ ok
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
 
-按匹配键删除表项，匹配值格式与 `table add` 相同，也使用 `值&&&掩码` 和 `下界..上界`。条目带有优先级时，同时用 `priority: N` 指定原值。
+按匹配键删除表项，匹配值格式与 `table add` 相同，也使用 `值&&&掩码` 和 `下界..上界`。含 optional、ternary 或 range 字段的表必须用 `priority: N` 指定条目的原优先级，通配条目也一样。缺少必需的优先级时显示 `EncodingError`。仅含 exact/LPM 字段的表不填写 `priority:`。
 
 ```text
 p4net> s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.5/32

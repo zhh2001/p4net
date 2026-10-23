@@ -295,6 +295,12 @@ def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path) -> None:
             net.host(h1).exec([sys.executable, "-c", sender_script], timeout=5)
             assert receiver.wait(timeout=7) == 0
         assert received.read_bytes() == frame
+        client = net.switch(s1).client
+        with patch.object(client._stub, "Write", wraps=client._stub.Write) as rpc:
+            output = d.dispatch(f"{s1} table del MyIngress.l2_match match: {match}")
+            assert output.startswith("error: EncodingError:") and "priority" in output
+            rpc.assert_not_called()
+        assert len(client.list_table_entries("MyIngress.l2_match")) == 1
         assert d.dispatch(f"{s1} table del MyIngress.l2_match match: {match} priority: 17") == "ok"
         assert net.switch(s1).client.list_table_entries("MyIngress.l2_match") == []
 

@@ -1116,3 +1116,59 @@ def test_add_multicast_group_rejects_zero_id(
             client.add_multicast_group(0, [1])
     finally:
         client.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("match_type", "value"),
+    [
+        (p4info_pb2.MatchField.OPTIONAL, "10.0.0.1"),
+        (p4info_pb2.MatchField.TERNARY, ("10.0.0.0", "255.255.0.0")),
+        (p4info_pb2.MatchField.RANGE, (1024, 2048)),
+    ],
+)
+@pytest.mark.parametrize("wildcard", [False, True])
+@pytest.mark.parametrize("priority", [None, 17], ids=["missing", "provided"])
+def test_delete_priority_table_validates_before_rpc(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    match_type: int,
+    value: object,
+    wildcard: bool,
+    priority: int | None,
+) -> None:
+    client = _push_pipeline(connected_client)
+    table = next(t for t in client.index.raw.tables if t.preamble.name == "MyIngress.ipv4_lpm")
+    table.match_fields[0].match_type = match_type
+    match = {} if wildcard else {"hdr.ipv4.dstAddr": value}
+    try:
+        if priority is None:
+            with pytest.raises(EncodingError, match="priority"):
+                client.delete_table_entry("MyIngress.ipv4_lpm", match)
+            connected_client[1]["stub"].Write.assert_not_called()
+        else:
+            client.delete_table_entry("MyIngress.ipv4_lpm", match, priority=priority)
+            connected_client[1]["stub"].Write.assert_called_once()
+            update = connected_client[1]["stub"].Write.call_args.args[0].updates[0]
+            assert update.type == p4runtime_pb2.Update.Type.DELETE
+            entry = update.entity.table_entry
+            assert entry.table_id == 2001
+            assert entry.priority == priority
+            assert len(entry.match) == (0 if wildcard else 1)
+            assert not entry.HasField("action")
+    finally:
+        client.disconnect()
+
+
+def test_delete_exact_table_does_not_require_priority(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    table = next(t for t in client.index.raw.tables if t.preamble.name == "MyIngress.ipv4_lpm")
+    table.match_fields[0].match_type = p4info_pb2.MatchField.EXACT
+    try:
+        client.delete_table_entry("MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.0.1"})
+        connected_client[1]["stub"].Write.assert_called_once()
+        entry = connected_client[1]["stub"].Write.call_args.args[0].updates[0].entity.table_entry
+        assert entry.priority == 0
+        assert entry.match[0].HasField("exact")
+    finally:
+        client.disconnect()
