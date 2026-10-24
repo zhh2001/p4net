@@ -577,6 +577,34 @@ def test_multi_link_host_first_link_inherits_ip_and_mac(
         net.stop()
 
 
+@pytest.mark.parametrize("family", [4, 6])
+def test_overridden_default_is_not_reused_on_later_host_link(
+    patched: dict[str, Any], tmp_path: Path, family: int
+) -> None:
+    field = "ip" if family == 4 else "ip6"
+    primary = "10.230.0.1/24" if family == 4 else "fd00:230::1/64"
+    override = "10.230.0.2/24" if family == 4 else "fd00:230::2/64"
+    topo = Topology()
+    topo.add_host("h1", **{field: primary})
+    topo.add_host("h2", **{field: primary})
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_switch("s2", Path("p.p4"))
+    topo.add_link("h1", "s1", **{f"{field}_a": override})
+    topo.add_link("h1", "s2")
+    topo.add_link("h2", "s2")
+    before = topo.to_dict()
+    network = Network(topo, log_dir=tmp_path / "logs")
+    try:
+        network.start()
+        host = network.host("h1")
+        interfaces = host.interfaces if family == 4 else host.interfaces6
+        assert list(interfaces.values()) == [override, None]
+        assert (host.primary_ip if family == 4 else host.primary_ip6) == override.split("/")[0]
+        assert topo.to_dict() == before
+    finally:
+        network.stop()
+
+
 # ---------------------------------------------------------------------------
 # Election IDs uniqueness across Network instances
 # ---------------------------------------------------------------------------

@@ -54,6 +54,7 @@ from p4net.runtime import (
     enable_ipv6,
 )
 from p4net.topo import Host, Link, Topology
+from p4net.topo._addresses import _effective_host_addresses
 from p4net.topo.exceptions import TopologyError
 
 logger = logging.getLogger(__name__)
@@ -710,14 +711,9 @@ class Network:
             ip6_to_use: str | None = None
             mac_to_use: str | None = None
             if isinstance(node, Host):
-                if ep.ip is not None:
-                    ip_to_use = ep.ip
-                elif node.ip is not None and node.name not in first_link_seen:
-                    ip_to_use = node.ip
-                if ep.ip6 is not None:
-                    ip6_to_use = ep.ip6
-                elif node.ip6 is not None and node.name not in first_link_seen:
-                    ip6_to_use = node.ip6
+                ip_to_use, ip6_to_use = _effective_host_addresses(
+                    node, ep, first_link=node.name not in first_link_seen
+                )
                 if ep.mac is not None:
                     mac_to_use = ep.mac
                 elif node.mac is not None and node.name not in first_link_seen:

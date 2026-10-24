@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from p4net._ifname import _validate_ifname
+from p4net.topo._addresses import _effective_host_addresses
 from p4net.topo.exceptions import TopologyError
 from p4net.topo.host import Host
 from p4net.topo.link import Link, LinkEndpoint, _validate_port_number
@@ -506,31 +507,37 @@ class Topology:
                 else:
                     interface_owners[interface_key] = owner
 
-        # 6. No two hosts share an IP within the same IPv4Network.
-        # Collect (node_name, IPv4Interface) from host primary IPs and link
-        # overrides, group by network, flag any (network, address) used by
-        # more than one distinct node.
+        # 6. Check the addresses selected for host interfaces, grouped by network.
         per_network: dict[ipaddress.IPv4Network, dict[ipaddress.IPv4Address, set[str]]] = {}
-        for host in self._hosts.values():
-            if host.ip is None:
-                continue
-            try:
-                iface = ipaddress.IPv4Interface(host.ip)
-            except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
-                continue  # already validated at construction; ignore here
-            per_network.setdefault(iface.network, {}).setdefault(iface.ip, set()).add(host.name)
+        per_network6: dict[ipaddress.IPv6Network, dict[ipaddress.IPv6Address, set[str]]] = {}
+        seen_hosts: set[str] = set()
         for link in self._links:
             for ep in (link.a, link.b):
-                if ep.ip is None:
+                host = self._hosts.get(ep.node)
+                if host is None:
                     continue
-                if ep.node not in self._hosts:
-                    continue  # switch endpoints with IPs are rejected at add_link
-                try:
-                    iface = ipaddress.IPv4Interface(ep.ip)
-                except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
-                    errors.append(f"link endpoint {ep.node!r}: invalid IP {ep.ip!r}")
-                    continue
-                per_network.setdefault(iface.network, {}).setdefault(iface.ip, set()).add(ep.node)
+                ipv4, ipv6 = _effective_host_addresses(
+                    host, ep, first_link=host.name not in seen_hosts
+                )
+                seen_hosts.add(host.name)
+                if ipv4 is not None:
+                    try:
+                        iface = ipaddress.IPv4Interface(ipv4)
+                    except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+                        errors.append(f"link endpoint {ep.node!r}: invalid IP {ipv4!r}")
+                    else:
+                        per_network.setdefault(iface.network, {}).setdefault(iface.ip, set()).add(
+                            host.name
+                        )
+                if ipv6 is not None:
+                    try:
+                        iface6 = ipaddress.IPv6Interface(ipv6)
+                    except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+                        errors.append(f"link endpoint {ep.node!r}: invalid ip6 {ipv6!r}")
+                    else:
+                        per_network6.setdefault(iface6.network, {}).setdefault(
+                            iface6.ip, set()
+                        ).add(host.name)
         for network, addrs in per_network.items():
             for addr, nodes in addrs.items():
                 if len(nodes) > 1:
@@ -538,30 +545,6 @@ class Topology:
                         f"IP collision on {network}: address {addr} used by hosts {sorted(nodes)}"
                     )
 
-        # 7. Same as 6, but for IPv6.
-        per_network6: dict[ipaddress.IPv6Network, dict[ipaddress.IPv6Address, set[str]]] = {}
-        for host in self._hosts.values():
-            if host.ip6 is None:
-                continue
-            try:
-                iface6 = ipaddress.IPv6Interface(host.ip6)
-            except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
-                continue
-            per_network6.setdefault(iface6.network, {}).setdefault(iface6.ip, set()).add(host.name)
-        for link in self._links:
-            for ep in (link.a, link.b):
-                if ep.ip6 is None:
-                    continue
-                if ep.node not in self._hosts:
-                    continue
-                try:
-                    iface6 = ipaddress.IPv6Interface(ep.ip6)
-                except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
-                    errors.append(f"link endpoint {ep.node!r}: invalid ip6 {ep.ip6!r}")
-                    continue
-                per_network6.setdefault(iface6.network, {}).setdefault(iface6.ip, set()).add(
-                    ep.node
-                )
         for network6, addrs6 in per_network6.items():
             for addr6, nodes6 in addrs6.items():
                 if len(nodes6) > 1:
