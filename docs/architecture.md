@@ -42,6 +42,8 @@ This package provides the Linux and process operations used by the orchestrator:
 
 These objects manage individual resources. `Network` determines their creation and cleanup order. See the [runtime API](api/runtime.md).
 
+For non-ASCII interface names, `VethPair` creates temporary ASCII names and assigns the requested names after udev has processed the devices. When udev is active, `udevadm` must be on `PATH`; creation waits up to five seconds for its rules to finish. Waiting or naming failures remove the pair by interface index.
+
 ### `p4net.topo`
 
 `Host`, `P4Switch`, `LinkEndpoint`, and `Link` are frozen data classes. They describe addresses, switch configuration, link endpoints, and impairments. `Topology` is a mutable builder that collects these descriptions, validates them, serializes them, and exports Graphviz diagrams. Building a description creates no network resources.

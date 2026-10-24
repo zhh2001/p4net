@@ -12,9 +12,13 @@ import ipaddress
 import logging
 import os
 import re
+import shutil
 import socket
+import subprocess
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from pyroute2 import IPRoute, NetNS
@@ -99,14 +103,56 @@ class VethPair:
                 raise LinkError(f"interface {self._names['a']!r} already exists")
             if ipr.link_lookup(ifname=self._names["b"]):
                 raise LinkError(f"interface {self._names['b']!r} already exists")
-            ipr.link(
-                "add",
-                ifname=self._names["a"],
-                kind="veth",
-                peer=self._names["b"],
-            )
+            if all(name.isascii() for name in self._names.values()):
+                ipr.link(
+                    "add",
+                    ifname=self._names["a"],
+                    kind="veth",
+                    peer=self._names["b"],
+                )
+            else:
+                self._create_unicode_pair(ipr)
         self._created = True
         logger.debug("created veth pair %r <-> %r", self._names["a"], self._names["b"])
+
+    def _create_unicode_pair(self, ipr: Any) -> None:
+        udevadm = None
+        if Path("/run/udev/control").exists():
+            udevadm = shutil.which("udevadm")
+            if udevadm is None:
+                raise LinkError("udevadm is required for non-ASCII interfaces when udev is active")
+        prefix = "p4n" + uuid.uuid4().hex[:9]
+        temporary_a, temporary_b = prefix + "a", prefix + "b"
+        ipr.link("add", ifname=temporary_a, kind="veth", peer=temporary_b)
+        index_a = None
+        try:
+            index_a = self._index(ipr, temporary_a)
+            index_b = self._index(ipr, temporary_b)
+            if udevadm is not None:
+                try:
+                    subprocess.run(
+                        [udevadm, "settle", "--timeout=5"],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        timeout=6,
+                    )
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise LinkError(
+                        f"cannot wait for udev interface initialization: {exc}"
+                    ) from exc
+            # udev applies name replacement to add events, not to these renames.
+            ipr.link("set", index=index_a, ifname=self._names["a"])
+            ipr.link("set", index=index_b, ifname=self._names["b"])
+        except BaseException:
+            try:
+                if index_a is None:
+                    ipr.link("del", ifname=temporary_a)
+                else:
+                    ipr.link("del", index=index_a)
+            except Exception:
+                logger.exception("failed to remove temporary veth pair %r", temporary_a)
+            raise
 
     def destroy(self) -> None:
         """Delete the veth pair (both ends, regardless of namespace)."""

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from pytest_mock import MockerFixture
@@ -105,6 +106,114 @@ def test_create_already_existing_iface_raises(patch_netlink: MagicMock) -> None:
     v = VethPair("va", "vb")
     with pytest.raises(LinkError):
         v.create()
+    patch_netlink.link.assert_not_called()
+
+
+@pytest.mark.parametrize("names", [("甲", "乙"), ("甲", "vb"), ("va", "乙")])
+def test_unicode_create_waits_before_assigning_names(
+    patch_netlink: MagicMock, mocker: MockerFixture, names: tuple[str, str]
+) -> None:
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mocker.patch("shutil.which", return_value="/usr/bin/udevadm")
+    wait = mocker.patch("subprocess.run")
+    indexes: dict[str, int] = {}
+    events: list[str] = []
+
+    def lookup(*, ifname: str) -> list[int]:
+        return [indexes[ifname]] if ifname in indexes else []
+
+    def link(command: str, **kwargs: Any) -> None:
+        if command == "add":
+            assert kwargs["ifname"].isascii() and kwargs["peer"].isascii()
+            indexes.update({kwargs["ifname"]: 41, kwargs["peer"]: 42})
+            events.append("create")
+        elif command == "set":
+            events.append("rename")
+
+    patch_netlink.link_lookup.side_effect = lookup
+    patch_netlink.link.side_effect = link
+    wait.side_effect = lambda *args, **kwargs: events.append("wait")
+    pair = VethPair(*names)
+    pair.create()
+    assert events == ["create", "wait", "rename", "rename"]
+    assert patch_netlink.link.call_args_list[-2:] == [
+        call("set", index=41, ifname=names[0]),
+        call("set", index=42, ifname=names[1]),
+    ]
+    wait.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["wait", "wait_error", "rename_a", "rename_b"])
+def test_unicode_create_failure_deletes_pair_by_index(
+    patch_netlink: MagicMock, mocker: MockerFixture, failure: str
+) -> None:
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mocker.patch("shutil.which", return_value="/usr/bin/udevadm")
+    wait = mocker.patch("subprocess.run")
+    if failure == "wait":
+        wait.side_effect = subprocess.TimeoutExpired("udevadm", 6)
+    elif failure == "wait_error":
+        wait.side_effect = subprocess.CalledProcessError(1, "udevadm")
+    patch_netlink.link_lookup.side_effect = [[], [], [41], [42]]
+
+    def link(command: str, **kwargs: Any) -> None:
+        if command == "set" and kwargs["index"] == (41 if failure == "rename_a" else 42):
+            raise OSError("rename failed")
+
+    patch_netlink.link.side_effect = link
+    pair = VethPair("甲", "乙")
+    with pytest.raises((LinkError, OSError)):
+        pair.create()
+    assert patch_netlink.link.call_args_list[-1] == call("del", index=41)
+    assert not pair._created
+
+
+@pytest.mark.parametrize("missing_side", ["a", "b"])
+def test_unicode_create_lookup_failure_removes_created_pair(
+    patch_netlink: MagicMock, mocker: MockerFixture, missing_side: str
+) -> None:
+    mocker.patch("pathlib.Path.exists", return_value=False)
+    patch_netlink.link_lookup.side_effect = (
+        [[], [], []]
+        if missing_side == "a"
+        else [
+            [],
+            [],
+            [41],
+            [],
+        ]
+    )
+    pair = VethPair("甲", "乙")
+    with pytest.raises(LinkError, match="not found"):
+        pair.create()
+    temporary_a = patch_netlink.link.call_args_list[0].kwargs["ifname"]
+    assert patch_netlink.link.call_args_list[-1] == (
+        call("del", ifname=temporary_a) if missing_side == "a" else call("del", index=41)
+    )
+    assert not pair._created
+
+
+def test_unicode_create_without_udev_needs_no_command(
+    patch_netlink: MagicMock, mocker: MockerFixture
+) -> None:
+    mocker.patch("pathlib.Path.exists", return_value=False)
+    which = mocker.patch("shutil.which")
+    wait = mocker.patch("subprocess.run")
+    patch_netlink.link_lookup.side_effect = [[], [], [41], [42]]
+    VethPair("甲", "乙").create()
+    which.assert_not_called()
+    wait.assert_not_called()
+    assert patch_netlink.link.call_args_list[-1] == call("set", index=42, ifname="乙")
+
+
+def test_unicode_create_missing_udevadm_rejected_before_creation(
+    patch_netlink: MagicMock, mocker: MockerFixture
+) -> None:
+    mocker.patch("pathlib.Path.exists", return_value=True)
+    mocker.patch("shutil.which", return_value=None)
+    patch_netlink.link_lookup.return_value = []
+    with pytest.raises(LinkError, match="udevadm"):
+        VethPair("甲", "乙").create()
     patch_netlink.link.assert_not_called()
 
 

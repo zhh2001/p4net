@@ -42,6 +42,8 @@ flowchart TB
 
 这些对象分别管理单个资源，创建和回收的顺序由 `Network` 决定。详见[运行时 API](api/runtime.md)。
 
+接口名含非 ASCII 字符时，`VethPair` 先使用临时 ASCII 名称创建接口，待 udev 处理完成后再设置原名。udev 运行时需要 `PATH` 中有 `udevadm`，最多等待 5 秒。等待或设置名称失败时按接口编号回收。
+
 ### `p4net.topo`
 
 `Host`、`P4Switch`、`LinkEndpoint` 和 `Link` 是冻结的数据类，保存地址、交换机配置、链路端点和链路参数。`Topology` 是可修改的构造器，负责汇集描述、校验、序列化和导出 Graphviz 图。构造描述不会创建网络资源。
