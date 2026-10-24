@@ -404,6 +404,7 @@ class Topology:
         including the two ports of each switch. Every link endpoint must have
         an assigned port and a non-empty interface name. Different hosts cannot
         use the same effective IP address, regardless of prefix length.
+        Switch data ports cannot carry IPv4 or IPv6 addresses.
         """
         errors: list[str] = []
 
@@ -416,6 +417,14 @@ class Topology:
                 if ep.port is None:
                     errors.append(f"link[{i}] endpoint {which} ({ep.node!r}) has no assigned port")
                 switch = self._switches.get(ep.node)
+                if switch is not None:
+                    for field, address in (("ip", ep.ip), ("ip6", ep.ip6)):
+                        if address is not None:
+                            errors.append(
+                                f"link[{i}] endpoint {which} switch {switch.name!r}: "
+                                "P4 switch data ports do not carry IP addresses "
+                                f"({field}={address!r})"
+                            )
                 if switch is not None and ep.port is not None and ep.port > _SWITCH_PORT_MAX:
                     errors.append(
                         f"link[{i}] endpoint {which} switch port {ep.port} "
@@ -637,9 +646,9 @@ class Topology:
     def from_dict(cls, data: dict[str, Any]) -> Topology:
         """Reconstruct a :class:`Topology` from a :meth:`to_dict` payload.
 
-        Endpoint ports and interface names are restored as stored. Call
-        :meth:`validate` to check that every endpoint has an assigned port
-        and a non-empty interface name.
+        Endpoint ports, interface names, and address overrides are restored as
+        stored. Call :meth:`validate` to check endpoint assignments and reject
+        IP addresses on switch data ports.
         """
         topo = cls()
         for name, host_data in data.get("hosts", {}).items():

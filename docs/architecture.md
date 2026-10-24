@@ -70,6 +70,8 @@ Address collision checks use the same address selection as network startup. A li
 
 Different hosts cannot use the same effective IP address, regardless of prefix length. Different IP addresses with overlapping subnets are allowed, as is reusing an address on multiple interfaces of the same host.
 
+IPv4 and IPv6 addresses belong to host endpoints. On P4 switch data ports, omit `ip` and `ip6` or set them to `None`. `from_dict()` preserves address fields from snapshots. `validate()` rejects addresses on switch endpoints before compilation or network resources are created.
+
 Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 
 Construction checks field values and parameter combinations. `Topology.validate()` additionally checks endpoint references, self-links, port and device-ID collisions, switch service-port collisions, interface names, and host address conflicts. Network startup calls it unless `unsafe=True`. The CLI also validates before `topology graph`.

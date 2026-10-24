@@ -380,14 +380,87 @@ def test_iface_name_too_long_rejected() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ip_on_switch_endpoint_rejected() -> None:
+@pytest.mark.parametrize(("field", "address"), [("ip", "10.0.0.2/24"), ("ip6", "fd00::2/64")])
+def test_ip_on_switch_endpoint_rejected(field: str, address: str) -> None:
     t = Topology()
     t.add_host("h1")
     t.add_switch("s1", Path("p.p4"))
     with pytest.raises(TopologyError, match="P4 switch data ports do not carry IP"):
-        t.add_link("h1", "s1", ip_b="10.0.0.2/24")
-    with pytest.raises(TopologyError, match="remove ip_a"):
-        t.add_link("s1", "h1", ip_a="10.0.0.2/24")
+        t.add_link("h1", "s1", **{f"{field}_b": address})
+    with pytest.raises(TopologyError, match=f"remove {field}_a"):
+        t.add_link("s1", "h1", **{f"{field}_a": address})
+    assert not t.links
+
+
+@pytest.mark.parametrize("fields", [("ip",), ("ip6",), ("ip", "ip6")])
+@pytest.mark.parametrize("switch_first", [False, True])
+def test_imported_switch_addresses_rejected_without_changing_snapshot(
+    fields: tuple[str, ...], switch_first: bool
+) -> None:
+    topo = Topology()
+    topo.add_host("h1", ip="10.235.0.1/24", ip6="fd00:235::1/64")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link(*(("s1", "h1") if switch_first else ("h1", "s1")))
+    data = topo.to_dict()
+    side = "a" if switch_first else "b"
+    addresses = {"ip": "10.234.0.1/24", "ip6": "fd00:234::1/64"}
+    for field in fields:
+        data["links"][0][side][field] = addresses[field]
+    restored = Topology.from_dict(data)
+    assert restored.to_dict() == data
+    with pytest.raises(TopologyError, match="P4 switch data ports do not carry IP") as excinfo:
+        restored.validate()
+    message = str(excinfo.value)
+    assert f"link[0] endpoint {side}" in message and "s1" in message
+    for field in fields:
+        assert field in message and addresses[field] in message
+    assert restored.to_dict() == data
+
+
+def test_imported_switch_addresses_collect_both_endpoints_and_other_errors() -> None:
+    topo = Topology()
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_switch("s2", Path("p.p4"))
+    topo.add_link("s1", "s2")
+    data = topo.to_dict()
+    for side, number in (("a", 1), ("b", 2)):
+        data["links"][0][side].update(ip=f"10.234.0.{number}/24", ip6=f"fd00:234::{number}/64")
+    data["links"][0]["a"].update(port=None, iface_name=None)
+    restored = Topology.from_dict(data)
+    with pytest.raises(TopologyError) as excinfo:
+        restored.validate()
+    message = str(excinfo.value)
+    assert message.count("P4 switch data ports do not carry IP") == 4
+    assert "has no assigned port" in message and "has no assigned interface name" in message
+    for side, node in (("a", "s1"), ("b", "s2")):
+        assert f"link[0] endpoint {side}" in message and node in message
+    assert restored.to_dict() == data
+
+
+@pytest.mark.parametrize("state", ["missing", "null"])
+@pytest.mark.parametrize("switch_first", [False, True])
+def test_imported_switch_unset_addresses_allow_host_overrides(
+    state: str, switch_first: bool
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    host_side, switch_side = ("b", "a") if switch_first else ("a", "b")
+    topo.add_link(
+        *(("s1", "h1") if switch_first else ("h1", "s1")),
+        **{f"ip_{host_side}": "10.235.0.1/24", f"ip6_{host_side}": "fd00:235::1/64"},
+    )
+    data = topo.to_dict()
+    if state == "missing":
+        for field in ("ip", "ip6"):
+            data["links"][0][switch_side].pop(field)
+    original = deepcopy(data)
+    restored = Topology.from_dict(data)
+    before = restored.to_dict()
+    restored.validate()
+    assert restored.to_dict() == before and data == original
+    assert before["links"][0][host_side]["ip"] == "10.235.0.1/24"
+    assert before["links"][0][host_side]["ip6"] == "fd00:235::1/64"
 
 
 def test_link_level_ip_on_host_endpoint_kept() -> None:
