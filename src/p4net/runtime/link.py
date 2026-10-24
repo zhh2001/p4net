@@ -83,7 +83,7 @@ class VethPair:
         return self._names[side]
 
     def namespace_of(self, side: Side) -> NetworkNamespace | None:
-        """Return the namespace ``side`` currently lives in (``None`` for root)."""
+        """Return the current namespace, or ``None`` for root or absent endpoints."""
         _validate_side(side)
         return self._ns[side]
 
@@ -192,7 +192,7 @@ class VethPair:
             raise
 
     def destroy(self) -> None:
-        """Delete the veth pair (both ends, regardless of namespace)."""
+        """Delete both ends and clear their positions, retaining creation targets."""
         if not self._created:
             raise LinkError("veth pair has not been created (or already destroyed)")
         # Deleting either side deletes both ends. We delete from side 'a'.
@@ -206,6 +206,7 @@ class VethPair:
         except Exception as exc:
             raise LinkError(f"failed to destroy veth pair: {exc}") from exc
         self._created = False
+        self._ns = {"a": None, "b": None}
         logger.debug("destroyed veth pair %r <-> %r", self._names["a"], self._names["b"])
 
     def move_to_namespace(self, side: Side, ns: NetworkNamespace | None) -> None:

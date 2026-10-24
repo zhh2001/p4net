@@ -331,6 +331,103 @@ def test_destroy_after_create_calls_link_del(patch_netlink: MagicMock) -> None:
     patch_netlink.link.assert_called_once_with("del", index=42)
 
 
+@pytest.mark.parametrize("placement", ["root", "one", "both"])
+def test_destroy_clears_positions_and_retains_creation_targets(
+    patch_netlink: MagicMock, placement: str
+) -> None:
+    ns_a, ns_b = NetworkNamespace("nsA"), NetworkNamespace("nsB")
+    targets = {
+        "namespace_a": ns_a if placement != "root" else None,
+        "namespace_b": ns_b if placement == "both" else None,
+    }
+    pair = VethPair("va", "vb", **targets)
+    pair._ns = {"a": ns_a, "b": ns_b}
+    _force_created(pair)
+    patch_netlink.link_lookup.return_value = [91]
+    pair.destroy()
+    assert not pair._created
+    assert pair.namespace_of("a") is None and pair.namespace_of("b") is None
+    assert pair._targets == {"a": targets["namespace_a"], "b": targets["namespace_b"]}
+
+
+def test_failed_destroy_retains_positions_for_retry(patch_netlink: MagicMock) -> None:
+    ns_a, ns_b = NetworkNamespace("nsA"), NetworkNamespace("nsB")
+    pair = VethPair("va", "vb")
+    pair._ns = {"a": ns_a, "b": ns_b}
+    _force_created(pair)
+    patch_netlink.link_lookup.return_value = [91]
+    patch_netlink.link.side_effect = OSError("delete failed")
+    with pytest.raises(LinkError, match="delete failed"):
+        pair.destroy()
+    assert pair._created
+    assert pair.namespace_of("a") is ns_a and pair.namespace_of("b") is ns_b
+
+
+@pytest.mark.parametrize("names", [("va", "vb"), ("甲", "乙")])
+def test_recreate_after_manual_moves_starts_in_configured_root(
+    patch_netlink: MagicMock, mocker: MockerFixture, names: tuple[str, str]
+) -> None:
+    mocker.patch("pathlib.Path.exists", return_value=False)
+    mocker.patch("p4net.runtime.link.os.open", return_value=101)
+    mocker.patch("p4net.runtime.link.os.close")
+    if names[0].isascii():
+        replies = [[], [], [41], [42], [91], [], [], [92], [92]]
+    else:
+        replies = [[], [], [41], [42], [51], [52], [91], [], [], [61], [62], [92], [92]]
+    patch_netlink.link_lookup.side_effect = replies
+    pair = VethPair(*names)
+    pair.create()
+    pair.move_to_namespace("a", NetworkNamespace("nsA"))
+    pair.move_to_namespace("b", NetworkNamespace("nsB"))
+    pair.destroy()
+    stale = mocker.patch("p4net.runtime.link.NetNS", side_effect=AssertionError("stale namespace"))
+    pair.create()
+    pair.set_up("a")
+    pair.destroy()
+    stale.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["lookup", "wait", "placement"])
+def test_recreate_failure_uses_positions_from_current_creation(
+    patch_netlink: MagicMock, mocker: MockerFixture, failure: str
+) -> None:
+    active = mocker.patch("pathlib.Path.exists", return_value=False)
+    mocker.patch("shutil.which", return_value="/usr/bin/udevadm")
+    wait = mocker.patch("subprocess.run")
+    mocker.patch("p4net.runtime.link.os.open", return_value=101)
+    mocker.patch("p4net.runtime.link.os.close")
+    patch_netlink.link_lookup.side_effect = [
+        [41],
+        [42],
+        [91],
+        [61],
+        [] if failure == "lookup" else [62],
+    ]
+
+    def link(command: str, **kwargs: Any) -> None:
+        if failure == "placement" and command == "set" and kwargs["index"] == 61:
+            raise OSError("placement failed")
+
+    patch_netlink.link.side_effect = link
+    pair = VethPair(
+        "甲", "乙", namespace_a=NetworkNamespace("nsA"), namespace_b=NetworkNamespace("nsB")
+    )
+    pair.create()
+    pair.destroy()
+    active.return_value = True
+    if failure == "wait":
+        wait.side_effect = subprocess.TimeoutExpired("udevadm", 6)
+    stale = mocker.patch("p4net.runtime.link.NetNS", side_effect=AssertionError("stale namespace"))
+    with pytest.raises((LinkError, OSError)):
+        pair.create()
+    assert patch_netlink.link.call_args_list[-1] == call(
+        "del", index=61 if failure == "lookup" else 62
+    )
+    assert pair.namespace_of("a") is None and pair.namespace_of("b") is None
+    assert not pair._created
+    stale.assert_not_called()
+
+
 def test_move_updates_namespace_state(patch_netlink: MagicMock, mocker: MockerFixture) -> None:
     patch_netlink.link_lookup.return_value = [10]
     mocker.patch("p4net.runtime.link.os.open", return_value=99)

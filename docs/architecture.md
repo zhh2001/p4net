@@ -46,6 +46,8 @@ For non-ASCII interface names, `VethPair` creates temporary ASCII names and assi
 
 `VethPair(..., namespace_a=..., namespace_b=...)` places the endpoints in their target namespaces during creation; `None` selects root. Host endpoints move under temporary names and receive their requested names in the same kernel request. A failed placement removes the pair through an endpoint whose location is known.
 
+Destroying a pair clears its current namespace positions and retains its creation targets. Recreating the same object uses the constructor's namespace settings. Moving an endpoint does not change where it will be created next time.
+
 ### `p4net.topo`
 
 `Host`, `P4Switch`, `LinkEndpoint`, and `Link` are frozen data classes. They describe addresses, switch configuration, link endpoints, and impairments. `Topology` is a mutable builder that collects these descriptions, validates them, serializes them, and exports Graphviz diagrams. Building a description creates no network resources.
