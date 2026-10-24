@@ -296,7 +296,7 @@ class VethPair:
         logger.debug("assigned %s to %r", cidr, ifname)
 
     def set_mtu(self, side: Side, mtu: int) -> None:
-        """Set the MTU on ``side`` (clamped to ``[68, 65535]``)."""
+        """Set the MTU on ``side`` to an int in ``[68, 65535]``, excluding bool."""
         _validate_side(side)
         if not isinstance(mtu, int) or isinstance(mtu, bool):
             raise ValueError(f"MTU must be an int, got {type(mtu).__name__}")

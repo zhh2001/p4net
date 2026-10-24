@@ -276,7 +276,7 @@ class Topology:
             delay: Symmetric one-way delay (e.g. ``"50ms"``).
             jitter: Symmetric jitter; requires ``delay`` to be set.
             loss_pct: Symmetric per-packet loss in [0.0, 100.0].
-            mtu: Link MTU (clamped to [68, 65535]).
+            mtu: Link MTU, an int in [68, 65535], excluding bool, or None.
             bandwidth_a_to_b: Per-direction bandwidth, ``a`` → ``b``.
             bandwidth_b_to_a: Per-direction bandwidth, ``b`` → ``a``.
             delay_a_to_b: Per-direction delay, ``a`` → ``b``.

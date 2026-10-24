@@ -169,5 +169,8 @@ class Link:
         ):
             if value is not None and value < 0.0:
                 raise TopologyError(f"link loss_pct_{direction}_extra {value} must be non-negative")
-        if self.mtu is not None and not _MTU_MIN <= self.mtu <= _MTU_MAX:
-            raise TopologyError(f"link mtu {self.mtu} out of range [{_MTU_MIN}, {_MTU_MAX}]")
+        if self.mtu is not None:
+            if isinstance(self.mtu, bool) or not isinstance(self.mtu, int):
+                raise TopologyError(f"link mtu {self.mtu!r} must be an int (bool is not accepted)")
+            if not _MTU_MIN <= self.mtu <= _MTU_MAX:
+                raise TopologyError(f"link mtu {self.mtu} out of range [{_MTU_MIN}, {_MTU_MAX}]")

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
+from copy import deepcopy
 from typing import Any
 
 import pytest
 
-from p4net.topo import Link, LinkEndpoint, TopologyError
+from p4net.topo import Link, LinkEndpoint, Topology, TopologyError
 
 
 @pytest.mark.parametrize(
@@ -87,6 +88,90 @@ def test_link_valid_loss_pct(good_loss: float) -> None:
 def test_link_invalid_mtu(bad_mtu: int) -> None:
     with pytest.raises(TopologyError):
         Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"), mtu=bad_mtu)
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize(
+    "mtu",
+    [
+        True,
+        False,
+        1500.0,
+        1500.5,
+        "1500",
+        b"1500",
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        [],
+        {},
+    ],
+)
+def test_mtu_rejects_invalid_types_without_changing_topology(source: str, mtu: Any) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    before = topo.to_dict()
+    data = {"links": [{"a": {"node": "h1"}, "b": {"node": "h2"}, "mtu": mtu}]}
+    original = deepcopy(data)
+    with pytest.raises(TopologyError, match=r"mtu.*int"):
+        if source == "descriptor":
+            Link(LinkEndpoint("h1"), LinkEndpoint("h2"), mtu=mtu)
+        elif source == "builder":
+            topo.add_link("h1", "h2", mtu=mtu)
+        else:
+            Topology.from_dict(data)
+    assert topo.to_dict() == before
+    assert data == original
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize("mtu", [None, 68, 1500, 65535, "default"])
+def test_mtu_preserves_optional_integers_and_default(source: str, mtu: Any) -> None:
+    values = {} if mtu == "default" else {"mtu": mtu}
+    expected = None if mtu == "default" else mtu
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    if source == "descriptor":
+        link = Link(LinkEndpoint("h1"), LinkEndpoint("h2"), **values)
+    elif source == "builder":
+        link = topo.add_link("h1", "h2", **values)
+    else:
+        topo.add_link("h1", "h2")
+        data = topo.to_dict()
+        if mtu == "default":
+            del data["links"][0]["mtu"]
+        else:
+            data["links"][0]["mtu"] = mtu
+        original = deepcopy(data)
+        restored = Topology.from_dict(data)
+        restored.validate()
+        assert data == original
+        link = restored.links[0]
+        assert restored.to_dict()["links"][0]["mtu"] == expected
+    assert link.mtu == expected
+    assert link.mtu is None or type(link.mtu) is int
+
+
+@pytest.mark.parametrize("source", ["builder", "dictionary"])
+@pytest.mark.parametrize("mtu", [-1, 0, 67, 65536, 1_000_000])
+def test_mtu_keeps_existing_range_validation(source: str, mtu: int) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    if source == "builder":
+        with pytest.raises(TopologyError, match="out of range"):
+            topo.add_link("h1", "h2", mtu=mtu)
+        assert not topo.links
+    else:
+        topo.add_link("h1", "h2")
+        data = topo.to_dict()
+        data["links"][0]["mtu"] = mtu
+        original = deepcopy(data)
+        with pytest.raises(TopologyError, match="out of range"):
+            Topology.from_dict(data)
+        assert data == original
 
 
 def test_link_endpoint_node_must_be_non_empty() -> None:

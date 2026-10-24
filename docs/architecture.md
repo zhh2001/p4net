@@ -88,6 +88,8 @@ Different hosts cannot use the same effective IP address, regardless of prefix l
 
 IPv4 and IPv6 addresses belong to host endpoints. On P4 switch data ports, omit `ip` and `ip6` or set them to `None`. `from_dict()` preserves address fields from snapshots. `validate()` rejects addresses on switch endpoints before compilation or network resources are created.
 
+Link `mtu` accepts an integer from `68` to `65535`, excluding `bool`, or `None`. Invalid types and out-of-range values raise `TopologyError` when constructing a link, including through `add_link()` and `from_dict()`. Omitting MTU or passing `None` leaves the interface default unchanged.
+
 Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 
 Construction checks field values and parameter combinations. `Topology.validate()` additionally checks endpoint references, self-links, port and device-ID collisions, switch service-port collisions, interface names, and host address conflicts. Network startup calls it unless `unsafe=True`. The CLI also validates before `topology graph`.
