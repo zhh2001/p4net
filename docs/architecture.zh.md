@@ -58,7 +58,7 @@ flowchart TB
 
 交换机的 `device_id`、`grpc_port` 和 `thrift_port` 同样只接受 `int`，不接受 `bool`。设备 ID 范围是 `0..2147483647`，gRPC 和 Thrift 端口范围是 `1024..65535`。向 `Topology.add_switch()` 传入 `None` 时自动分配。非法类型会在构造时抛出 `TopologyError`，从字典导入拓扑时也一样。
 
-节点字典键必须与节点名称一致，未连接链路的节点也不例外。`from_dict()` 保留 `hosts`、`switches` 的字典键和 `name`，`validate()` 报错时会指出节点类型、字典键和 `name`。
+同一拓扑中，主机与交换机不能同名。节点字典键必须与节点名称一致，包括未连接链路的节点。`from_dict()` 保留 `hosts`、`switches` 的字典键和 `name`，`validate()` 会报告重名或名称不一致，并保留快照。
 
 `Topology.from_dict()` 按快照还原端口，不自动分配。链路端点的 `port` 缺失或为 `None` 时，`Topology.validate()` 会报 `TopologyError`，指出链路序号、端点和节点。网络启动会在编译及创建网络资源前检查这个问题。显式端口 `0` 仍是合法值。
 

@@ -58,7 +58,7 @@ Port numbers must be `int` values, excluding `bool`. Host ports must be non-nega
 
 Switch `device_id`, `grpc_port` and `thrift_port` also require `int` values, excluding `bool`. Device IDs range from `0` to `2147483647`. gRPC and Thrift ports range from `1024` to `65535`. Passing `None` to `Topology.add_switch()` selects automatic assignment. Invalid types report a `TopologyError` at construction, including when loading a topology from a dictionary.
 
-Node keys in `hosts` and `switches` must match each description's `name`, including nodes without links. `from_dict()` preserves both values, and `validate()` reports mismatches with the node kind, key and name.
+Node names must be unique across hosts and switches. Node keys in `hosts` and `switches` must match each description's `name`, including nodes without links. `from_dict()` preserves both values, and `validate()` reports duplicate names or mismatches without changing the snapshot.
 
 `Topology.from_dict()` restores endpoint ports as stored. If an endpoint's `port` is omitted or `None`, `Topology.validate()` reports a `TopologyError` naming the link, endpoint and node. Network startup performs this check before compilation or network resource creation. Explicit port `0` is valid.
 

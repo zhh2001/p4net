@@ -77,9 +77,13 @@ def test_node_unknown_raises() -> None:
         t.node("missing")
 
 
-def test_duplicate_name_rejected() -> None:
+@pytest.mark.parametrize("kind", ["host", "switch"])
+def test_duplicate_name_rejected(kind: str) -> None:
     t = Topology()
-    t.add_host("h1")
+    if kind == "host":
+        t.add_host("h1")
+    else:
+        t.add_switch("h1", Path("p.p4"))
     with pytest.raises(TopologyError, match="already exists"):
         t.add_host("h1")
     with pytest.raises(TopologyError, match="already exists"):
@@ -855,6 +859,89 @@ def test_from_dict_handles_missing_optional_sections() -> None:
     assert t.hosts == {}
     assert t.switches == {}
     assert list(t.links) == []
+
+
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("linked", [False, True])
+def test_imported_cross_kind_names_rejected_without_changing_snapshot(
+    kind: str, linked: bool
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    topo.add_switch("s1", Path("p.p4"))
+    if linked:
+        topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    group, old, duplicate = ("hosts", "h2", "s1") if kind == "host" else ("switches", "s1", "h2")
+    descriptor = data[group].pop(old)
+    descriptor["name"] = duplicate
+    data[group][duplicate] = descriptor
+    for link in data["links"]:
+        for endpoint in (link["a"], link["b"]):
+            if endpoint["node"] == old:
+                endpoint["node"] = duplicate
+    original = deepcopy(data)
+    restored = Topology.from_dict(data)
+    assert restored.to_dict() == data
+    with pytest.raises(TopologyError, match="both a host and a switch") as excinfo:
+        restored.validate()
+    assert repr(duplicate) in str(excinfo.value)
+    assert restored.to_dict() == data and data == original
+
+
+@pytest.mark.parametrize("names", [("n2", "n1"), ("n1", 7)])
+def test_imported_cross_kind_names_report_every_conflict(names: tuple[str | int, ...]) -> None:
+    data = {
+        "hosts": {name: {"name": name if isinstance(name, str) else "host7"} for name in names},
+        "switches": {
+            name: {"name": name if isinstance(name, str) else "switch7", "p4_src": "p.p4"}
+            for name in names
+        },
+    }
+    original = deepcopy(data)
+    restored = Topology.from_dict(data)
+    before = restored.to_dict()
+    with pytest.raises(TopologyError) as excinfo:
+        restored.validate()
+    message = str(excinfo.value)
+    assert message.count("both a host and a switch") == len(names)
+    for name in names:
+        assert repr(name) in message
+    if 7 in names:
+        assert message.count("does not match") == 2
+    assert restored.to_dict() == before and data == original
+
+
+def test_imported_cross_kind_names_collect_other_consistency_errors() -> None:
+    data = {
+        "hosts": {"h1": {"name": "h3"}, "h2": {"name": "h2"}},
+        "switches": {"h2": {"name": "h2", "p4_src": "p.p4"}},
+        "links": [{"a": {"node": "missing"}, "b": {"node": "h2"}}],
+    }
+    restored = Topology.from_dict(data)
+    before = restored.to_dict()
+    with pytest.raises(TopologyError) as excinfo:
+        restored.validate()
+    message = str(excinfo.value)
+    assert "both a host and a switch" in message and "'h2'" in message
+    assert "does not match" in message and "unknown node 'missing'" in message
+    assert "has no assigned port" in message and "has no assigned interface name" in message
+    assert restored.to_dict() == before
+
+
+@pytest.mark.parametrize(("host", "switch"), [("n1", "N1"), ("n1", "n10")])
+def test_imported_similar_names_remain_distinct(host: str, switch: str) -> None:
+    topo = Topology()
+    topo.add_host(host)
+    topo.add_switch(switch, Path("p.p4"))
+    topo.add_link(host, switch)
+    data = topo.to_dict()
+    restored = Topology.from_dict(data)
+    restored.validate()
+    assert isinstance(restored.node(host), Host)
+    assert isinstance(restored.node(switch), P4Switch)
+    assert restored.to_dict() == data
 
 
 @pytest.mark.parametrize("kind", ["host", "switch"])

@@ -400,7 +400,8 @@ class Topology:
     def validate(self) -> None:
         """Raise `TopologyError` listing every internal-consistency problem found.
 
-        Node mapping keys must match their descriptions' names.
+        Node names must be unique across hosts and switches, and mapping keys
+        must match their descriptions' names.
         All configured gRPC and Thrift ports must be distinct across the topology,
         including the two ports of each switch. Every link endpoint must have
         an assigned port and a non-empty interface name. Different hosts cannot
@@ -413,6 +414,9 @@ class Topology:
             for node_key, node in mapping.items():
                 if node_key != node.name:
                     errors.append(f"{kind} key {node_key!r} does not match node name {node.name!r}")
+        for node_key in self._hosts:
+            if node_key in self._switches:
+                errors.append(f"node name {node_key!r} is used by both a host and a switch")
 
         # 1. Endpoint references resolve to a known node.
         # 2. No self-loops.

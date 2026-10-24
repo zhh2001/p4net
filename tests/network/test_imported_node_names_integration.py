@@ -1,4 +1,4 @@
-"""Reject imported node names that disagree with their mapping keys."""
+"""Validate imported node identities before creating network resources."""
 
 from __future__ import annotations
 
@@ -78,18 +78,60 @@ def test_imported_name_mismatch_rejected_before_compilation(
         network.stop()
 
 
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("linked", [False, True])
+def test_imported_cross_kind_names_rejected_before_compilation(
+    tmp_path: Path, kind: str, linked: bool
+) -> None:
+    topo, first, _second, switch = _topology(False)
+    unused = first[:-1] + "c"
+    topo.add_host(unused)
+    data = topo.to_dict()
+    group, old, duplicate = (
+        ("hosts", unused, switch) if kind == "host" else ("switches", switch, unused)
+    )
+    descriptor = data[group].pop(old)
+    descriptor["name"] = duplicate
+    data[group][duplicate] = descriptor
+    for link in data["links"]:
+        for endpoint in (link["a"], link["b"]):
+            if endpoint["node"] == old:
+                endpoint["node"] = duplicate
+    if not linked:
+        data["links"] = []
+    original = deepcopy(data)
+    restored = Topology.from_dict(data)
+    assert restored.to_dict() == data
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    logs = tmp_path / "logs"
+    network = Network(restored, compiler=compiler, log_dir=logs)
+    try:
+        with patch.object(compiler, "compile", wraps=compiler.compile) as compile_call:
+            with pytest.raises(TopologyError, match="both a host and a switch"):
+                network.start()
+            compile_call.assert_not_called()
+        assert not logs.exists()
+        assert restored.to_dict() == data and data == original
+    finally:
+        network.stop()
+
+
 @pytest.mark.requires_p4c
 @pytest.mark.requires_bmv2
-@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("rename", ["host", "switch", "case", "prefix"])
 @pytest.mark.parametrize("switch_first", [False, True])
 def test_consistent_imported_node_names_preserve_interfaces_and_forward(
-    tmp_path: Path, kind: str, switch_first: bool
+    tmp_path: Path, rename: str, switch_first: bool
 ) -> None:
     topo, first, second, switch = _topology(switch_first)
     data = topo.to_dict()
     side = "a" if switch_first else "b"
-    group, key = ("hosts", first) if kind == "host" else ("switches", switch)
+    group, key = ("hosts", first) if rename == "host" else ("switches", switch)
     changed = key + "x"
+    if rename == "case":
+        changed = first.upper()
+    elif rename == "prefix":
+        changed = first + "x"
     descriptor = data[group].pop(key)
     descriptor["name"] = changed
     data[group][changed] = descriptor
@@ -97,7 +139,7 @@ def test_consistent_imported_node_names_preserve_interfaces_and_forward(
         for endpoint in (link["a"], link["b"]):
             if endpoint["node"] == key:
                 endpoint["node"] = changed
-    if kind == "host":
+    if rename == "host":
         first = changed
     else:
         switch = changed
