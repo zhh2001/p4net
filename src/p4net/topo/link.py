@@ -24,6 +24,7 @@ class LinkEndpoint:
 
     ``ip`` and ``ip6`` are link-level overrides that apply only on host
     endpoints; switch endpoints don't carry L3 addresses.
+    Address overrides must be strings or ``None``.
     """
 
     node: str
@@ -36,6 +37,12 @@ class LinkEndpoint:
     def __post_init__(self) -> None:
         if self.port is not None:
             _validate_port_number(self.port)
+        for field in ("ip", "ip6"):
+            value = getattr(self, field)
+            if value is not None and not isinstance(value, str):
+                raise TopologyError(
+                    f"LinkEndpoint {self.node!r}: {field} must be a string or None, got {value!r}"
+                )
         if self.mac is not None and not _MAC_RE.match(self.mac):
             raise TopologyError(
                 f"invalid LinkEndpoint MAC {self.mac!r}: must be 'XX:XX:XX:XX:XX:XX'"

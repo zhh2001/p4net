@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import socket
 import uuid
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -39,7 +41,9 @@ def _configured_addresses(network: Network, host: str, family: int) -> set[str]:
 
 
 @pytest.mark.parametrize("family", [4, 6])
-@pytest.mark.parametrize("layout", ["override", "later_link", "unlinked", "different_prefixes"])
+@pytest.mark.parametrize(
+    "layout", ["override", "later_link", "unlinked", "different_prefixes", "routes"]
+)
 def test_effective_addresses_match_kernel_configuration(
     tmp_path: Path, family: int, layout: str
 ) -> None:
@@ -47,11 +51,18 @@ def test_effective_addresses_match_kernel_configuration(
     suffix = uuid.uuid4().hex[:6]
     first, second, third = f"h{suffix}a", f"h{suffix}b", f"h{suffix}c"
     topo = Topology()
-    topo.add_host(first, **{field: primary})
-    topo.add_host(second, **{field: primary})
+    route = "default_route" if family == 4 else "default_route6"
+    topo.add_host(
+        first, **{field: primary}, **({route: primary.split("/")[0]} if layout == "routes" else {})
+    )
+    topo.add_host(
+        second,
+        **{field: primary},
+        **({route: override.split("/")[0]} if layout == "routes" else {}),
+    )
     if layout == "different_prefixes":
         override = override.split("/")[0] + ("/16" if family == 4 else "/48")
-    if layout in {"override", "different_prefixes"}:
+    if layout in {"override", "different_prefixes", "routes"}:
         topo.add_link(first, second, **{f"{field}_a": override})
     elif layout == "later_link":
         topo.add_host(third, **{field: third_ip})
@@ -73,7 +84,7 @@ def test_effective_addresses_match_kernel_configuration(
         else:
             peer, peer_ip = (
                 (second, primary)
-                if layout in {"override", "different_prefixes"}
+                if layout in {"override", "different_prefixes", "routes"}
                 else (third, third_ip)
             )
             for sender, target in ((first, peer_ip), (peer, override)):
@@ -87,6 +98,20 @@ def test_effective_addresses_match_kernel_configuration(
                     target.split("/")[0],
                 ]
                 assert network.host(sender).exec(command, check=False).returncode == 0
+            if layout == "routes":
+                for host, gateway in ((first, primary), (second, override)):
+                    command = [
+                        "ip",
+                        *(["-6"] if family == 6 else []),
+                        "-j",
+                        "route",
+                        "show",
+                        "default",
+                    ]
+                    routes = json.loads(
+                        network.host(host).exec(command, capture_output=True).stdout
+                    )
+                    assert len(routes) == 1 and routes[0]["gateway"] == gateway.split("/")[0]
         assert topo.to_dict() == before
 
 
@@ -151,8 +176,8 @@ def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path, wide_pref
     suffix = uuid.uuid4().hex[:6]
     first, second, switch = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
     topo = Topology()
-    topo.add_host(first, ip="10.230.0.1/24", mac="00:00:00:00:00:01")
-    topo.add_host(second, ip="10.230.0.1/24", mac="00:00:00:00:00:02")
+    topo.add_host(first, ip="10.230.0.1/24", mac="00:00:00:00:00:01", default_route="10.230.0.1")
+    topo.add_host(second, ip="10.230.0.1/24", mac="00:00:00:00:00:02", default_route="10.230.0.2")
     with socket.socket() as grpc, socket.socket() as thrift:
         grpc.bind(("127.0.0.1", 0))
         thrift.bind(("127.0.0.1", 0))
@@ -206,3 +231,34 @@ def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path, wide_pref
             client.delete_table_entry("MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": address})
         assert client.list_table_entries("MyIngress.ipv4_lpm") == []
         assert topo.to_dict() == before
+
+
+@pytest.mark.parametrize(
+    "target", ["host_ip", "host_ip6", "default_route", "default_route6", "link_ip", "link_ip6"]
+)
+def test_imported_integer_addresses_rejected_before_startup(tmp_path: Path, target: str) -> None:
+    suffix = uuid.uuid4().hex[:6]
+    first, second, switch = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(first, ip="10.230.0.1/24", ip6="fd00:230::1/64")
+    topo.add_host(second, ip="10.230.0.2/24", ip6="fd00:230::2/64")
+    topo.add_switch(switch, _SOURCE)
+    topo.add_link(first, switch)
+    topo.add_link(second, switch)
+    data = topo.to_dict()
+    field = target.removeprefix("host_").removeprefix("link_")
+    owner = data["links"][0]["a"] if target.startswith("link_") else data["hosts"][first]
+    owner[field] = int(
+        ipaddress.ip_address("fd00:230::1" if target.endswith("6") else "10.230.0.1")
+    )
+    original = deepcopy(data)
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    logs = tmp_path / "logs"
+    with patch.object(compiler, "compile", wraps=compiler.compile) as compile_call:
+        with pytest.raises(TopologyError, match=f"{field} must be a string or None"):
+            restored = Topology.from_dict(data)
+            with Network(restored, compiler=compiler, log_dir=logs):
+                pass
+        compile_call.assert_not_called()
+    assert not logs.exists()
+    assert data == original

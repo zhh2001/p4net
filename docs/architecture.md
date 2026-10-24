@@ -68,6 +68,8 @@ Interface names must be unique within each final namespace. Each host has its ow
 
 Topology and runtime code use the same interface-name checks. Names must be UTF-8 strings of at most 15 bytes, cannot be `.` or `..`, and cannot contain whitespace, `/`, `:` or NUL. Invalid names report a `TopologyError` during topology validation or a `ValueError` when constructing a `VethPair`. For example, `界界界界界` uses 15 bytes and passes name validation; adding another `界` exceeds the limit.
 
+Host addresses, default gateways and link address overrides accept only strings or `None`. Other types raise `TopologyError` when constructing `Host` or `LinkEndpoint`, including through `from_dict()`, without automatic conversion. Valid strings keep their original form, including bare addresses without a prefix length.
+
 Address collision checks use the same address selection as network startup. A link endpoint's `ip` or `ip6` overrides the host default for that address family. Without an override, only the host's first declared link inherits its default. Overridden defaults and defaults on hosts without links do not participate in collision checks. The topology data is preserved.
 
 Different hosts cannot use the same effective IP address, regardless of prefix length. Different IP addresses with overlapping subnets are allowed, as is reusing an address on multiple interfaces of the same host.

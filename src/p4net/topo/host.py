@@ -18,6 +18,7 @@ class Host:
 
     IPv4 lives in ``ip`` / ``default_route``; IPv6 lives in ``ip6`` /
     ``default_route6``. Either, neither, or both may be set.
+    Addresses and gateways must be strings or ``None``.
     """
 
     name: str
@@ -30,6 +31,12 @@ class Host:
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not NAME_RE.match(self.name):
             raise TopologyError(f"invalid host name {self.name!r}: must match {NAME_RE.pattern}")
+        for field in ("ip", "ip6", "default_route", "default_route6"):
+            value = getattr(self, field)
+            if value is not None and not isinstance(value, str):
+                raise TopologyError(
+                    f"host {self.name!r}: {field} must be a string or None, got {value!r}"
+                )
         if self.ip is not None:
             try:
                 ipaddress.IPv4Interface(self.ip)
