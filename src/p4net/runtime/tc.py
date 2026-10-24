@@ -29,12 +29,12 @@ _TIME_RE = re.compile(r"^\d+(?:\.\d+)?\s*(?:s|ms|us)$", re.IGNORECASE)
 
 
 def _validate_rate(rate: str) -> None:
-    if not isinstance(rate, str) or not _RATE_RE.match(rate):
+    if not isinstance(rate, str) or not _RATE_RE.fullmatch(rate):
         raise TcError(f"invalid tc rate: {rate!r}")
 
 
 def _validate_time(value: str, label: str) -> None:
-    if not isinstance(value, str) or not _TIME_RE.match(value):
+    if not isinstance(value, str) or not _TIME_RE.fullmatch(value):
         raise TcError(f"invalid {label}: {value!r}")
 
 

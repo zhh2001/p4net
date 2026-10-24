@@ -55,6 +55,65 @@ def test_apply_netem_validates_jitter(bad_jitter: str) -> None:
         apply_netem(None, "veth0", delay="10ms", jitter=bad_jitter)
 
 
+@pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize("ending", ["\n", "\n\n", "\r\n"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("rate", "10mbit"),
+        ("rate", "2.5MBIT"),
+        ("rate", "10 mbit"),
+        ("delay", "1ms"),
+        ("delay", "0.25MS"),
+        ("delay", "1 ms"),
+        ("jitter", "1ms"),
+        ("jitter", "0.25MS"),
+        ("jitter", "1 ms"),
+    ],
+)
+def test_tc_strings_reject_trailing_newlines_before_running_tc(
+    fake_run: MagicMock, in_namespace: bool, ending: str, field: str, value: str
+) -> None:
+    namespace = MagicMock()
+    namespace.exec.return_value = _make_proc(0)
+    values = {field: value + ending}
+    if field == "jitter":
+        values["delay"] = "10ms"
+    with pytest.raises(TcError, match=r"invalid (?:tc rate|delay|jitter)"):
+        apply_netem(namespace if in_namespace else None, "veth0", **values)
+    fake_run.assert_not_called()
+    namespace.exec.assert_not_called()
+
+
+@pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("rate", "10mbit"),
+        ("rate", "2.5MBIT"),
+        ("rate", "10 mbit"),
+        ("delay", "1ms"),
+        ("delay", "0.25MS"),
+        ("delay", "1 ms"),
+        ("jitter", "1ms"),
+        ("jitter", "0.25MS"),
+        ("jitter", "1 ms"),
+    ],
+)
+def test_tc_strings_preserve_existing_formats_in_arguments(
+    fake_run: MagicMock, in_namespace: bool, field: str, value: str
+) -> None:
+    namespace = MagicMock()
+    namespace.exec.return_value = _make_proc(0)
+    values = {field: value}
+    if field == "jitter":
+        values["delay"] = "10ms"
+    apply_netem(namespace if in_namespace else None, "veth0", **values)
+    call = namespace.exec.call_args if in_namespace else fake_run.call_args
+    argv = call.args[0]
+    assert value in argv
+
+
 @pytest.mark.parametrize("bad_loss", [-0.1, 100.1, -1.0, 200.0])
 def test_apply_netem_validates_loss(bad_loss: float) -> None:
     with pytest.raises(TcError):

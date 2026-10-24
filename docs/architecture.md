@@ -42,6 +42,8 @@ This package provides the Linux and process operations used by the orchestrator:
 
 These objects manage individual resources. `Network` determines their creation and cleanup order. See the [runtime API](api/runtime.md).
 
+`apply_netem()` fully matches rate, delay and jitter strings before running `tc`. A trailing newline raises `TcError` without changing the existing qdisc.
+
 BMv2 startup timeouts must be finite positive integers or floats, excluding `bool`. This applies to both `BMv2Switch(startup_timeout=...)` and `wait_until_ready(timeout=...)`; invalid values raise `ValueError`. Omitting the wait timeout or passing `None` uses the constructor's timeout, which defaults to 10 seconds. An invalid wait timeout leaves the running process unchanged.
 
 For non-ASCII interface names, `VethPair` creates temporary ASCII names and assigns the requested names after udev has processed the devices. When udev is active, `udevadm` must be on `PATH`; creation waits up to five seconds for its rules to finish. Waiting or naming failures remove the pair by interface index.
