@@ -11,6 +11,21 @@ from pytest_mock import MockerFixture
 
 from p4net.runtime import TcError, apply_netem, clear_qdisc
 
+_INVALID_UNIT_FORMATS = [
+    (field, "1" + separator + ("mbit" if field == "rate" else "ms"))
+    for field in ("rate", "delay", "jitter")
+    for separator in (" ", "\t", "\n", "\r", "\v", "\f", "\u00a0", "\u2003", "\u2028")
+] + [
+    ("rate", "1b\u0131t"),
+    ("rate", "1b\u0130t"),
+    ("delay", "1m\u017f"),
+    ("delay", "1u\u017f"),
+    ("delay", "1\u017f"),
+    ("jitter", "1m\u017f"),
+    ("jitter", "1u\u017f"),
+    ("jitter", "1\u017f"),
+]
+
 
 @pytest.fixture
 def fake_run(mocker: MockerFixture) -> MagicMock:
@@ -105,18 +120,31 @@ def test_tc_strings_reject_non_ascii_digits_before_running_tc(
 
 
 @pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize(("field", "value"), _INVALID_UNIT_FORMATS)
+def test_tc_strings_reject_unsupported_unit_formats_before_running_tc(
+    fake_run: MagicMock, in_namespace: bool, field: str, value: str
+) -> None:
+    namespace = MagicMock()
+    namespace.exec.return_value = _make_proc(0)
+    values = {field: value}
+    if field == "jitter":
+        values["delay"] = "10ms"
+    with pytest.raises(TcError, match=r"invalid (?:tc rate|delay|jitter)"):
+        apply_netem(namespace if in_namespace else None, "veth0", **values)
+    fake_run.assert_not_called()
+    namespace.exec.assert_not_called()
+
+
+@pytest.mark.parametrize("in_namespace", [False, True])
 @pytest.mark.parametrize(
     ("field", "value"),
     [
         ("rate", "10mbit"),
         ("rate", "2.5MBIT"),
-        ("rate", "10 mbit"),
         ("delay", "1ms"),
         ("delay", "0.25MS"),
-        ("delay", "1 ms"),
         ("jitter", "1ms"),
         ("jitter", "0.25MS"),
-        ("jitter", "1 ms"),
     ],
 )
 def test_tc_strings_preserve_existing_formats_in_arguments(

@@ -18,6 +18,21 @@ from p4net.runtime import NetworkNamespace, TcError, VethPair, apply_netem, clea
 
 pytestmark = pytest.mark.integration
 
+_INVALID_UNIT_FORMATS = [
+    (field, "1" + separator + ("mbit" if field == "rate" else "ms"))
+    for field in ("rate", "delay", "jitter")
+    for separator in (" ", "\t", "\n", "\r", "\v", "\f", "\u00a0", "\u2003", "\u2028")
+] + [
+    ("rate", "1b\u0131t"),
+    ("rate", "1b\u0130t"),
+    ("delay", "1m\u017f"),
+    ("delay", "1u\u017f"),
+    ("delay", "1\u017f"),
+    ("jitter", "1m\u017f"),
+    ("jitter", "1u\u017f"),
+    ("jitter", "1\u017f"),
+]
+
 
 @contextmanager
 def _interface(in_namespace: bool) -> Iterator[tuple[NetworkNamespace | None, str]]:
@@ -88,6 +103,26 @@ def test_non_ascii_digits_preserve_existing_qdisc(
 
 
 @pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize(("field", "value"), _INVALID_UNIT_FORMATS)
+def test_unsupported_unit_formats_preserve_existing_qdisc(
+    in_namespace: bool, field: str, value: str
+) -> None:
+    with _interface(in_namespace) as (namespace, interface):
+        apply_netem(namespace, interface, rate="8mbit", delay="2ms", jitter="0.5ms")
+        before = _state(namespace, interface)
+        assert before is not None
+        values = {field: value}
+        if field == "jitter":
+            values["delay"] = "10ms"
+        with patch.object(tc, "_run", wraps=tc._run) as run:
+            with pytest.raises(TcError, match=r"invalid (?:tc rate|delay|jitter)"):
+                apply_netem(namespace, interface, **values)
+            run.assert_not_called()
+        assert _state(namespace, interface) == before
+
+
+@pytest.mark.parametrize("uppercase", [False, True])
+@pytest.mark.parametrize("in_namespace", [False, True])
 @pytest.mark.parametrize(
     ("field", "value", "expected"),
     [
@@ -100,8 +135,10 @@ def test_non_ascii_digits_preserve_existing_qdisc(
     ],
 )
 def test_valid_strings_configure_kernel_and_clear(
-    in_namespace: bool, field: str, value: str, expected: float
+    in_namespace: bool, field: str, value: str, expected: float, uppercase: bool
 ) -> None:
+    if uppercase:
+        value = value.upper()
     with _interface(in_namespace) as (namespace, interface):
         values = {field: value}
         if field == "jitter":
