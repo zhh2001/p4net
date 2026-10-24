@@ -1,4 +1,4 @@
-"""MAC fields reject invalid types without changing accepted strings."""
+"""Validate MAC types and complete strings without coercion."""
 
 from __future__ import annotations
 
@@ -50,8 +50,10 @@ def test_builders_reject_mac_types_without_adding_descriptions(target: str) -> N
 
 @pytest.mark.parametrize("target", ["host", "host_endpoint", "switch_endpoint"])
 @pytest.mark.parametrize("switch_first", [False, True])
-@pytest.mark.parametrize("value", [17, b"02:aa:bb:cc:dd:01"])
-def test_imported_mac_types_rejected_without_changing_input(
+@pytest.mark.parametrize(
+    "value", [17, b"02:aa:bb:cc:dd:01", "02:aa:bb:cc:dd:01\n", "02:aa:bb:cc:dd:01\r\n"]
+)
+def test_imported_invalid_macs_rejected_without_changing_input(
     target: str, switch_first: bool, value: object
 ) -> None:
     topo = Topology()
@@ -94,3 +96,44 @@ def test_imported_mac_strings_preserve_case_on_both_endpoint_types(switch_first:
     restored = Topology.from_dict(data)
     restored.validate()
     assert restored.to_dict() == data
+
+
+@pytest.mark.parametrize("descriptor", ["host", "endpoint"])
+@pytest.mark.parametrize(
+    "mac",
+    [
+        "02:aa:bb:cc:dd:01\n",
+        "02:aa:bb:cc:dd:01\r",
+        "02:aa:bb:cc:dd:01\r\n",
+        "02:aa:bb:cc:dd:01 ",
+        "02:aa:bb:cc:dd:01\t",
+        "02:aa:bb:cc:dd:01\0",
+        "\n02:aa:bb:cc:dd:01",
+        " 02:aa:bb:cc:dd:01",
+        "\t02:aa:bb:cc:dd:01",
+        "02:aa:bb:cc:dd:010",
+    ],
+)
+def test_mac_descriptors_require_the_complete_string(descriptor: str, mac: str) -> None:
+    with pytest.raises(TopologyError, match=r"invalid.*MAC"):
+        if descriptor == "host":
+            Host("h1", mac=mac)
+        else:
+            LinkEndpoint("h1", mac=mac)
+
+
+@pytest.mark.parametrize("target", ["host", "host_endpoint", "switch_endpoint"])
+def test_builders_reject_mac_newlines_without_adding_descriptions(target: str) -> None:
+    topo = Topology()
+    if target != "host":
+        topo.add_host("h1")
+        topo.add_switch("s1", Path("p.p4"))
+    before = topo.to_dict()
+    mac = "02:aa:bb:cc:dd:01\n"
+    with pytest.raises(TopologyError, match=r"invalid.*MAC"):
+        if target == "host":
+            topo.add_host("h1", mac=mac)
+        else:
+            field = "mac_a" if target == "host_endpoint" else "mac_b"
+            topo.add_link("h1", "s1", **{field: mac})
+    assert topo.to_dict() == before

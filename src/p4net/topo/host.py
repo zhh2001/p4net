@@ -44,7 +44,9 @@ class Host:
                 raise TopologyError(
                     f"invalid host IP {self.ip!r}: must be an IPv4 CIDR (e.g. '10.0.0.1/24')"
                 ) from exc
-        if self.mac is not None and (not isinstance(self.mac, str) or not _MAC_RE.match(self.mac)):
+        if self.mac is not None and (
+            not isinstance(self.mac, str) or not _MAC_RE.fullmatch(self.mac)
+        ):
             raise TopologyError(f"invalid host MAC {self.mac!r}: must be 'XX:XX:XX:XX:XX:XX'")
         if self.default_route is not None:
             if self.ip is None:

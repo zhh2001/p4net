@@ -308,8 +308,9 @@ def test_imported_integer_addresses_rejected_before_startup(tmp_path: Path, targ
 
 @pytest.mark.parametrize("target", ["host", "host_endpoint", "switch_endpoint"])
 @pytest.mark.parametrize("switch_first", [False, True])
-def test_imported_integer_macs_rejected_before_startup(
-    tmp_path: Path, target: str, switch_first: bool
+@pytest.mark.parametrize("value", [17, "02:aa:bb:cc:dd:01\n", "02:aa:bb:cc:dd:01\r\n"])
+def test_imported_invalid_macs_rejected_before_startup(
+    tmp_path: Path, target: str, switch_first: bool, value: object
 ) -> None:
     suffix = uuid.uuid4().hex[:6]
     first, switch = f"h{suffix}", f"s{suffix}"
@@ -323,7 +324,7 @@ def test_imported_integer_macs_rejected_before_startup(
     else:
         side = "a" if (target == "switch_endpoint") == switch_first else "b"
         owner = data["links"][0][side]
-    owner["mac"] = 17
+    owner["mac"] = value
     original = deepcopy(data)
     compiler = P4Compiler(cache_dir=tmp_path / "compiler")
     logs = tmp_path / "logs"

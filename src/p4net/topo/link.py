@@ -43,7 +43,9 @@ class LinkEndpoint:
                 raise TopologyError(
                     f"LinkEndpoint {self.node!r}: {field} must be a string or None, got {value!r}"
                 )
-        if self.mac is not None and (not isinstance(self.mac, str) or not _MAC_RE.match(self.mac)):
+        if self.mac is not None and (
+            not isinstance(self.mac, str) or not _MAC_RE.fullmatch(self.mac)
+        ):
             raise TopologyError(
                 f"invalid LinkEndpoint MAC {self.mac!r}: must be 'XX:XX:XX:XX:XX:XX'"
             )
