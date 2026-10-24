@@ -47,6 +47,26 @@ def test_same_names_rejected() -> None:
         VethPair("v0", "v0")
 
 
+@pytest.mark.parametrize("placement", ["a", "b", "both"])
+def test_same_interface_name_allowed_in_distinct_namespaces(placement: str) -> None:
+    ns_a, ns_b = NetworkNamespace("nsA"), NetworkNamespace("nsB")
+    pair = VethPair(
+        "shared",
+        "shared",
+        namespace_a=ns_a if placement != "b" else None,
+        namespace_b=ns_b if placement != "a" else None,
+    )
+    assert pair.name_a == pair.name_b == "shared"
+
+
+@pytest.mark.parametrize("same_object", [False, True])
+def test_same_interface_name_rejected_in_same_named_namespace(same_object: bool) -> None:
+    ns_a = NetworkNamespace("nsA")
+    ns_b = ns_a if same_object else NetworkNamespace("nsA")
+    with pytest.raises(ValueError, match="distinct names"):
+        VethPair("shared", "shared", namespace_a=ns_a, namespace_b=ns_b)
+
+
 @pytest.mark.parametrize("name", ["v", "x" * 15, "界" * 5, "名" + "x" * 12])
 def test_valid_interface_names_preserved(name: str) -> None:
     first = VethPair(name, "peer")
@@ -99,6 +119,76 @@ def test_create_calls_link_add(patch_netlink: MagicMock) -> None:
     v = VethPair("va", "vb")
     v.create()
     patch_netlink.link.assert_called_once_with("add", ifname="va", kind="veth", peer="vb")
+
+
+@pytest.mark.parametrize("placement", ["a", "b", "both"])
+@pytest.mark.parametrize("name", ["shared", "界界界界界"])
+def test_create_combines_namespace_placement_and_naming(
+    patch_netlink: MagicMock, mocker: MockerFixture, placement: str, name: str
+) -> None:
+    ns_a, ns_b = NetworkNamespace("nsA"), NetworkNamespace("nsB")
+    mocker.patch("pathlib.Path.exists", return_value=False)
+    opened = mocker.patch("p4net.runtime.link.os.open", side_effect=[101, 102])
+    closed = mocker.patch("p4net.runtime.link.os.close")
+    indexes: dict[str, int] = {}
+
+    def lookup(*, ifname: str) -> list[int]:
+        return [indexes[ifname]] if ifname in indexes else []
+
+    def link(command: str, **kwargs: Any) -> None:
+        if command == "add":
+            assert kwargs["ifname"].isascii() and kwargs["peer"].isascii()
+            indexes.update({kwargs["ifname"]: 41, kwargs["peer"]: 42})
+
+    patch_netlink.link_lookup.side_effect = lookup
+    patch_netlink.link.side_effect = link
+    pair = VethPair(
+        name,
+        name,
+        namespace_a=ns_a if placement != "b" else None,
+        namespace_b=ns_b if placement != "a" else None,
+    )
+    pair.create()
+    operations = [c for c in patch_netlink.link.call_args_list if c.args == ("set",)]
+    assert len(operations) == 2
+    expected_fds = iter([101, 102])
+    for side, operation in zip(("a", "b"), operations, strict=True):
+        assert operation.kwargs["ifname"] == name
+        destination = side == placement or placement == "both"
+        if destination:
+            assert operation.kwargs["net_ns_fd"] == next(expected_fds)
+        else:
+            assert "net_ns_fd" not in operation.kwargs
+    assert opened.call_count == closed.call_count == (2 if placement == "both" else 1)
+
+
+@pytest.mark.parametrize("failed_index", [41, 42])
+def test_namespace_placement_failure_deletes_known_endpoint(
+    patch_netlink: MagicMock, mocker: MockerFixture, failed_index: int
+) -> None:
+    mocker.patch("pathlib.Path.exists", return_value=False)
+    mocker.patch("p4net.runtime.link.os.open", side_effect=[101, 102])
+    mocker.patch("p4net.runtime.link.os.close")
+    patch_netlink.link_lookup.side_effect = [[41], [42], [91]]
+
+    def link(command: str, **kwargs: Any) -> None:
+        if command == "set" and kwargs["index"] == failed_index:
+            raise OSError("cannot move interface")
+
+    patch_netlink.link.side_effect = link
+    pair = VethPair(
+        "shared",
+        "shared",
+        namespace_a=NetworkNamespace("nsA"),
+        namespace_b=NetworkNamespace("nsB"),
+    )
+    with pytest.raises(OSError, match="cannot move"):
+        pair.create()
+    assert patch_netlink.link.call_args_list[-1] == call(
+        "del", index=42 if failed_index == 41 else 91
+    )
+    assert pair.namespace_of("a") is None and pair.namespace_of("b") is None
+    assert not pair._created
 
 
 def test_create_already_existing_iface_raises(patch_netlink: MagicMock) -> None:

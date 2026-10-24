@@ -471,7 +471,8 @@ class Topology:
                 else:
                     port_owners[port] = (sw.name, field_name)
 
-        # 5. Interface names are assigned and valid for the runtime.
+        # 5. Interface names are valid and unique within their final namespaces.
+        interface_owners: dict[tuple[str | None, str], str] = {}
         for i, link in enumerate(self._links):
             for which, ep in (("a", link.a), ("b", link.b)):
                 if ep.iface_name is None or ep.iface_name == "":
@@ -483,6 +484,27 @@ class Topology:
                     _validate_ifname(ep.iface_name)
                 except ValueError as exc:
                     errors.append(f"link[{i}] endpoint {which} ({ep.node!r}): {exc}")
+                    continue
+                owner = f"link[{i}] endpoint {which} ({ep.node!r})"
+                if ep.iface_name == "lo":
+                    errors.append(f"{owner}: interface name 'lo' is reserved for loopback")
+                    continue
+                if ep.node in self._hosts:
+                    scope: str | None = ep.node
+                    label = f"host {ep.node!r}"
+                elif ep.node in self._switches:
+                    scope = None
+                    label = "root namespace"
+                else:
+                    continue
+                interface_key = (scope, ep.iface_name)
+                if interface_key in interface_owners:
+                    errors.append(
+                        f"interface name collision in {label}: {ep.iface_name!r} "
+                        f"used by {interface_owners[interface_key]} and {owner}"
+                    )
+                else:
+                    interface_owners[interface_key] = owner
 
         # 6. No two hosts share an IP within the same IPv4Network.
         # Collect (node_name, IPv4Interface) from host primary IPs and link

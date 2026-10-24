@@ -1,9 +1,8 @@
 """Linux veth pair primitive backed by pyroute2.
 
-`VethPair` represents a kernel veth pair created in the root namespace.
-Each side ("a"/"b") can be moved into a `NetworkNamespace`, addressed,
-and brought up/down. All netlink calls run in the namespace where the
-target interface currently lives.
+`VethPair` represents a kernel veth pair with configurable endpoint namespaces.
+Each side ("a"/"b") can be moved, addressed, and brought up/down. All netlink
+calls run in the namespace where the target interface currently lives.
 """
 
 from __future__ import annotations
@@ -42,14 +41,29 @@ def _validate_side(side: str) -> None:
 
 
 class VethPair:
-    """A veth pair with explicit lifecycle and per-side namespace tracking."""
+    """A veth pair with explicit lifecycle and per-side namespace tracking.
 
-    def __init__(self, name_a: str, name_b: str) -> None:
+    ``namespace_a`` and ``namespace_b`` select the endpoint namespaces at
+    creation. ``None`` selects root. Names may repeat across distinct
+    namespaces; the default creates both ends in root.
+    """
+
+    def __init__(
+        self,
+        name_a: str,
+        name_b: str,
+        *,
+        namespace_a: NetworkNamespace | None = None,
+        namespace_b: NetworkNamespace | None = None,
+    ) -> None:
         _validate_ifname(name_a)
         _validate_ifname(name_b)
-        if name_a == name_b:
-            raise ValueError("the two veth sides must have distinct names")
+        scope_a = namespace_a.name if namespace_a is not None else None
+        scope_b = namespace_b.name if namespace_b is not None else None
+        if name_a == name_b and scope_a == scope_b:
+            raise ValueError("the two veth sides must have distinct names within one namespace")
         self._names: dict[Side, str] = {"a": name_a, "b": name_b}
+        self._targets: dict[Side, NetworkNamespace | None] = {"a": namespace_a, "b": namespace_b}
         self._ns: dict[Side, NetworkNamespace | None] = {"a": None, "b": None}
         self._created = False
 
@@ -90,7 +104,7 @@ class VethPair:
         return int(results[0])
 
     def create(self) -> None:
-        """Create the kernel veth pair via netlink. Both ends start in root netns.
+        """Create the veth pair in its configured endpoint namespaces.
 
         Raises:
             LinkError: if either interface already exists or the pair has
@@ -99,11 +113,12 @@ class VethPair:
         if self._created:
             raise LinkError("veth pair already created")
         with IPRoute() as ipr:
-            if ipr.link_lookup(ifname=self._names["a"]):
-                raise LinkError(f"interface {self._names['a']!r} already exists")
-            if ipr.link_lookup(ifname=self._names["b"]):
-                raise LinkError(f"interface {self._names['b']!r} already exists")
-            if all(name.isascii() for name in self._names.values()):
+            for side in _SIDES:
+                if self._targets[side] is None and ipr.link_lookup(ifname=self._names[side]):
+                    raise LinkError(f"interface {self._names[side]!r} already exists")
+            if all(ns is None for ns in self._targets.values()) and all(
+                name.isascii() for name in self._names.values()
+            ):
                 ipr.link(
                     "add",
                     ifname=self._names["a"],
@@ -111,23 +126,29 @@ class VethPair:
                     peer=self._names["b"],
                 )
             else:
-                self._create_unicode_pair(ipr)
+                self._create_temporary_pair(ipr)
         self._created = True
         logger.debug("created veth pair %r <-> %r", self._names["a"], self._names["b"])
 
-    def _create_unicode_pair(self, ipr: Any) -> None:
+    def _create_temporary_pair(self, ipr: Any) -> None:
         udevadm = None
-        if Path("/run/udev/control").exists():
+        if (
+            any(not name.isascii() for name in self._names.values())
+            and Path("/run/udev/control").exists()
+        ):
             udevadm = shutil.which("udevadm")
             if udevadm is None:
                 raise LinkError("udevadm is required for non-ASCII interfaces when udev is active")
         prefix = "p4n" + uuid.uuid4().hex[:9]
         temporary_a, temporary_b = prefix + "a", prefix + "b"
         ipr.link("add", ifname=temporary_a, kind="veth", peer=temporary_b)
-        index_a = None
+        indexes: dict[Side, int] = {}
+        cleanup_side: Side = "a"
         try:
-            index_a = self._index(ipr, temporary_a)
-            index_b = self._index(ipr, temporary_b)
+            indexes["a"] = self._index(ipr, temporary_a)
+            indexes["b"] = self._index(ipr, temporary_b)
+            if self._targets["a"] is not None:
+                cleanup_side = "b"
             if udevadm is not None:
                 try:
                     subprocess.run(
@@ -141,15 +162,31 @@ class VethPair:
                     raise LinkError(
                         f"cannot wait for udev interface initialization: {exc}"
                     ) from exc
-            # udev applies name replacement to add events, not to these renames.
-            ipr.link("set", index=index_a, ifname=self._names["a"])
-            ipr.link("set", index=index_b, ifname=self._names["b"])
+            for side in _SIDES:
+                target = self._targets[side]
+                if target is None:
+                    ipr.link("set", index=indexes[side], ifname=self._names[side])
+                    cleanup_side = side
+                else:
+                    fd = os.open(f"/var/run/netns/{target.name}", os.O_RDONLY)
+                    try:
+                        # Move and name together so root names cannot block host names.
+                        ipr.link("set", index=indexes[side], net_ns_fd=fd, ifname=self._names[side])
+                        self._ns[side] = target
+                        cleanup_side = side
+                    finally:
+                        os.close(fd)
         except BaseException:
             try:
-                if index_a is None:
+                if not indexes:
                     ipr.link("del", ifname=temporary_a)
+                elif self._ns[cleanup_side] is None:
+                    ipr.link("del", index=indexes[cleanup_side])
                 else:
-                    ipr.link("del", index=index_a)
+                    with self._netlink_for(cleanup_side) as target_ipr:
+                        index = self._index(target_ipr, self._names[cleanup_side])
+                        target_ipr.link("del", index=index)
+                self._ns = {"a": None, "b": None}
             except Exception:
                 logger.exception("failed to remove temporary veth pair %r", temporary_a)
             raise

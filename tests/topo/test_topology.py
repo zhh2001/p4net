@@ -1034,6 +1034,99 @@ def test_imported_utf8_interface_names_are_preserved(name: str, side: str) -> No
     assert restored.to_dict() == data
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("source", ["dictionary", "direct"])
+@pytest.mark.parametrize(
+    "conflict", ["host", "same_switch", "different_switches", "loopback_host", "loopback_switch"]
+)
+def test_interface_name_collisions_rejected_in_final_namespace(
+    reverse: bool, source: str, conflict: str
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_switch("s2", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    topo.add_link("h2", "s2")
+    data = topo.to_dict()
+    if conflict == "host":
+        data["links"][1]["a"].update(node="h1", port=1)
+        data["links"][0]["a"]["iface_name"] = "shared"
+        data["links"][1]["a"]["iface_name"] = "shared"
+    elif conflict in {"same_switch", "different_switches"}:
+        if conflict == "same_switch":
+            data["links"][1]["b"].update(node="s1", port=2)
+        data["links"][0]["b"]["iface_name"] = "shared"
+        data["links"][1]["b"]["iface_name"] = "shared"
+    else:
+        data["links"][0]["a" if conflict == "loopback_host" else "b"]["iface_name"] = "lo"
+    if reverse:
+        data["links"].reverse()
+    original = deepcopy(data)
+    if source == "dictionary":
+        topo = Topology.from_dict(data)
+    else:
+        topo._links = [
+            Link(a=LinkEndpoint(**link["a"]), b=LinkEndpoint(**link["b"])) for link in data["links"]
+        ]
+    before = topo.to_dict()
+    with pytest.raises(
+        TopologyError,
+        match="loopback" if conflict.startswith("loopback") else "interface name collision",
+    ) as excinfo:
+        topo.validate()
+    assert "endpoint" in str(excinfo.value)
+    if not conflict.startswith("loopback"):
+        assert "link[0]" in str(excinfo.value) and "link[1]" in str(excinfo.value)
+    assert topo.to_dict() == before
+    assert data == original
+
+
+@pytest.mark.parametrize("reverse_links", [False, True])
+@pytest.mark.parametrize("reverse_endpoints", [False, True])
+@pytest.mark.parametrize("name", ["shared", "界界界界界"])
+def test_interface_name_reuse_is_scoped_to_final_namespace(
+    reverse_links: bool, reverse_endpoints: bool, name: str
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    topo.add_link("h2", "s1")
+    data = topo.to_dict()
+    for link in data["links"]:
+        link["a"]["iface_name"] = name
+    data["links"][0]["b"]["iface_name"] = name
+    if reverse_links:
+        data["links"].reverse()
+    if reverse_endpoints:
+        for link in data["links"]:
+            link["a"], link["b"] = link["b"], link["a"]
+    restored = Topology.from_dict(data)
+    restored.validate()
+    assert restored.to_dict() == data
+
+
+def test_interface_name_collisions_are_aggregated_by_namespace() -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    for link in data["links"]:
+        for endpoint in (link["a"], link["b"]):
+            endpoint["iface_name"] = "shared"
+    restored = Topology.from_dict(data)
+    with pytest.raises(TopologyError) as excinfo:
+        restored.validate()
+    message = str(excinfo.value)
+    assert message.count("interface name collision") == 2
+    assert "host 'h1'" in message and "root namespace" in message
+
+
 def test_links_property_returns_immutable_view() -> None:
     t = Topology()
     t.add_host("h1")

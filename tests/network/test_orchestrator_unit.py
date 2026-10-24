@@ -160,6 +160,53 @@ def test_invalid_interface_name_rejected_before_runtime_resources(
         network.stop()
 
 
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize("conflict", ["duplicate", "loopback"])
+def test_interface_name_conflict_rejected_before_runtime_resources(
+    patched: dict[str, Any], tmp_path: Path, side: str, conflict: str
+) -> None:
+    data = _make_simple_topology().to_dict()
+    data["links"][0][side]["iface_name"] = "shared" if conflict == "duplicate" else "lo"
+    if conflict == "duplicate":
+        data["links"][1][side]["iface_name"] = "shared"
+        if side == "a":
+            data["links"][1][side].update(node="h1", port=1)
+    topo = Topology.from_dict(data)
+    before = topo.to_dict()
+    logs, pcaps = tmp_path / "logs", tmp_path / "pcaps"
+    network = Network(topo, log_dir=logs, pcap_dir=pcaps)
+    try:
+        with pytest.raises(
+            TopologyError, match="collision" if conflict == "duplicate" else "loopback"
+        ):
+            network.start()
+        for factory in ("ns_factory", "veth_factory", "bmv2_factory", "client_factory"):
+            patched[factory].assert_not_called()
+        patched["compiler"].compile.assert_not_called()
+        assert not logs.exists() and not pcaps.exists()
+        assert topo.to_dict() == before
+    finally:
+        network.stop()
+
+
+def test_wire_link_supplies_final_namespaces_to_veth(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    data = _make_simple_topology().to_dict()
+    data["links"][0]["a"]["iface_name"] = "shared"
+    data["links"][0]["b"]["iface_name"] = "shared"
+    topo = Topology.from_dict(data)
+    network = Network(topo, log_dir=tmp_path / "logs")
+    try:
+        network.start()
+        first = patched["veth_factory"].call_args_list[0]
+        assert first.args == ("shared", "shared")
+        assert first.kwargs["namespace_a"].name == "h1"
+        assert first.kwargs["namespace_b"] is None
+    finally:
+        network.stop()
+
+
 @pytest.fixture
 def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
     """Patch every primitive Network calls; return a dict of MagicMocks."""

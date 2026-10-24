@@ -687,15 +687,16 @@ class Network:
         assert name_a is not None and name_b is not None, (
             "link endpoints must have iface_name resolved by Topology"
         )
-        veth = VethPair(name_a, name_b)
+        node_a = self._topology.node(link.a.node)
+        node_b = self._topology.node(link.b.node)
+        veth = VethPair(
+            name_a,
+            name_b,
+            namespace_a=self._namespaces[node_a.name] if isinstance(node_a, Host) else None,
+            namespace_b=self._namespaces[node_b.name] if isinstance(node_b, Host) else None,
+        )
         veth.create()
         self._veth_pairs.append(veth)
-
-        # Move host sides into their namespaces; switch sides stay in root.
-        for side, ep in (("a", link.a), ("b", link.b)):
-            node = self._topology.node(ep.node)
-            if isinstance(node, Host):
-                veth.move_to_namespace(side, self._namespaces[node.name])  # type: ignore[arg-type]
 
         # Configure addresses + MAC + MTU + state.
         # Host-side configuration goes through `ip` inside the host namespace

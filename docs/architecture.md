@@ -44,6 +44,8 @@ These objects manage individual resources. `Network` determines their creation a
 
 For non-ASCII interface names, `VethPair` creates temporary ASCII names and assigns the requested names after udev has processed the devices. When udev is active, `udevadm` must be on `PATH`; creation waits up to five seconds for its rules to finish. Waiting or naming failures remove the pair by interface index.
 
+`VethPair(..., namespace_a=..., namespace_b=...)` places the endpoints in their target namespaces during creation; `None` selects root. Host endpoints move under temporary names and receive their requested names in the same kernel request. A failed placement removes the pair through an endpoint whose location is known.
+
 ### `p4net.topo`
 
 `Host`, `P4Switch`, `LinkEndpoint`, and `Link` are frozen data classes. They describe addresses, switch configuration, link endpoints, and impairments. `Topology` is a mutable builder that collects these descriptions, validates them, serializes them, and exports Graphviz diagrams. Building a description creates no network resources.
@@ -57,6 +59,8 @@ Switch `device_id`, `grpc_port` and `thrift_port` also require `int` values, exc
 `Topology.from_dict()` restores endpoint ports as stored. If an endpoint's `port` is omitted or `None`, `Topology.validate()` reports a `TopologyError` naming the link, endpoint and node. Network startup performs this check before compilation or network resource creation. Explicit port `0` is valid.
 
 `Topology.from_dict()` also restores interface names as stored. `Topology.validate()` rejects a missing, `None` or empty `iface_name`, identifying the link, endpoint and node. Valid custom names are preserved.
+
+Interface names must be unique within each final namespace. Each host has its own namespace; all switches share root. Different namespaces may reuse a name, including both ends of one link, regardless of link declaration order. Validation rejects duplicates within one namespace and the reserved loopback name `lo` before compilation or resource creation.
 
 Topology and runtime code use the same interface-name checks. Names must be UTF-8 strings of at most 15 bytes, cannot be `.` or `..`, and cannot contain whitespace, `/`, `:` or NUL. Invalid names report a `TopologyError` during topology validation or a `ValueError` when constructing a `VethPair`. For example, `界界界界界` uses 15 bytes and passes name validation; adding another `界` exceeds the limit.
 
