@@ -71,3 +71,5 @@ class P4Switch:
             raise TopologyError(
                 f"invalid log_level {self.log_level!r}: must be one of {sorted(_VALID_LOG_LEVELS)}"
             )
+        if not isinstance(self.pcap_enabled, bool):
+            raise TopologyError(f"pcap_enabled {self.pcap_enabled!r} must be a bool")

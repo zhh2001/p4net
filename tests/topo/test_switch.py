@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,42 @@ def test_minimal_switch() -> None:
     assert s.arch == "v1model"
     assert s.log_level == "info"
     assert s.pcap_enabled is True
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize("value", [None, 0, 1, 0.0, 1.0, "false", "true", "", b"false", [], {}])
+def test_pcap_enabled_rejects_non_boolean_values(source: str, value: Any) -> None:
+    topo = Topology()
+    data = {"switches": {"s1": {"name": "s1", "p4_src": "p.p4", "pcap_enabled": value}}}
+    original = deepcopy(data)
+    with pytest.raises(TopologyError, match=r"pcap_enabled.*bool"):
+        if source == "descriptor":
+            P4Switch("s1", Path("p.p4"), pcap_enabled=value)
+        elif source == "builder":
+            topo.add_switch("s1", Path("p.p4"), pcap_enabled=value)
+        else:
+            Topology.from_dict(data)
+    assert not topo.switches
+    assert data == original
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize("value", [True, False, "default"])
+def test_pcap_enabled_preserves_boolean_values_and_default(source: str, value: Any) -> None:
+    values = {} if value == "default" else {"pcap_enabled": value}
+    expected = True if value == "default" else value
+    if source == "descriptor":
+        switch = P4Switch("s1", Path("p.p4"), **values)
+    elif source == "builder":
+        switch = Topology().add_switch("s1", Path("p.p4"), **values)
+    else:
+        data = {"switches": {"s1": {"name": "s1", "p4_src": "p.p4", **values}}}
+        original = deepcopy(data)
+        topo = Topology.from_dict(data)
+        assert data == original
+        assert topo.to_dict()["switches"]["s1"]["pcap_enabled"] is expected
+        switch = topo.switches["s1"]
+    assert switch.pcap_enabled is expected
 
 
 def test_p4_src_string_coerced_to_path() -> None:

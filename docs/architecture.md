@@ -62,6 +62,8 @@ Switch `device_id`, `grpc_port` and `thrift_port` also require `int` values, exc
 
 Switch `log_level` accepts the lowercase strings `trace`, `debug`, `info`, `warn` and `error`, with `info` as the default. Invalid types or values raise `TopologyError` when constructing descriptions, including through `from_dict()`, or `ValueError` when constructing `BMv2Switch` directly.
 
+Switch `pcap_enabled` accepts only `True` or `False` and defaults to `True`. Other types raise `TopologyError` when constructing descriptions, including through `from_dict()`. Packet capture also requires a directory supplied through `Network(pcap_dir=...)`.
+
 Host and switch names must be 1 to 12 ASCII characters, starting with a letter and using only letters, digits, `_` or `-` thereafter. The whole string is checked, so whitespace and trailing newlines raise `TopologyError` when constructing descriptions, including through `from_dict()`. Accepted names keep their original case.
 
 Node names must be unique across hosts and switches. Node keys in `hosts` and `switches` must match each description's `name`, including nodes without links. `from_dict()` preserves both values, and `validate()` reports duplicate names or mismatches without changing the snapshot.

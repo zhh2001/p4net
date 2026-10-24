@@ -62,6 +62,8 @@ BMv2 启动超时只接受有限的正整数或浮点数，不接受 `bool`。`B
 
 交换机 `log_level` 接受小写字符串 `trace`、`debug`、`info`、`warn` 和 `error`，默认值为 `info`。非法类型或值在构造描述对象及 `from_dict()` 导入时抛出 `TopologyError`，直接构造 `BMv2Switch` 时抛出 `ValueError`。
 
+交换机 `pcap_enabled` 只接受 `True` 或 `False`，默认值为 `True`。其他类型在构造描述对象及 `from_dict()` 导入时抛出 `TopologyError`。抓包还需要通过 `Network(pcap_dir=...)` 指定目录。
+
 主机与交换机名称必须为 1～12 个 ASCII 字符，以字母开头，其后只允许字母、数字、`_` 和 `-`。校验整个字符串，空白及末尾换行会在构造描述对象或 `from_dict()` 导入时抛出 `TopologyError`。合法名称保留原有大小写。
 
 同一拓扑中，主机与交换机不能同名。节点字典键必须与节点名称一致，包括未连接链路的节点。`from_dict()` 保留 `hosts`、`switches` 的字典键和 `name`，`validate()` 会报告重名或名称不一致，并保留快照。
