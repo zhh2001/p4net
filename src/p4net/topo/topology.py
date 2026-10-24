@@ -400,6 +400,7 @@ class Topology:
     def validate(self) -> None:
         """Raise `TopologyError` listing every internal-consistency problem found.
 
+        Node mapping keys must match their descriptions' names.
         All configured gRPC and Thrift ports must be distinct across the topology,
         including the two ports of each switch. Every link endpoint must have
         an assigned port and a non-empty interface name. Different hosts cannot
@@ -407,6 +408,11 @@ class Topology:
         Switch data ports cannot carry IPv4 or IPv6 addresses.
         """
         errors: list[str] = []
+
+        for kind, mapping in (("host", self._hosts), ("switch", self._switches)):
+            for node_key, node in mapping.items():
+                if node_key != node.name:
+                    errors.append(f"{kind} key {node_key!r} does not match node name {node.name!r}")
 
         # 1. Endpoint references resolve to a known node.
         # 2. No self-loops.
@@ -646,9 +652,9 @@ class Topology:
     def from_dict(cls, data: dict[str, Any]) -> Topology:
         """Reconstruct a :class:`Topology` from a :meth:`to_dict` payload.
 
-        Endpoint ports, interface names, and address overrides are restored as
-        stored. Call :meth:`validate` to check endpoint assignments and reject
-        IP addresses on switch data ports.
+        Node keys, names, endpoint ports, interface names, and address overrides
+        are restored as stored. Call :meth:`validate` to check node identity and
+        endpoint assignments, and reject IP addresses on switch data ports.
         """
         topo = cls()
         for name, host_data in data.get("hosts", {}).items():

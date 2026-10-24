@@ -857,6 +857,98 @@ def test_from_dict_handles_missing_optional_sections() -> None:
     assert list(t.links) == []
 
 
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("layout", ["alias", "existing", "swapped"])
+@pytest.mark.parametrize("linked", [False, True])
+def test_imported_node_names_must_match_mapping_keys(kind: str, layout: str, linked: bool) -> None:
+    topo = Topology()
+    for name in ("h1", "h2"):
+        topo.add_host(name)
+    for name in ("s1", "s2"):
+        topo.add_switch(name, Path("p.p4"))
+    if linked:
+        topo.add_link("h1", "s1")
+        topo.add_link("h2", "s2")
+    data = topo.to_dict()
+    group, first, second, alias = (
+        ("hosts", "h1", "h2", "h3") if kind == "host" else ("switches", "s1", "s2", "s3")
+    )
+    changed = alias if layout == "alias" else second
+    data[group][first]["name"] = changed
+    if layout == "swapped":
+        data[group][second]["name"] = first
+    original = deepcopy(data)
+    restored = Topology.from_dict(data)
+    assert restored.to_dict() == data
+    with pytest.raises(TopologyError, match="does not match") as excinfo:
+        restored.validate()
+    message = str(excinfo.value)
+    assert kind in message and repr(first) in message and repr(changed) in message
+    if layout == "swapped":
+        assert message.count("does not match") == 2
+    assert restored.to_dict() == data and data == original
+
+
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("key", ["different_name", 7])
+def test_imported_unlinked_node_keys_are_not_silently_renamed(kind: str, key: str | int) -> None:
+    topo = Topology()
+    if kind == "host":
+        topo.add_host("h1")
+        group, name = "hosts", "h1"
+    else:
+        topo.add_switch("s1", Path("p.p4"))
+        group, name = "switches", "s1"
+    data = topo.to_dict()
+    data[group][key] = data[group].pop(name)
+    restored = Topology.from_dict(data)
+    with pytest.raises(TopologyError, match="does not match") as excinfo:
+        restored.validate()
+    assert repr(key) in str(excinfo.value) and repr(name) in str(excinfo.value)
+    assert restored.to_dict() == data
+
+
+def test_imported_node_names_collect_mismatches_and_endpoint_errors() -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    data["hosts"]["h1"]["name"] = "h2"
+    data["switches"]["s1"]["name"] = "s2"
+    data["links"][0]["a"].update(node="missing", port=None, iface_name=None)
+    restored = Topology.from_dict(data)
+    with pytest.raises(TopologyError) as excinfo:
+        restored.validate()
+    message = str(excinfo.value)
+    assert message.count("does not match") == 2
+    assert "unknown node 'missing'" in message
+    assert "has no assigned port" in message and "has no assigned interface name" in message
+    assert restored.to_dict() == data
+
+
+@pytest.mark.parametrize("kind", ["host", "switch"])
+def test_imported_consistent_node_names_preserve_custom_interface_names(kind: str) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    group, old, new, side = (
+        ("hosts", "h1", "h2", "a") if kind == "host" else ("switches", "s1", "s2", "b")
+    )
+    node = data[group].pop(old)
+    node["name"] = new
+    data[group][new] = node
+    data["links"][0][side]["node"] = new
+    original = deepcopy(data)
+    restored = Topology.from_dict(data)
+    restored.validate()
+    assert restored.node(new).name == new
+    assert restored.to_dict() == data and data == original
+    assert data["links"][0][side]["iface_name"] == f"{old}-eth{0 if kind == 'host' else 1}"
+
+
 @pytest.mark.parametrize("node", ["h1", "s1"])
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("missing", ["omitted", "null"])
