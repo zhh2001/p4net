@@ -68,6 +68,8 @@ Topology and runtime code use the same interface-name checks. Names must be UTF-
 
 Address collision checks use the same address selection as network startup. A link endpoint's `ip` or `ip6` overrides the host default for that address family. Without an override, only the host's first declared link inherits its default. Overridden defaults and defaults on hosts without links do not participate in collision checks. The topology data is preserved.
 
+Different hosts cannot use the same effective IP address, regardless of prefix length. Different IP addresses with overlapping subnets are allowed, as is reusing an address on multiple interfaces of the same host.
+
 Link impairments have three forms: symmetric values, per-direction values such as `delay_a_to_b`, and additions such as `delay_a_to_b_extra`. An addition requires a symmetric base. For example, `delay="100ms"` with `delay_a_to_b_extra="100ms"` gives 200 ms from `a` to `b` and 100 ms from `b` to `a`. A symmetric value cannot be combined with its direct per-direction override.
 
 Construction checks field values and parameter combinations. `Topology.validate()` additionally checks endpoint references, self-links, port and device-ID collisions, switch service-port collisions, interface names, and host address conflicts. Network startup calls it unless `unsafe=True`. The CLI also validates before `topology graph`.

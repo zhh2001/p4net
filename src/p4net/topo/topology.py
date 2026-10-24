@@ -402,7 +402,8 @@ class Topology:
 
         All configured gRPC and Thrift ports must be distinct across the topology,
         including the two ports of each switch. Every link endpoint must have
-        an assigned port and a non-empty interface name.
+        an assigned port and a non-empty interface name. Different hosts cannot
+        use the same effective IP address, regardless of prefix length.
         """
         errors: list[str] = []
 
@@ -507,9 +508,9 @@ class Topology:
                 else:
                     interface_owners[interface_key] = owner
 
-        # 6. Check the addresses selected for host interfaces, grouped by network.
-        per_network: dict[ipaddress.IPv4Network, dict[ipaddress.IPv4Address, set[str]]] = {}
-        per_network6: dict[ipaddress.IPv6Network, dict[ipaddress.IPv6Address, set[str]]] = {}
+        # 6. Different hosts cannot share an effective address, regardless of prefix.
+        ipv4_owners: dict[ipaddress.IPv4Address, set[str]] = {}
+        ipv6_owners: dict[ipaddress.IPv6Address, set[str]] = {}
         seen_hosts: set[str] = set()
         for link in self._links:
             for ep in (link.a, link.b):
@@ -526,32 +527,21 @@ class Topology:
                     except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
                         errors.append(f"link endpoint {ep.node!r}: invalid IP {ipv4!r}")
                     else:
-                        per_network.setdefault(iface.network, {}).setdefault(iface.ip, set()).add(
-                            host.name
-                        )
+                        ipv4_owners.setdefault(iface.ip, set()).add(host.name)
                 if ipv6 is not None:
                     try:
                         iface6 = ipaddress.IPv6Interface(ipv6)
                     except (ValueError, ipaddress.AddressValueError, ipaddress.NetmaskValueError):
                         errors.append(f"link endpoint {ep.node!r}: invalid ip6 {ipv6!r}")
                     else:
-                        per_network6.setdefault(iface6.network, {}).setdefault(
-                            iface6.ip, set()
-                        ).add(host.name)
-        for network, addrs in per_network.items():
-            for addr, nodes in addrs.items():
-                if len(nodes) > 1:
-                    errors.append(
-                        f"IP collision on {network}: address {addr} used by hosts {sorted(nodes)}"
-                    )
+                        ipv6_owners.setdefault(iface6.ip, set()).add(host.name)
+        for addr, nodes in ipv4_owners.items():
+            if len(nodes) > 1:
+                errors.append(f"IP collision: address {addr} used by hosts {sorted(nodes)}")
 
-        for network6, addrs6 in per_network6.items():
-            for addr6, nodes6 in addrs6.items():
-                if len(nodes6) > 1:
-                    errors.append(
-                        f"IPv6 collision on {network6}: address {addr6} used by hosts "
-                        f"{sorted(nodes6)}"
-                    )
+        for addr6, nodes6 in ipv6_owners.items():
+            if len(nodes6) > 1:
+                errors.append(f"IPv6 collision: address {addr6} used by hosts {sorted(nodes6)}")
 
         if errors:
             raise TopologyError(

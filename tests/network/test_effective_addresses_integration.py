@@ -39,7 +39,7 @@ def _configured_addresses(network: Network, host: str, family: int) -> set[str]:
 
 
 @pytest.mark.parametrize("family", [4, 6])
-@pytest.mark.parametrize("layout", ["override", "later_link", "unlinked"])
+@pytest.mark.parametrize("layout", ["override", "later_link", "unlinked", "different_prefixes"])
 def test_effective_addresses_match_kernel_configuration(
     tmp_path: Path, family: int, layout: str
 ) -> None:
@@ -49,7 +49,9 @@ def test_effective_addresses_match_kernel_configuration(
     topo = Topology()
     topo.add_host(first, **{field: primary})
     topo.add_host(second, **{field: primary})
-    if layout == "override":
+    if layout == "different_prefixes":
+        override = override.split("/")[0] + ("/16" if family == 4 else "/48")
+    if layout in {"override", "different_prefixes"}:
         topo.add_link(first, second, **{f"{field}_a": override})
     elif layout == "later_link":
         topo.add_host(third, **{field: third_ip})
@@ -69,7 +71,11 @@ def test_effective_addresses_match_kernel_configuration(
                 network.host(first).primary_ip is None and network.host(first).primary_ip6 is None
             )
         else:
-            peer, peer_ip = (second, primary) if layout == "override" else (third, third_ip)
+            peer, peer_ip = (
+                (second, primary)
+                if layout in {"override", "different_prefixes"}
+                else (third, third_ip)
+            )
             for sender, target in ((first, peer_ip), (peer, override)):
                 command = [
                     "ping",
@@ -108,9 +114,40 @@ def test_effective_collisions_rejected_before_compilation(tmp_path: Path, family
         network.stop()
 
 
+@pytest.mark.parametrize("family", [4, 6])
+@pytest.mark.parametrize("source", ["defaults", "overrides"])
+def test_different_prefix_collisions_rejected_before_compilation(
+    tmp_path: Path, family: int, source: str
+) -> None:
+    field, primary, unused_first, unused_second = _addresses(family)
+    wide = primary.split("/")[0] + ("/16" if family == 4 else "/48")
+    suffix = uuid.uuid4().hex[:6]
+    first, second, switch = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(first, **{field: primary if source == "defaults" else unused_first})
+    topo.add_host(second, **{field: wide if source == "defaults" else unused_second})
+    topo.add_switch(switch, _SOURCE)
+    topo.add_link(first, switch, **({f"{field}_a": primary} if source == "overrides" else {}))
+    topo.add_link(switch, second, **({f"{field}_b": wide} if source == "overrides" else {}))
+    before = topo.to_dict()
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    logs = tmp_path / "logs"
+    network = Network(topo, compiler=compiler, log_dir=logs)
+    try:
+        with patch.object(compiler, "compile", wraps=compiler.compile) as compile_call:
+            with pytest.raises(TopologyError, match="collision"):
+                network.start()
+            compile_call.assert_not_called()
+        assert not logs.exists()
+        assert topo.to_dict() == before
+    finally:
+        network.stop()
+
+
 @pytest.mark.requires_p4c
 @pytest.mark.requires_bmv2
-def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path) -> None:
+@pytest.mark.parametrize("wide_prefix", [False, True])
+def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path, wide_prefix: bool) -> None:
     suffix = uuid.uuid4().hex[:6]
     first, second, switch = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
     topo = Topology()
@@ -126,7 +163,7 @@ def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path) -> None:
             grpc_port=grpc.getsockname()[1],
             thrift_port=thrift.getsockname()[1],
         )
-    topo.add_link(first, switch, port_a=0, port_b=0, ip_a="10.230.0.2/24")
+    topo.add_link(first, switch, port_a=0, port_b=0, ip_a=f"10.230.0.2/{16 if wide_prefix else 24}")
     topo.add_link(switch, second, port_a=2, port_b=0)
     before = topo.to_dict()
     topo.validate()
