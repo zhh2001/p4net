@@ -42,6 +42,8 @@ flowchart TB
 
 这些对象分别管理单个资源，创建和回收的顺序由 `Network` 决定。详见[运行时 API](api/runtime.md)。
 
+BMv2 启动超时只接受有限的正整数或浮点数，不接受 `bool`。`BMv2Switch(startup_timeout=...)` 与 `wait_until_ready(timeout=...)` 使用同一规则，非法值抛出 `ValueError`。等待超时省略或为 `None` 时，沿用构造参数，默认 10 秒。非法等待超时不会改变已运行进程的状态。
+
 接口名含非 ASCII 字符时，`VethPair` 先使用临时 ASCII 名称创建接口，待 udev 处理完成后再设置原名。udev 运行时需要 `PATH` 中有 `udevadm`，最多等待 5 秒。等待或设置名称失败时按接口编号回收。
 
 `VethPair(..., namespace_a=..., namespace_b=...)` 在创建时将两端放入目标命名空间，`None` 表示根命名空间。主机端先使用临时名迁移，在同一次内核请求中设置原名。迁移或命名失败时，通过位置已确认的一端回收整对接口。

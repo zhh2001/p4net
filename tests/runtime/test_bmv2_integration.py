@@ -78,6 +78,55 @@ def test_empty_start_lifecycle(compiled_json: Path, tmp_path: Path) -> None:
     assert sw.log_file.stat().st_size > 0
 
 
+@pytest.mark.requires_p4c
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), -float("inf"), 0, -1, True])
+def test_invalid_ready_timeout_preserves_running_process(
+    compiled_json: Path, tmp_path: Path, timeout: float
+) -> None:
+    with BMv2Switch(
+        "s_timeout",
+        device_id=0,
+        grpc_port=_free_port(),
+        thrift_port=_free_port(),
+        bmv2_json=compiled_json,
+        port_to_iface={},
+        log_dir=tmp_path / "logs",
+    ) as switch:
+        pid = switch.pid
+        with pytest.raises(ValueError, match=r"timeout.*positive"):
+            switch.wait_until_ready(timeout=timeout)
+        assert switch.pid == pid and switch.is_running()
+        switch.wait_until_ready(timeout=1.0)
+    assert not switch.is_running()
+
+
+@pytest.mark.requires_p4c
+@pytest.mark.parametrize("startup_timeout", [10, 10.5])
+@pytest.mark.parametrize("timeout", [None, 10, 10.5])
+def test_finite_ready_timeouts_on_real_process(
+    compiled_json: Path, tmp_path: Path, startup_timeout: float, timeout: float | None
+) -> None:
+    switch = BMv2Switch(
+        "s_finite",
+        device_id=0,
+        grpc_port=_free_port(),
+        thrift_port=_free_port(),
+        bmv2_json=compiled_json,
+        port_to_iface={},
+        log_dir=tmp_path / "logs",
+        startup_timeout=startup_timeout,
+    )
+    switch.start()
+    try:
+        switch.wait_until_ready(timeout=timeout)
+        assert switch.is_running()
+        with socket.create_connection(("127.0.0.1", switch._grpc_port), timeout=1.0):
+            pass
+    finally:
+        switch.stop()
+    assert not switch.is_running()
+
+
 # ---------------------------------------------------------------------------
 # 2. Context manager
 # ---------------------------------------------------------------------------

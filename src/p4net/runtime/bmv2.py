@@ -30,6 +30,7 @@ target-specific.
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import socket
 import subprocess
@@ -49,6 +50,20 @@ logger = logging.getLogger(__name__)
 
 _VALID_LOG_LEVELS: frozenset[str] = frozenset({"trace", "debug", "info", "warn", "error"})
 _READY_POLL_INTERVAL = 0.1
+
+
+def _validate_ready_timeout(value: float, name: str) -> None:
+    try:
+        valid = (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value > 0
+        )
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError(f"{name} must be a finite positive number")
 
 
 def _listener_matches(
@@ -94,8 +109,7 @@ class BMv2Switch:
             raise ValueError(
                 f"invalid log_level {log_level!r}: must be one of {sorted(_VALID_LOG_LEVELS)}"
             )
-        if startup_timeout <= 0:
-            raise ValueError("startup_timeout must be positive")
+        _validate_ready_timeout(startup_timeout, "startup_timeout")
         self._name = name
         self._device_id = device_id
         self._grpc_port = grpc_port
@@ -246,10 +260,14 @@ class BMv2Switch:
         A listener owned by another process, including a shared gRPC port,
         raises ``BMv2StartupError``. The caller remains responsible for stopping
         the child after failure; the context manager handles this automatically.
+
+        Timeouts must be finite positive numbers, excluding bool. None uses
+        the startup_timeout supplied at construction. Invalid values raise ValueError.
         """
         if not self._started or self._proc is None:
             raise BMv2StartupError(f"BMv2 {self._name!r} has not been started; call start() first")
         effective_timeout = self._startup_timeout if timeout is None else timeout
+        _validate_ready_timeout(effective_timeout, "timeout")
         deadline = time.monotonic() + effective_timeout
         start_time = time.monotonic()
         try:

@@ -132,12 +132,38 @@ def test_constructor_rejects_empty_name(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("bad_timeout", [0, -0.5, -10.0])
-def test_constructor_rejects_nonpositive_startup_timeout(
-    tmp_path: Path, bad_timeout: float
+@pytest.mark.parametrize(
+    "bad_timeout",
+    [
+        0,
+        -0.5,
+        -10.0,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        True,
+        False,
+        None,
+        "1",
+        b"1",
+        [],
+        {},
+        10**400,
+    ],
+)
+def test_constructor_rejects_invalid_startup_timeout(tmp_path: Path, bad_timeout: object) -> None:
+    with pytest.raises(ValueError, match=r"startup_timeout.*positive"):
+        _make_switch(tmp_path, startup_timeout=bad_timeout)  # type: ignore[arg-type]
+    assert not (tmp_path / "logs").exists()
+
+
+@pytest.mark.parametrize("timeout", [1, 1.5, 10])
+def test_constructor_accepts_finite_positive_startup_timeout(
+    tmp_path: Path, timeout: float
 ) -> None:
-    with pytest.raises(ValueError, match="positive"):
-        _make_switch(tmp_path, startup_timeout=bad_timeout)
+    switch = _make_switch(tmp_path, startup_timeout=timeout)
+    assert switch.pid is None
+    assert not switch.log_file.parent.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +374,77 @@ def test_wait_until_ready_requires_start_first(tmp_path: Path) -> None:
     sw = _make_switch(tmp_path)
     with pytest.raises(BMv2StartupError, match="has not been started"):
         sw.wait_until_ready(timeout=0.1)
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        0,
+        -0.5,
+        -10.0,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        True,
+        False,
+        "1",
+        b"1",
+        [],
+        {},
+        10**400,
+    ],
+)
+def test_wait_until_ready_rejects_invalid_timeout_before_inspecting_listeners(
+    tmp_path: Path, mocker: MockerFixture, timeout: object
+) -> None:
+    _patch_which(mocker)
+    process = _patch_popen(mocker).return_value
+    switch = _make_switch(tmp_path)
+    switch.start()
+    clock = mocker.patch("p4net.runtime.bmv2.time.monotonic", return_value=0.0)
+    resolve = mocker.patch("p4net.runtime.bmv2.socket.getaddrinfo")
+    listeners = mocker.patch.object(switch, "_listening_inodes")
+    with pytest.raises(ValueError, match=r"timeout.*positive"):
+        switch.wait_until_ready(timeout=timeout)  # type: ignore[arg-type]
+    clock.assert_not_called()
+    resolve.assert_not_called()
+    listeners.assert_not_called()
+    process.terminate.assert_not_called()
+    process.kill.assert_not_called()
+
+
+@pytest.mark.parametrize("timeout", [1, 1.5, None])
+def test_wait_until_ready_accepts_finite_positive_or_default_timeout(
+    tmp_path: Path, mocker: MockerFixture, timeout: float | None
+) -> None:
+    _patch_which(mocker)
+    _patch_popen(mocker)
+    switch = _make_switch(tmp_path)
+    switch.start()
+    mocker.patch.object(switch, "_listening_inodes", return_value=({"grpc"}, {"thrift"}))
+    mocker.patch.object(switch, "_socket_inodes", return_value={"grpc", "thrift"})
+    switch.wait_until_ready(timeout=timeout)
+
+
+@pytest.mark.parametrize("explicit_none", [False, True])
+def test_wait_until_ready_uses_configured_startup_timeout(
+    tmp_path: Path, mocker: MockerFixture, explicit_none: bool
+) -> None:
+    _patch_which(mocker)
+    _patch_popen(mocker)
+    switch = _make_switch(tmp_path, startup_timeout=0.25)
+    switch.start()
+    mocker.patch("p4net.runtime.bmv2.time.monotonic", side_effect=[10.0, 10.0, 10.0, 10.3])
+    sleep = mocker.patch("p4net.runtime.bmv2.time.sleep")
+    listeners = mocker.patch.object(switch, "_listening_inodes", return_value=(set(), set()))
+    mocker.patch.object(switch, "_socket_inodes", return_value=set())
+    with pytest.raises(BMv2StartupError, match=r"0\.25s"):
+        if explicit_none:
+            switch.wait_until_ready(timeout=None)
+        else:
+            switch.wait_until_ready()
+    listeners.assert_called_once()
+    sleep.assert_called_once_with(0.1)
 
 
 @pytest.mark.parametrize("error", [PermissionError("access denied"), NetlinkError(1)])
