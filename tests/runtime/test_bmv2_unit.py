@@ -87,10 +87,36 @@ def test_constructor_minimal_ok(tmp_path: Path) -> None:
     assert sw.returncode() is None
 
 
-@pytest.mark.parametrize("bad_level", ["", "FATAL", "info ", "verbose"])
-def test_constructor_rejects_bad_log_level(tmp_path: Path, bad_level: str) -> None:
+@pytest.mark.parametrize(
+    "bad_level",
+    [
+        "",
+        "FATAL",
+        "info ",
+        "verbose",
+        [],
+        ["info"],
+        {},
+        {"level": "info"},
+        bytearray(b"info"),
+        17,
+        True,
+        None,
+        b"info",
+    ],
+)
+def test_constructor_rejects_bad_log_level(tmp_path: Path, bad_level: object) -> None:
     with pytest.raises(ValueError, match="invalid log_level"):
-        _make_switch(tmp_path, log_level=bad_level)
+        _make_switch(tmp_path, log_level=bad_level)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("level", ["trace", "debug", "info", "warn", "error"])
+def test_log_level_kept_in_process_arguments(tmp_path: Path, level: str) -> None:
+    switch = _make_switch(tmp_path, log_level=level)
+    argv = switch._build_argv()
+    assert argv[argv.index("-L") + 1] == level
+    assert switch.pid is None
+    assert not switch.log_file.parent.exists()
 
 
 def test_constructor_rejects_empty_name(tmp_path: Path) -> None:

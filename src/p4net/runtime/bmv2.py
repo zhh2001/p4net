@@ -90,7 +90,7 @@ class BMv2Switch:
     ) -> None:
         if not name:
             raise ValueError("BMv2Switch name must be non-empty")
-        if log_level not in _VALID_LOG_LEVELS:
+        if not isinstance(log_level, str) or log_level not in _VALID_LOG_LEVELS:
             raise ValueError(
                 f"invalid log_level {log_level!r}: must be one of {sorted(_VALID_LOG_LEVELS)}"
             )

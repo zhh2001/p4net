@@ -944,6 +944,27 @@ def test_imported_similar_names_remain_distinct(host: str, switch: str) -> None:
     assert restored.to_dict() == data
 
 
+@pytest.mark.parametrize("entry", ["builder", "import"])
+@pytest.mark.parametrize("level", [["info"], {"level": "info"}, 17, None])
+def test_invalid_switch_log_level_rejected_without_changing_topology(
+    entry: str, level: Any
+) -> None:
+    topo = Topology()
+    if entry == "builder":
+        before = topo.to_dict()
+        with pytest.raises(TopologyError, match="invalid log_level"):
+            topo.add_switch("s1", Path("p.p4"), log_level=level)
+        assert topo.to_dict() == before
+    else:
+        topo.add_switch("s1", Path("p.p4"))
+        data = topo.to_dict()
+        data["switches"]["s1"]["log_level"] = level
+        original = deepcopy(data)
+        with pytest.raises(TopologyError, match="invalid log_level"):
+            Topology.from_dict(data)
+        assert data == original
+
+
 @pytest.mark.parametrize("side", ["a", "b"])
 @pytest.mark.parametrize("node", [True, 1, b"h1", ["h1"], {"name": "h1"}])
 def test_imported_endpoint_node_types_rejected_without_changing_input(side: str, node: Any) -> None:

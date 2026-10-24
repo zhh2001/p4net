@@ -67,7 +67,7 @@ class P4Switch:
             raise TopologyError(
                 f"cpu_port {self.cpu_port} out of range [{_CPU_PORT_MIN}, {_CPU_PORT_MAX}]"
             )
-        if self.log_level not in _VALID_LOG_LEVELS:
+        if not isinstance(self.log_level, str) or self.log_level not in _VALID_LOG_LEVELS:
             raise TopologyError(
                 f"invalid log_level {self.log_level!r}: must be one of {sorted(_VALID_LOG_LEVELS)}"
             )

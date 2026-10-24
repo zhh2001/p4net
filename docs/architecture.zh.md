@@ -58,6 +58,8 @@ flowchart TB
 
 交换机的 `device_id`、`grpc_port` 和 `thrift_port` 同样只接受 `int`，不接受 `bool`。设备 ID 范围是 `0..2147483647`，gRPC 和 Thrift 端口范围是 `1024..65535`。向 `Topology.add_switch()` 传入 `None` 时自动分配。非法类型会在构造时抛出 `TopologyError`，从字典导入拓扑时也一样。
 
+交换机 `log_level` 接受小写字符串 `trace`、`debug`、`info`、`warn` 和 `error`，默认值为 `info`。非法类型或值在构造描述对象及 `from_dict()` 导入时抛出 `TopologyError`，直接构造 `BMv2Switch` 时抛出 `ValueError`。
+
 主机与交换机名称必须为 1～12 个 ASCII 字符，以字母开头，其后只允许字母、数字、`_` 和 `-`。校验整个字符串，空白及末尾换行会在构造描述对象或 `from_dict()` 导入时抛出 `TopologyError`。合法名称保留原有大小写。
 
 同一拓扑中，主机与交换机不能同名。节点字典键必须与节点名称一致，包括未连接链路的节点。`from_dict()` 保留 `hosts`、`switches` 的字典键和 `name`，`validate()` 会报告重名或名称不一致，并保留快照。

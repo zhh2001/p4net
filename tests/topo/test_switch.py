@@ -176,9 +176,26 @@ def test_cpu_port_rejects_invalid_types(cpu_port: Any) -> None:
         P4Switch("s1", Path("p.p4"), cpu_port=cpu_port)
 
 
-@pytest.mark.parametrize("bad_level", ["", "verbose", "FATAL", "Info"])
-def test_invalid_log_level(bad_level: str) -> None:
-    with pytest.raises(TopologyError):
+@pytest.mark.parametrize(
+    "bad_level",
+    [
+        "",
+        "verbose",
+        "FATAL",
+        "Info",
+        [],
+        ["info"],
+        {},
+        {"level": "info"},
+        bytearray(b"info"),
+        17,
+        True,
+        None,
+        b"info",
+    ],
+)
+def test_invalid_log_level(bad_level: Any) -> None:
+    with pytest.raises(TopologyError, match="invalid log_level"):
         P4Switch(name="s1", p4_src=Path("p.p4"), log_level=bad_level)
 
 
