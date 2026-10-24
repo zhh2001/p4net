@@ -94,6 +94,8 @@ Link impairments have three forms: symmetric values, per-direction values such a
 
 Construction checks field values and parameter combinations. `Topology.validate()` additionally checks endpoint references, self-links, port and device-ID collisions, switch service-port collisions, interface names, and host address conflicts. Network startup calls it unless `unsafe=True`. The CLI also validates before `topology graph`.
 
+Link loss percentages accept finite integers or floats, excluding `bool`, or `None`. Symmetric and per-direction values range from `0` to `100`; directional additions must be non-negative and require a symmetric base. A base plus addition exceeding `100` is an error. Invalid types or non-finite values raise `TopologyError` at construction, including through `add_link()` and `from_dict()`. Direct `apply_netem(loss_pct=...)` calls use the same numeric types and `0..100` range, raising `TcError` before running `tc`.
+
 The builder remains mutable after startup. Editing it does not change running resources. See [topology changes](known-limitations.md#4-live-topology-mutation-not-supported) and the [topology API](api/topo.md).
 
 ### `p4net.compiler`

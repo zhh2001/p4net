@@ -109,7 +109,7 @@ def _resolve_dir_loss(
     per_dir: float | None,
     extra: float | None,
 ) -> float | None:
-    """Resolve a per-direction loss percentage with cap-at-100 + raise on overflow."""
+    """Resolve directional loss, rejecting symmetric-plus-extra totals above 100."""
     if extra is not None and sym is not None:
         total = sym + extra
         if total > 100.0:

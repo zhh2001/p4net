@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 from dataclasses import dataclass
 
@@ -109,6 +110,28 @@ class Link:
             raise TopologyError("Link.a.node must be a non-empty string")
         if not isinstance(self.b.node, str) or not self.b.node:
             raise TopologyError("Link.b.node must be a non-empty string")
+        for field in (
+            "loss_pct",
+            "loss_pct_a_to_b",
+            "loss_pct_b_to_a",
+            "loss_pct_a_to_b_extra",
+            "loss_pct_b_to_a_extra",
+        ):
+            value = getattr(self, field)
+            if value is None:
+                continue
+            try:
+                valid = (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                )
+            except OverflowError:
+                valid = False
+            if not valid:
+                raise TopologyError(
+                    f"link {field} {value!r} must be a finite int or float (bool is not accepted)"
+                )
         for param, sym, asym in (
             ("bandwidth", self.bandwidth, (self.bandwidth_a_to_b, self.bandwidth_b_to_a)),
             ("delay", self.delay, (self.delay_a_to_b, self.delay_b_to_a)),

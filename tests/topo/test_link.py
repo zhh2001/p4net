@@ -10,6 +10,83 @@ import pytest
 
 from p4net.topo import Link, LinkEndpoint, Topology, TopologyError
 
+_LOSS_FIELDS = (
+    "loss_pct",
+    "loss_pct_a_to_b",
+    "loss_pct_b_to_a",
+    "loss_pct_a_to_b_extra",
+    "loss_pct_b_to_a_extra",
+)
+
+
+def _make_loss_link(field: str, value: Any, source: str) -> Link:
+    values = {field: value}
+    if field.endswith("_extra"):
+        values["loss_pct"] = 0
+    if source == "descriptor":
+        return Link(LinkEndpoint("h1"), LinkEndpoint("h2"), **values)
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_host("h2")
+    if source == "builder":
+        before = topo.to_dict()
+        try:
+            return topo.add_link("h1", "h2", **values)
+        except Exception:
+            assert topo.to_dict() == before
+            raise
+    topo.add_link("h1", "h2")
+    data = topo.to_dict()
+    data["links"][0].update(values)
+    original = deepcopy(data)
+    try:
+        restored = Topology.from_dict(data)
+        restored.validate()
+        return restored.links[0]
+    finally:
+        assert data == original
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize("field", _LOSS_FIELDS)
+@pytest.mark.parametrize(
+    "value",
+    [True, False, "1", b"1", [], {}, 1 + 0j, float("nan"), float("inf"), -float("inf"), 10**400],
+)
+def test_loss_fields_reject_invalid_types_and_nonfinite_values(
+    source: str, field: str, value: Any
+) -> None:
+    with pytest.raises(TopologyError, match=rf"{field}.*finite"):
+        _make_loss_link(field, value, source)
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize("field", _LOSS_FIELDS)
+@pytest.mark.parametrize("value", [None, 0, 0.5, 100])
+def test_loss_fields_preserve_finite_numbers_and_none(
+    source: str, field: str, value: float | None
+) -> None:
+    actual = getattr(_make_loss_link(field, value, source), field)
+    assert actual == value
+    assert type(actual) is type(value)
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [(field, value) for field in _LOSS_FIELDS for value in (-0.5,)]
+    + [(field, 100.5) for field in _LOSS_FIELDS[:3]],
+)
+def test_loss_fields_keep_existing_ranges(source: str, field: str, value: float) -> None:
+    with pytest.raises(TopologyError, match=field):
+        _make_loss_link(field, value, source)
+
+
+@pytest.mark.parametrize("source", ["descriptor", "builder", "dictionary"])
+@pytest.mark.parametrize("field", _LOSS_FIELDS[3:])
+def test_loss_extra_keeps_existing_sum_validation_stage(source: str, field: str) -> None:
+    assert getattr(_make_loss_link(field, 101, source), field) == 101
+
 
 @pytest.mark.parametrize(
     "port", [True, False, -1, 1.0, 1.5, "1", b"1", float("nan"), float("inf"), [], {}]

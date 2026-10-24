@@ -61,6 +61,35 @@ def test_apply_netem_validates_loss(bad_loss: float) -> None:
         apply_netem(None, "veth0", loss_pct=bad_loss)
 
 
+@pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize(
+    "value",
+    [True, False, "1", b"1", [], {}, 1 + 0j, float("nan"), float("inf"), -float("inf"), 10**400],
+)
+def test_invalid_loss_rejected_before_running_tc(
+    fake_run: MagicMock, in_namespace: bool, value: Any
+) -> None:
+    namespace = MagicMock()
+    namespace.exec.return_value = _make_proc(0)
+    with pytest.raises(TcError, match="loss_pct"):
+        apply_netem(namespace if in_namespace else None, "veth0", loss_pct=value)
+    fake_run.assert_not_called()
+    namespace.exec.assert_not_called()
+
+
+@pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize("value", [0, 0.5, 100])
+def test_valid_loss_preserved_in_tc_arguments(
+    fake_run: MagicMock, in_namespace: bool, value: float
+) -> None:
+    namespace = MagicMock()
+    namespace.exec.return_value = _make_proc(0)
+    apply_netem(namespace if in_namespace else None, "veth0", loss_pct=value)
+    call = namespace.exec.call_args if in_namespace else fake_run.call_args
+    argv = call.args[0]
+    assert argv[argv.index("loss") + 1] == f"{value}%"
+
+
 def test_apply_netem_argv_with_loss(fake_run: MagicMock) -> None:
     apply_netem(None, "veth0", loss_pct=25.0)
     argv = fake_run.call_args.args[0]

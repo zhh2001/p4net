@@ -69,8 +69,13 @@ def apply_netem(
         _validate_time(delay, "delay")
     if jitter is not None:
         _validate_time(jitter, "jitter")
-    if loss_pct is not None and not 0.0 <= loss_pct <= 100.0:
-        raise TcError(f"loss_pct must be in [0.0, 100.0], got {loss_pct}")
+    if loss_pct is not None:
+        if isinstance(loss_pct, bool) or not isinstance(loss_pct, (int, float)):
+            raise TcError(
+                f"loss_pct must be an int or float (bool is not accepted), got {loss_pct!r}"
+            )
+        if not 0.0 <= loss_pct <= 100.0:
+            raise TcError(f"loss_pct must be in [0.0, 100.0], got {loss_pct}")
 
     argv = ["tc", "qdisc", "replace", "dev", iface, "root", "netem"]
     if delay is not None:
