@@ -945,6 +945,93 @@ def test_imported_similar_names_remain_distinct(host: str, switch: str) -> None:
 
 
 @pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "h1\n",
+        "abcdefghijkl\n",
+        "\nh1",
+        "h1\r\n",
+        "h1 ",
+        " h1",
+        "h1\t",
+        "h1\0",
+        "h1\nextra",
+        "abcdefghijklm",
+    ],
+)
+def test_node_names_require_the_complete_string(kind: str, name: str) -> None:
+    with pytest.raises(TopologyError, match=f"invalid {kind} name"):
+        if kind == "host":
+            Host(name)
+        else:
+            P4Switch(name, Path("p.p4"))
+
+
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("name", ["h1\n", "abcdefghijkl\n"])
+def test_builders_reject_node_name_newlines_without_adding_nodes(kind: str, name: str) -> None:
+    topo = Topology()
+    before = topo.to_dict()
+    with pytest.raises(TopologyError, match=f"invalid {kind} name"):
+        if kind == "host":
+            topo.add_host(name)
+        else:
+            topo.add_switch(name, Path("p.p4"))
+    assert topo.to_dict() == before
+
+
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("linked", [False, True])
+@pytest.mark.parametrize("name", ["h1\n", "abcdefghijkl\n"])
+def test_imported_node_name_newlines_rejected_without_changing_input(
+    kind: str, linked: bool, name: str
+) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    if linked:
+        topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    group, old = ("hosts", "h1") if kind == "host" else ("switches", "s1")
+    descriptor = data[group].pop(old)
+    descriptor["name"] = name
+    data[group][name] = descriptor
+    for link in data["links"]:
+        for endpoint in (link["a"], link["b"]):
+            if endpoint["node"] == old:
+                endpoint["node"] = name
+    original = deepcopy(data)
+    with pytest.raises(TopologyError, match=f"invalid {kind} name"):
+        Topology.from_dict(data)
+    assert data == original
+
+
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("name", ["a", "Node_1-z", "abcdefghijkl"])
+def test_complete_node_names_preserve_case_and_custom_interfaces(kind: str, name: str) -> None:
+    topo = Topology()
+    host, switch = (name, "s1") if kind == "host" else ("h1", name)
+    topo.add_host(host)
+    topo.add_switch(switch, Path("p.p4"))
+    data = topo.to_dict()
+    data["links"] = [
+        {
+            "a": {"node": host, "port": 0, "iface_name": "left"},
+            "b": {"node": switch, "port": 1, "iface_name": "right"},
+        }
+    ]
+    original = deepcopy(data)
+    restored = Topology.from_dict(data)
+    before = restored.to_dict()
+    restored.validate()
+    assert restored.node(name).name == name
+    assert restored.to_dict() == before and data == original
+    assert restored.links[0].a.iface_name == "left"
+    assert restored.links[0].b.iface_name == "right"
+
+
+@pytest.mark.parametrize("kind", ["host", "switch"])
 @pytest.mark.parametrize("layout", ["alias", "existing", "swapped"])
 @pytest.mark.parametrize("linked", [False, True])
 def test_imported_node_names_must_match_mapping_keys(kind: str, layout: str, linked: bool) -> None:

@@ -29,7 +29,7 @@ class Host:
     default_route6: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not NAME_RE.match(self.name):
+        if not isinstance(self.name, str) or not NAME_RE.fullmatch(self.name):
             raise TopologyError(f"invalid host name {self.name!r}: must match {NAME_RE.pattern}")
         for field in ("ip", "ip6", "default_route", "default_route6"):
             value = getattr(self, field)

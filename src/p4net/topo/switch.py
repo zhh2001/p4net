@@ -34,7 +34,7 @@ class P4Switch:
     pcap_enabled: bool = True
 
     def __post_init__(self) -> None:
-        if not isinstance(self.name, str) or not NAME_RE.match(self.name):
+        if not isinstance(self.name, str) or not NAME_RE.fullmatch(self.name):
             raise TopologyError(f"invalid switch name {self.name!r}: must match {NAME_RE.pattern}")
         # Coerce p4_src to Path (frozen dataclass: bypass via object.__setattr__).
         if not isinstance(self.p4_src, Path):

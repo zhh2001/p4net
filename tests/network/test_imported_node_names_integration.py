@@ -116,9 +116,42 @@ def test_imported_cross_kind_names_rejected_before_compilation(
         network.stop()
 
 
+@pytest.mark.parametrize("kind", ["host", "switch"])
+@pytest.mark.parametrize("linked", [False, True])
+@pytest.mark.parametrize("name", ["node\n", "abcdefghijkl\n"])
+def test_imported_name_newlines_rejected_before_compilation(
+    tmp_path: Path, kind: str, linked: bool, name: str
+) -> None:
+    topo, first, _second, switch = _topology(False)
+    data = topo.to_dict()
+    group, old = ("hosts", first) if kind == "host" else ("switches", switch)
+    descriptor = data[group].pop(old)
+    descriptor["name"] = name
+    data[group][name] = descriptor
+    for link in data["links"]:
+        for endpoint in (link["a"], link["b"]):
+            if endpoint["node"] == old:
+                endpoint["node"] = name
+    if not linked:
+        data["links"] = []
+    original = deepcopy(data)
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    logs = tmp_path / "logs"
+    with patch.object(compiler, "compile", wraps=compiler.compile) as compile_call:
+        with pytest.raises(TopologyError, match=f"invalid {kind} name"):
+            restored = Topology.from_dict(data)
+            with Network(restored, compiler=compiler, log_dir=logs):
+                pass
+        compile_call.assert_not_called()
+    assert not logs.exists()
+    assert data == original
+
+
 @pytest.mark.requires_p4c
 @pytest.mark.requires_bmv2
-@pytest.mark.parametrize("rename", ["host", "switch", "case", "prefix"])
+@pytest.mark.parametrize(
+    "rename", ["host", "switch", "case", "prefix", "host_limit", "switch_limit"]
+)
 @pytest.mark.parametrize("switch_first", [False, True])
 def test_consistent_imported_node_names_preserve_interfaces_and_forward(
     tmp_path: Path, rename: str, switch_first: bool
@@ -126,9 +159,11 @@ def test_consistent_imported_node_names_preserve_interfaces_and_forward(
     topo, first, second, switch = _topology(switch_first)
     data = topo.to_dict()
     side = "a" if switch_first else "b"
-    group, key = ("hosts", first) if rename == "host" else ("switches", switch)
+    group, key = ("hosts", first) if rename in {"host", "host_limit"} else ("switches", switch)
     changed = key + "x"
-    if rename == "case":
+    if rename.endswith("_limit"):
+        changed = "abcdefghijkl"
+    elif rename == "case":
         changed = first.upper()
     elif rename == "prefix":
         changed = first + "x"
@@ -139,7 +174,7 @@ def test_consistent_imported_node_names_preserve_interfaces_and_forward(
         for endpoint in (link["a"], link["b"]):
             if endpoint["node"] == key:
                 endpoint["node"] = changed
-    if rename == "host":
+    if rename in {"host", "host_limit"}:
         first = changed
     else:
         switch = changed
