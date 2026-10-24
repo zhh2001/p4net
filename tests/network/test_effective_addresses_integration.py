@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import socket
+import subprocess
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -172,7 +173,10 @@ def test_different_prefix_collisions_rejected_before_compilation(
 @pytest.mark.requires_p4c
 @pytest.mark.requires_bmv2
 @pytest.mark.parametrize("wide_prefix", [False, True])
-def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path, wide_prefix: bool) -> None:
+@pytest.mark.parametrize("mac_overrides", [False, True])
+def test_overridden_ipv4_defaults_forward_through_bmv2(
+    tmp_path: Path, wide_prefix: bool, mac_overrides: bool
+) -> None:
     suffix = uuid.uuid4().hex[:6]
     first, second, switch = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
     topo = Topology()
@@ -188,8 +192,26 @@ def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path, wide_pref
             grpc_port=grpc.getsockname()[1],
             thrift_port=thrift.getsockname()[1],
         )
-    topo.add_link(first, switch, port_a=0, port_b=0, ip_a=f"10.230.0.2/{16 if wide_prefix else 24}")
-    topo.add_link(switch, second, port_a=2, port_b=0)
+    first_mac = "02:AA:bb:CC:dd:01" if mac_overrides else "00:00:00:00:00:01"
+    second_mac = "02:aa:BB:cc:DD:02" if mac_overrides else "00:00:00:00:00:02"
+    switch_macs = ("02:AB:cd:EF:00:01", "02:ab:CD:ef:00:02")
+    topo.add_link(
+        first,
+        switch,
+        port_a=0,
+        port_b=0,
+        ip_a=f"10.230.0.2/{16 if wide_prefix else 24}",
+        mac_a=first_mac if mac_overrides else None,
+        mac_b=switch_macs[0] if mac_overrides else None,
+    )
+    topo.add_link(
+        switch,
+        second,
+        port_a=2,
+        port_b=0,
+        mac_a=switch_macs[1] if mac_overrides else None,
+        mac_b=second_mac if mac_overrides else None,
+    )
     before = topo.to_dict()
     topo.validate()
     with Network(
@@ -197,9 +219,29 @@ def test_overridden_ipv4_defaults_forward_through_bmv2(tmp_path: Path, wide_pref
     ) as network:
         assert network.host(first).primary_ip == "10.230.0.2"
         assert network.host(second).primary_ip == "10.230.0.1"
+        if mac_overrides:
+            for name, mac in ((first, first_mac), (second, second_mac)):
+                host = network.host(name)
+                interface = next(iter(host.interfaces))
+                result = json.loads(
+                    host.exec(
+                        ["ip", "-j", "link", "show", "dev", interface], capture_output=True
+                    ).stdout
+                )
+                assert result[0]["address"] == mac.lower()
+            for endpoint, mac in (
+                (topo.links[0].b, switch_macs[0]),
+                (topo.links[1].a, switch_macs[1]),
+            ):
+                result = json.loads(
+                    subprocess.check_output(
+                        ["ip", "-j", "link", "show", "dev", endpoint.iface_name], text=True
+                    )
+                )
+                assert result[0]["address"] == mac.lower()
         for sender, target, mac in (
-            (first, "10.230.0.1", "00:00:00:00:00:02"),
-            (second, "10.230.0.2", "00:00:00:00:00:01"),
+            (first, "10.230.0.1", second_mac),
+            (second, "10.230.0.2", first_mac),
         ):
             host = network.host(sender)
             host.exec(
@@ -256,6 +298,37 @@ def test_imported_integer_addresses_rejected_before_startup(tmp_path: Path, targ
     logs = tmp_path / "logs"
     with patch.object(compiler, "compile", wraps=compiler.compile) as compile_call:
         with pytest.raises(TopologyError, match=f"{field} must be a string or None"):
+            restored = Topology.from_dict(data)
+            with Network(restored, compiler=compiler, log_dir=logs):
+                pass
+        compile_call.assert_not_called()
+    assert not logs.exists()
+    assert data == original
+
+
+@pytest.mark.parametrize("target", ["host", "host_endpoint", "switch_endpoint"])
+@pytest.mark.parametrize("switch_first", [False, True])
+def test_imported_integer_macs_rejected_before_startup(
+    tmp_path: Path, target: str, switch_first: bool
+) -> None:
+    suffix = uuid.uuid4().hex[:6]
+    first, switch = f"h{suffix}", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(first, ip="10.230.0.1/24")
+    topo.add_switch(switch, _SOURCE)
+    topo.add_link(*((switch, first) if switch_first else (first, switch)))
+    data = topo.to_dict()
+    if target == "host":
+        owner = data["hosts"][first]
+    else:
+        side = "a" if (target == "switch_endpoint") == switch_first else "b"
+        owner = data["links"][0][side]
+    owner["mac"] = 17
+    original = deepcopy(data)
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    logs = tmp_path / "logs"
+    with patch.object(compiler, "compile", wraps=compiler.compile) as compile_call:
+        with pytest.raises(TopologyError, match=r"invalid.*MAC"):
             restored = Topology.from_dict(data)
             with Network(restored, compiler=compiler, log_dir=logs):
                 pass

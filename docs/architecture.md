@@ -70,6 +70,8 @@ Topology and runtime code use the same interface-name checks. Names must be UTF-
 
 Host addresses, default gateways and link address overrides accept only strings or `None`. Other types raise `TopologyError` when constructing `Host` or `LinkEndpoint`, including through `from_dict()`, without automatic conversion. Valid strings keep their original form, including bare addresses without a prefix length.
 
+MAC fields accept only strings or `None`, using six colon-separated hexadecimal octets. Invalid types or formats raise `TopologyError` when constructing descriptors, including through `from_dict()`. Accepted strings keep their original case. Endpoint MAC overrides apply to both hosts and switches.
+
 Address collision checks use the same address selection as network startup. A link endpoint's `ip` or `ip6` overrides the host default for that address family. Without an override, only the host's first declared link inherits its default. Overridden defaults and defaults on hosts without links do not participate in collision checks. The topology data is preserved.
 
 Different hosts cannot use the same effective IP address, regardless of prefix length. Different IP addresses with overlapping subnets are allowed, as is reusing an address on multiple interfaces of the same host.
