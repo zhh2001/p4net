@@ -86,6 +86,25 @@ def test_tc_strings_reject_trailing_newlines_before_running_tc(
 
 
 @pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize("field", ["rate", "delay", "jitter"])
+@pytest.mark.parametrize(
+    "number", ["\uff11", "\u0661", "\u0967", "1.\uff15", "\uff11.5", "1.\u0662"]
+)
+def test_tc_strings_reject_non_ascii_digits_before_running_tc(
+    fake_run: MagicMock, in_namespace: bool, field: str, number: str
+) -> None:
+    namespace = MagicMock()
+    namespace.exec.return_value = _make_proc(0)
+    values = {field: number + ("mbit" if field == "rate" else "ms")}
+    if field == "jitter":
+        values["delay"] = "10ms"
+    with pytest.raises(TcError, match=r"invalid (?:tc rate|delay|jitter)"):
+        apply_netem(namespace if in_namespace else None, "veth0", **values)
+    fake_run.assert_not_called()
+    namespace.exec.assert_not_called()
+
+
+@pytest.mark.parametrize("in_namespace", [False, True])
 @pytest.mark.parametrize(
     ("field", "value"),
     [

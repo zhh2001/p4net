@@ -22,10 +22,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _RATE_RE = re.compile(
-    r"^\d+(?:\.\d+)?\s*(?:bit|kbit|mbit|gbit|tbit|bps|kbps|mbps|gbps|tbps)$",
+    r"^[0-9]+(?:\.[0-9]+)?\s*(?:bit|kbit|mbit|gbit|tbit|bps|kbps|mbps|gbps|tbps)$",
     re.IGNORECASE,
 )
-_TIME_RE = re.compile(r"^\d+(?:\.\d+)?\s*(?:s|ms|us)$", re.IGNORECASE)
+_TIME_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)?\s*(?:s|ms|us)$", re.IGNORECASE)
 
 
 def _validate_rate(rate: str) -> None:

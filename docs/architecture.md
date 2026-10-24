@@ -42,7 +42,7 @@ This package provides the Linux and process operations used by the orchestrator:
 
 These objects manage individual resources. `Network` determines their creation and cleanup order. See the [runtime API](api/runtime.md).
 
-`apply_netem()` fully matches rate, delay and jitter strings before running `tc`. A trailing newline raises `TcError` without changing the existing qdisc.
+`apply_netem()` fully matches rate, delay and jitter strings before running `tc`. Numbers use ASCII digits `0` through `9`. Non-ASCII digits or a trailing newline raise `TcError` without changing the existing qdisc.
 
 BMv2 startup timeouts must be finite positive integers or floats, excluding `bool`. This applies to both `BMv2Switch(startup_timeout=...)` and `wait_until_ready(timeout=...)`; invalid values raise `ValueError`. Omitting the wait timeout or passing `None` uses the constructor's timeout, which defaults to 10 seconds. An invalid wait timeout leaves the running process unchanged.
 

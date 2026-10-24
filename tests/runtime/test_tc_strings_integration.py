@@ -66,6 +66,28 @@ def test_trailing_newline_preserves_existing_qdisc(
 
 
 @pytest.mark.parametrize("in_namespace", [False, True])
+@pytest.mark.parametrize("field", ["rate", "delay", "jitter"])
+@pytest.mark.parametrize(
+    "number", ["\uff11", "\u0661", "\u0967", "1.\uff15", "\uff11.5", "1.\u0662"]
+)
+def test_non_ascii_digits_preserve_existing_qdisc(
+    in_namespace: bool, field: str, number: str
+) -> None:
+    with _interface(in_namespace) as (namespace, interface):
+        apply_netem(namespace, interface, rate="8mbit", delay="2ms", jitter="0.5ms")
+        before = _state(namespace, interface)
+        assert before is not None
+        values = {field: number + ("mbit" if field == "rate" else "ms")}
+        if field == "jitter":
+            values["delay"] = "10ms"
+        with patch.object(tc, "_run", wraps=tc._run) as run:
+            with pytest.raises(TcError, match=r"invalid (?:tc rate|delay|jitter)"):
+                apply_netem(namespace, interface, **values)
+            run.assert_not_called()
+        assert _state(namespace, interface) == before
+
+
+@pytest.mark.parametrize("in_namespace", [False, True])
 @pytest.mark.parametrize(
     ("field", "value", "expected"),
     [

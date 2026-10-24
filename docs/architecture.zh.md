@@ -42,7 +42,7 @@ flowchart TB
 
 这些对象分别管理单个资源，创建和回收的顺序由 `Network` 决定。详见[运行时 API](api/runtime.md)。
 
-`apply_netem()` 在运行 `tc` 前完整匹配带宽、时延和抖动字符串。末尾换行会抛出 `TcError`，已有 qdisc 保持不变。
+`apply_netem()` 在运行 `tc` 前完整匹配带宽、时延和抖动字符串，数字部分只接受 ASCII `0` 到 `9`。非 ASCII 数字或末尾换行会抛出 `TcError`，已有 qdisc 保持不变。
 
 BMv2 启动超时只接受有限的正整数或浮点数，不接受 `bool`。`BMv2Switch(startup_timeout=...)` 与 `wait_until_ready(timeout=...)` 使用同一规则，非法值抛出 `ValueError`。等待超时省略或为 `None` 时，沿用构造参数，默认 10 秒。非法等待超时不会改变已运行进程的状态。
 
