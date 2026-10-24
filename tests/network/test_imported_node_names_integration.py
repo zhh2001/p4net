@@ -147,6 +147,28 @@ def test_imported_name_newlines_rejected_before_compilation(
     assert data == original
 
 
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize("kind", ["list", "dict", "int", "bool"])
+def test_imported_node_reference_types_rejected_before_compilation(
+    tmp_path: Path, side: str, kind: str
+) -> None:
+    topo, first, _second, _switch = _topology(False)
+    data = topo.to_dict()
+    values = {"list": [first], "dict": {"name": first}, "int": 1, "bool": True}
+    data["links"][0][side]["node"] = values[kind]
+    original = deepcopy(data)
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    logs = tmp_path / "logs"
+    with patch.object(compiler, "compile", wraps=compiler.compile) as compile_call:
+        with pytest.raises(TopologyError, match=rf"Link\.{side}\.node must be a non-empty string"):
+            restored = Topology.from_dict(data)
+            with Network(restored, compiler=compiler, log_dir=logs):
+                pass
+        compile_call.assert_not_called()
+    assert not logs.exists()
+    assert data == original
+
+
 @pytest.mark.requires_p4c
 @pytest.mark.requires_bmv2
 @pytest.mark.parametrize(

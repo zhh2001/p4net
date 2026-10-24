@@ -62,6 +62,8 @@ Host and switch names must be 1 to 12 ASCII characters, starting with a letter a
 
 Node names must be unique across hosts and switches. Node keys in `hosts` and `switches` must match each description's `name`, including nodes without links. `from_dict()` preserves both values, and `validate()` reports duplicate names or mismatches without changing the snapshot.
 
+`Link` requires each endpoint `node` reference to be a non-empty string. `from_dict()` checks this when constructing links and does not convert other types. Unknown string references are preserved and reported by `validate()`.
+
 `Topology.from_dict()` restores endpoint ports as stored. If an endpoint's `port` is omitted or `None`, `Topology.validate()` reports a `TopologyError` naming the link, endpoint and node. Network startup performs this check before compilation or network resource creation. Explicit port `0` is valid.
 
 `Topology.from_dict()` also restores interface names as stored. `Topology.validate()` rejects a missing, `None` or empty `iface_name`, identifying the link, endpoint and node. Valid custom names are preserved.

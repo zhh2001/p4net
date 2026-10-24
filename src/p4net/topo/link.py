@@ -64,6 +64,8 @@ class LinkEndpoint:
 class Link:
     """A bidirectional veth pair between two nodes, with optional impairments.
 
+    Endpoint node references must be non-empty strings.
+
     Symmetric impairments (``bandwidth`` / ``delay`` / ``jitter`` /
     ``loss_pct``) apply equally to both veth sides. Per-direction overrides
     (``*_a_to_b`` / ``*_b_to_a``) shape only one direction; mixing a symmetric
@@ -103,9 +105,9 @@ class Link:
             raise TopologyError("Link.a must be a LinkEndpoint")
         if not isinstance(self.b, LinkEndpoint):
             raise TopologyError("Link.b must be a LinkEndpoint")
-        if not self.a.node:
+        if not isinstance(self.a.node, str) or not self.a.node:
             raise TopologyError("Link.a.node must be a non-empty string")
-        if not self.b.node:
+        if not isinstance(self.b.node, str) or not self.b.node:
             raise TopologyError("Link.b.node must be a non-empty string")
         for param, sym, asym in (
             ("bandwidth", self.bandwidth, (self.bandwidth_a_to_b, self.bandwidth_b_to_a)),

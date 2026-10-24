@@ -944,6 +944,36 @@ def test_imported_similar_names_remain_distinct(host: str, switch: str) -> None:
     assert restored.to_dict() == data
 
 
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize("node", [True, 1, b"h1", ["h1"], {"name": "h1"}])
+def test_imported_endpoint_node_types_rejected_without_changing_input(side: str, node: Any) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    data["links"][0][side]["node"] = node
+    original = deepcopy(data)
+    with pytest.raises(TopologyError, match=rf"Link\.{side}\.node must be a non-empty string"):
+        Topology.from_dict(data)
+    assert data == original
+
+
+@pytest.mark.parametrize("side", ["a", "b"])
+def test_imported_unknown_string_node_remains_a_validation_error(side: str) -> None:
+    topo = Topology()
+    topo.add_host("h1")
+    topo.add_switch("s1", Path("p.p4"))
+    topo.add_link("h1", "s1")
+    data = topo.to_dict()
+    data["links"][0][side]["node"] = "unknown"
+    restored = Topology.from_dict(data)
+    assert restored.to_dict() == data
+    with pytest.raises(TopologyError, match="unknown node 'unknown'"):
+        restored.validate()
+    assert restored.to_dict() == data
+
+
 @pytest.mark.parametrize("kind", ["host", "switch"])
 @pytest.mark.parametrize(
     "name",

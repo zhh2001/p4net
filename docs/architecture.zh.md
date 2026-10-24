@@ -62,6 +62,8 @@ flowchart TB
 
 同一拓扑中，主机与交换机不能同名。节点字典键必须与节点名称一致，包括未连接链路的节点。`from_dict()` 保留 `hosts`、`switches` 的字典键和 `name`，`validate()` 会报告重名或名称不一致，并保留快照。
 
+`Link` 的端点 `node` 引用必须为非空字符串。`from_dict()` 在构造链路时检查，不转换其他类型。未知的字符串引用按原样保留，由 `validate()` 报告节点不存在。
+
 `Topology.from_dict()` 按快照还原端口，不自动分配。链路端点的 `port` 缺失或为 `None` 时，`Topology.validate()` 会报 `TopologyError`，指出链路序号、端点和节点。网络启动会在编译及创建网络资源前检查这个问题。显式端口 `0` 仍是合法值。
 
 `iface_name` 也按快照还原。该字段缺失、为 `None` 或空字符串时，校验会报 `TopologyError`，指出链路序号、端点和节点。合法的自定义接口名保持不变。

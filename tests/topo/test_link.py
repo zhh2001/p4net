@@ -31,6 +31,21 @@ def test_minimal_link() -> None:
     assert link.delay is None
 
 
+@pytest.mark.parametrize("side", ["a", "b"])
+@pytest.mark.parametrize("node", [None, False, True, 0, 1, 1.5, b"h1", ["h1"], {"name": "h1"}, ""])
+def test_link_requires_nonempty_string_node_references(side: str, node: Any) -> None:
+    endpoints = {"a": LinkEndpoint("h1"), "b": LinkEndpoint("s1")}
+    endpoints[side] = LinkEndpoint(node=node)
+    with pytest.raises(TopologyError, match=rf"Link\.{side}\.node must be a non-empty string"):
+        Link(**endpoints)
+
+
+@pytest.mark.parametrize("node", ["h1", "Host_1-z", "not_present_yet"])
+def test_link_keeps_string_node_references_without_resolving_them(node: str) -> None:
+    link = Link(a=LinkEndpoint(node), b=LinkEndpoint("s1"))
+    assert link.a.node == node
+
+
 def test_link_is_frozen() -> None:
     link = Link(a=LinkEndpoint(node="h1"), b=LinkEndpoint(node="s1"))
     with pytest.raises(dataclasses.FrozenInstanceError):
