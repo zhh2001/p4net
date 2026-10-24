@@ -499,6 +499,82 @@ def test_stop_before_start_is_noop(tmp_path: Path) -> None:
     sw.stop()  # must not raise
 
 
+@pytest.mark.parametrize("state", ["unstarted", "running", "exited"])
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        0,
+        -0.5,
+        -10.0,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        True,
+        False,
+        None,
+        "1",
+        b"1",
+        [],
+        {},
+        10**400,
+    ],
+)
+def test_stop_rejects_invalid_timeout_without_side_effects(
+    tmp_path: Path, mocker: MockerFixture, state: str, timeout: object
+) -> None:
+    _patch_which(mocker)
+    process = _patch_popen(mocker).return_value
+    switch = _make_switch(tmp_path)
+    if state != "unstarted":
+        switch.start()
+    if state == "exited":
+        process.poll.return_value = 0
+    timestamp = switch.boot_timestamp_us
+    handle = switch._log_file_handle
+    try:
+        with pytest.raises(ValueError, match=r"timeout.*positive"):
+            switch.stop(timeout=timeout)  # type: ignore[arg-type]
+        process.poll.assert_not_called()
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+        process.wait.assert_not_called()
+        assert switch.boot_timestamp_us == timestamp
+        assert switch._log_file_handle is handle
+        if handle is not None:
+            assert not handle.closed
+        else:
+            assert not switch.log_file.parent.exists()
+    finally:
+        switch.stop()
+
+
+@pytest.mark.parametrize("state", ["unstarted", "running", "exited"])
+@pytest.mark.parametrize("timeout", [1, 1.5])
+def test_stop_accepts_finite_positive_timeout(
+    tmp_path: Path, mocker: MockerFixture, state: str, timeout: float
+) -> None:
+    _patch_which(mocker)
+    process = _patch_popen(mocker).return_value
+    switch = _make_switch(tmp_path)
+    if state != "unstarted":
+        switch.start()
+    if state == "exited":
+        process.poll.return_value = 0
+    handle = switch._log_file_handle
+    switch.stop(timeout=timeout)
+    if state == "running":
+        process.terminate.assert_called_once()
+        process.wait.assert_called_once_with(timeout=timeout)
+    else:
+        process.terminate.assert_not_called()
+        process.wait.assert_not_called()
+    process.kill.assert_not_called()
+    assert switch.boot_timestamp_us is None
+    assert switch._log_file_handle is None
+    if handle is not None:
+        assert handle.closed
+
+
 def test_stop_after_already_exited_is_noop(tmp_path: Path, mocker: MockerFixture) -> None:
     _patch_which(mocker)
     proc = MagicMock()
@@ -528,7 +604,10 @@ def test_stop_terminates_running_process(tmp_path: Path, mocker: MockerFixture) 
     proc.kill.assert_not_called()
 
 
-def test_stop_escalates_to_sigkill_on_timeout(tmp_path: Path, mocker: MockerFixture) -> None:
+@pytest.mark.parametrize("timeout", [1, 1.5])
+def test_stop_escalates_to_sigkill_on_timeout(
+    tmp_path: Path, mocker: MockerFixture, timeout: float
+) -> None:
     _patch_which(mocker)
     proc = MagicMock()
     proc.pid = 1
@@ -540,9 +619,10 @@ def test_stop_escalates_to_sigkill_on_timeout(tmp_path: Path, mocker: MockerFixt
     _patch_popen(mocker, proc=proc)
     sw = _make_switch(tmp_path)
     sw.start()
-    sw.stop(timeout=1.0)
+    sw.stop(timeout=timeout)
     proc.terminate.assert_called_once()
     proc.kill.assert_called_once()
+    assert proc.wait.call_args_list == [mocker.call(timeout=timeout), mocker.call(timeout=timeout)]
 
 
 def test_stop_is_idempotent(tmp_path: Path, mocker: MockerFixture) -> None:

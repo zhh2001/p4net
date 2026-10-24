@@ -173,6 +173,8 @@ The cleanup order is:
 4. Veth pairs, then host namespaces.
 5. Cleanup registry entries and running-node handles.
 
+`BMv2Switch.stop(timeout=...)` requires a finite positive integer or float, excluding `bool`. Invalid values raise `ValueError` before checking process state or sending signals, including when the process has not started or has already exited. Valid calls retain the normal cleanup and repeated-call behavior.
+
 Repeated cleanup calls share the shutdown operation. Cleanup logs an error from one resource and continues with the others. After `fork()`, the child has an empty network registry and its own signal-cleanup state, so its cleanup does not stop the parent's networks. See the [fork limitation](known-limitations.md#1-grpc-connections-and-process-creation) for gRPC connections.
 
 ### IPv6 sysctl gating before interface up

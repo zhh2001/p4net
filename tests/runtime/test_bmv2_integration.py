@@ -261,6 +261,82 @@ def test_collision_with_running_bmv2_preserves_original(
 
 
 @pytest.mark.requires_p4c
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        0,
+        -0.5,
+        -10.0,
+        float("nan"),
+        float("inf"),
+        -float("inf"),
+        True,
+        False,
+        None,
+        "1",
+        b"1",
+        [],
+        {},
+        10**400,
+    ],
+)
+def test_invalid_stop_timeout_preserves_running_process(
+    compiled_json: Path, tmp_path: Path, timeout: object
+) -> None:
+    with BMv2Switch(
+        "s_stopbad",
+        device_id=0,
+        grpc_port=_free_port(),
+        thrift_port=_free_port(),
+        bmv2_json=compiled_json,
+        port_to_iface={},
+        log_dir=tmp_path / "logs",
+    ) as switch:
+        pid, timestamp = switch.pid, switch.boot_timestamp_us
+        handle = switch._log_file_handle
+        with pytest.raises(ValueError, match=r"timeout.*positive"):
+            switch.stop(timeout=timeout)  # type: ignore[arg-type]
+        assert switch.pid == pid and switch.is_running()
+        assert switch.boot_timestamp_us == timestamp
+        assert switch._log_file_handle is handle and not handle.closed
+        switch.wait_until_ready(timeout=1.0)
+    assert not switch.is_running()
+    assert switch.boot_timestamp_us is None
+    assert handle.closed
+
+
+@pytest.mark.requires_p4c
+@pytest.mark.parametrize("timeout", [1, 1.5])
+@pytest.mark.parametrize("already_exited", [False, True])
+def test_finite_stop_timeout_cleans_up_real_process(
+    compiled_json: Path, tmp_path: Path, timeout: float, already_exited: bool
+) -> None:
+    switch = BMv2Switch(
+        "s_stopgood",
+        device_id=0,
+        grpc_port=_free_port(),
+        thrift_port=_free_port(),
+        bmv2_json=compiled_json,
+        port_to_iface={},
+        log_dir=tmp_path / "logs",
+    )
+    switch.start()
+    try:
+        switch.wait_until_ready()
+        handle = switch._log_file_handle
+        if already_exited:
+            switch.kill()
+        switch.stop(timeout=timeout)
+        assert not switch.is_running()
+        assert switch.returncode() is not None
+        assert switch.boot_timestamp_us is None
+        assert switch._log_file_handle is None and handle.closed
+        switch.stop(timeout=timeout)
+    finally:
+        switch.kill()
+
+
+@pytest.mark.requires_p4c
 def test_stop_idempotent_on_real_process(compiled_json: Path, tmp_path: Path) -> None:
     sw = BMv2Switch(
         "s_idem",

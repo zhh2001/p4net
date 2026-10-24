@@ -52,7 +52,7 @@ _VALID_LOG_LEVELS: frozenset[str] = frozenset({"trace", "debug", "info", "warn",
 _READY_POLL_INTERVAL = 0.1
 
 
-def _validate_ready_timeout(value: float, name: str) -> None:
+def _validate_timeout(value: float, name: str) -> None:
     try:
         valid = (
             isinstance(value, (int, float))
@@ -109,7 +109,7 @@ class BMv2Switch:
             raise ValueError(
                 f"invalid log_level {log_level!r}: must be one of {sorted(_VALID_LOG_LEVELS)}"
             )
-        _validate_ready_timeout(startup_timeout, "startup_timeout")
+        _validate_timeout(startup_timeout, "startup_timeout")
         self._name = name
         self._device_id = device_id
         self._grpc_port = grpc_port
@@ -267,7 +267,7 @@ class BMv2Switch:
         if not self._started or self._proc is None:
             raise BMv2StartupError(f"BMv2 {self._name!r} has not been started; call start() first")
         effective_timeout = self._startup_timeout if timeout is None else timeout
-        _validate_ready_timeout(effective_timeout, "timeout")
+        _validate_timeout(effective_timeout, "timeout")
         deadline = time.monotonic() + effective_timeout
         start_time = time.monotonic()
         try:
@@ -355,7 +355,12 @@ class BMv2Switch:
         return inodes
 
     def stop(self, *, timeout: float = 5.0) -> None:
-        """Send SIGTERM, escalate to SIGKILL on timeout. Idempotent."""
+        """Send SIGTERM, escalate to SIGKILL on timeout. Idempotent.
+
+        The timeout must be a finite positive number, excluding bool. Invalid
+        values raise ValueError before checking process state or sending signals.
+        """
+        _validate_timeout(timeout, "timeout")
         if self._proc is None:
             return
         if self._proc.poll() is not None:
