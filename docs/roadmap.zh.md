@@ -25,6 +25,7 @@ description: p4net 的版本里程碑、候选扩展，以及各项提议对应�
 | 1.5.1 | 2026-05-12 | 调整多跳 INT 集成测试的断言。 |
 | 1.6.0 | 2026-05-14 | 以暂定 API 引入异步 P4Runtime 客户端、交换机异步客户端惰性属性和异步并发示例。 |
 | 1.7.0 | 2026-05-14 | `AsyncP4RuntimeClient`、`AsyncOperationCancelledError` 和 `RunningSwitch.async_client` 升为稳定 API。 |
+| 1.8.0 | 2026-10-25 | 异步网络启停、CLI 三态与范围匹配、性能评测工具，以及编译、连接和拓扑修复。 |
 
 ## 1.x 候选项（仅追加，不破坏 API）
 

@@ -67,4 +67,6 @@ with Network(topo) as net:
 
 ## 项目状态
 
-p4net 当前为 **v1.7.0**——稳定版本。公共 API 已按 [API 稳定性](api-stability.md)做出承诺：标为稳定的符号在 1.x 内不会被破坏。补丁版本只修 bug；小版本以追加方式新增功能。在 v1.0.0 稳定性基础之上，1.1–1.5 加入了单交换机与多跳 INT 示例、统一的 `p4net.*` logger 层次、按方向叠加的链路损伤、`P4RuntimeClient` 的寄存器读写 API、用于跨交换机 INT 对齐的 `RunningSwitch.boot_timestamp_us` 与 `Network.boot_timestamps`，以及环境变量驱动的协调文件路径以避免并行多跳 INT 拓扑互相覆盖。v1.6 引入 [`AsyncP4RuntimeClient`](async-client.md)——基于 `grpc.aio` 的异步并行客户端——并以 `RunningSwitch.async_client` 惰性暴露；v1.7 在真实使用磨合期后将这些符号由「临时」升级为**稳定**，兑现 1.6 在 API 稳定性页中的承诺。完整版本历史见 [变更日志](changelog.md)；已知边界见[已知限制](known-limitations.md)；后续计划见 [路线图](roadmap.md)。
+p4net **v1.8.0** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
+
+本版本新增异步网络启停、CLI 的三态与范围匹配，以及可复现的性能评测工具，并修复编译缓存、连接清理、接口放置和拓扑校验问题。具体变化及升级方法见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。

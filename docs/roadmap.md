@@ -6,9 +6,7 @@ description: p4net release milestones, candidate extensions, and the current beh
 
 ## About this document
 
-This page records released milestones and candidate extensions. Discuss designs
-and release scope in the [issue tracker](https://github.com/zhh2001/p4net/issues)
-or a pull request. Public interfaces follow the [API stability policy](api-stability.md).
+This page records released milestones and candidate extensions. Discuss designs and release scope in the [issue tracker](https://github.com/zhh2001/p4net/issues) or a pull request. Public interfaces follow the [API stability policy](api-stability.md).
 
 ## Released milestones
 
@@ -27,65 +25,37 @@ See the [changelog](changelog.md) for complete release notes.
 | 1.5.1 | 2026-05-12 | Revised multi-hop INT integration assertions. |
 | 1.6.0 | 2026-05-14 | Provisional async P4Runtime client, lazy switch client access, and the async concurrent example. |
 | 1.7.0 | 2026-05-14 | `AsyncP4RuntimeClient`, `AsyncOperationCancelledError`, and `RunningSwitch.async_client` became stable. |
+| 1.8.0 | 2026-10-25 | Async network lifecycle, CLI ternary/range matches, benchmark tooling, and compiler, connection and topology fixes. |
 
 ## 1.x candidates (additive, no API breakage)
 
-This page does not assign a new feature to a specific 1.x release. Compatible
-fixes and additions follow the API stability policy.
+This page does not assign a new feature to a specific 1.x release. Compatible fixes and additions follow the API stability policy.
 
 ## 2.0 candidates (may require API breakage)
 
-These directions need design work before their interfaces and release scope
-can be decided. Adding a separate method or class can preserve compatibility.
-An incompatible change to a stable API must complete the deprecation cycle and
-ship in a new major version.
+These directions need design work before their interfaces and release scope can be decided. Adding a separate method or class can preserve compatibility. An incompatible change to a stable API must complete the deprecation cycle and ship in a new major version.
 
 ### PSA architecture support
 
-`Topology.add_switch()` already has an `arch` parameter, currently restricted
-to `"v1model"`. `Network` launches `simple_switch_grpc`. PSA support needs
-integration with a matching compiler and runtime target. BMv2 documents its
-separate [target implementations](https://github.com/p4lang/behavioral-model/blob/main/targets/README.md).
+`Topology.add_switch()` already has an `arch` parameter, currently restricted to `"v1model"`. `Network` launches `simple_switch_grpc`. PSA support needs integration with a matching compiler and runtime target. BMv2 documents its separate [target implementations](https://github.com/p4lang/behavioral-model/blob/main/targets/README.md).
 
-Work includes target selection, startup arguments and readiness checks, pipeline
-installation, and tests for table, counter, register, and packet I/O operations.
-`P4InfoIndex` and controller metadata handling need validation against the new
-target's P4Info. The design must determine which existing interfaces can be
-reused and whether any public interface needs to change.
+Work includes target selection, startup arguments and readiness checks, pipeline installation, and tests for table, counter, register, and packet I/O operations. `P4InfoIndex` and controller metadata handling need validation against the new target's P4Info. The design must determine which existing interfaces can be reused and whether any public interface needs to change.
 
 ### Live topology mutation
 
-`Topology` remains a mutable description after `Network.start()`. Adding a host
-or link to that description does not create running resources. `Network` has
-no live node or link add/remove interface.
+`Topology` remains a mutable description after `Network.start()`. Adding a host or link to that description does not create running resources. `Network` has no live node or link add/remove interface.
 
-Live operations need to keep the description, running-node handles, namespaces,
-interfaces, port assignments, and control-plane state consistent. The design
-also needs rollback when an operation fails and cleanup when the network stops.
-The current workflow is to stop the network, edit its description, and create
-and start a new `Network`. See [topology changes](known-limitations.md#4-live-topology-mutation-not-supported).
+Live operations need to keep the description, running-node handles, namespaces, interfaces, port assignments, and control-plane state consistent. The design also needs rollback when an operation fails and cleanup when the network stops. The current workflow is to stop the network, edit its description, and create and start a new `Network`. See [topology changes](known-limitations.md#4-live-topology-mutation-not-supported).
 
 ### AsyncNetwork
 
-`AsyncP4RuntimeClient` supports concurrent RPC operations. `await net.astart()`
-runs network startup in a worker thread, and `await net.astop()` waits for
-shutdown. The synchronous `Network.start()` starts BMv2 switches sequentially,
-waiting for each switch to be ready before starting the next.
+`AsyncP4RuntimeClient` supports concurrent RPC operations. `await net.astart()` runs network startup in a worker thread, and `await net.astop()` waits for shutdown. The synchronous `Network.start()` starts BMv2 switches sequentially, waiting for each switch to be ready before starting the next.
 
-Use `astart()` from the main thread's event loop to install signal cleanup
-before startup. Cancellation waits for startup and cleanup before propagating.
-Keep async clients' event loops running until shutdown finishes. See the
-[async lifecycle guide](async-client.md#shutting-down-a-network).
+Use `astart()` from the main thread's event loop to install signal cleanup before startup. Cancellation waits for startup and cleanup before propagating. Keep async clients' event loops running until shutdown finishes. See the [async lifecycle guide](async-client.md#shutting-down-a-network).
 
-A future `AsyncNetwork` could build on these lifecycle methods, for example
-by adding an async context manager or coordinating multiple networks. Such
-additions can preserve the synchronous lifecycle.
+A future `AsyncNetwork` could build on these lifecycle methods, for example by adding an async context manager or coordinating multiple networks. Such additions can preserve the synchronous lifecycle.
 
 ## Indefinitely deferred
 
-- **Distributed experiments.** `Network` manages resources on one Linux machine.
-  Multi-machine orchestration needs remote resource management, links between
-  hosts, and coordination of setup and cleanup.
-- **Web interface.** The current interfaces provide an interactive CLI and
-  Graphviz topology export. Browser-based visualization and control are outside
-  the candidate work listed above.
+- **Distributed experiments.** `Network` manages resources on one Linux machine. Multi-machine orchestration needs remote resource management, links between hosts, and coordination of setup and cleanup.
+- **Web interface.** The current interfaces provide an interactive CLI and Graphviz topology export. Browser-based visualization and control are outside the candidate work listed above.
