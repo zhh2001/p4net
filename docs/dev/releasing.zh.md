@@ -1,161 +1,127 @@
 ---
-description: 切发版的运行手册——版本校验、版本号变更、CHANGELOG、构建 wheel、TestPyPI、PyPI、打 tag、发布说明。
+description: 确定版本、验证候选代码，构建并检查 wheel 和源码发布包。
 ---
 
-# 发版流程
+# 发布流程 { #发版流程 }
 
-切 p4net 发版的运行手册。下面以 v0.1.0 切版为示例——把
-`X.Y.Z` 替换为你正在发布的版本号。
+在 Linux 检出项目，并安装[开发与文档依赖](../getting-started/installation.md#从源码安装)。以下命令在仓库根目录的虚拟环境中运行。将 `X.Y.Z` 替换为本次版本号，构建和安装验证使用同一个 shell。
 
-## 何时切发版
+## 选择版本 { #何时切发版 }
 
-- **补丁版（`0.1.x`）**。仅向后兼容的 bug 修复。无新功能、无对
-  现有用户产生意外行为变化。
-- **次版本（`0.Y.0`）**。新功能，但不破坏 v0.1 API。删除或重命名
-  公开符号 *不算* 次版本变更。
-- **主版本（`X.0.0`）**。保留给 `1.0.0`（API 稳定承诺）以及之后
-  任何破坏性变更。
+最终验证前确定发布范围，列出尚未解决的问题，明确哪些问题必须在本次发布前处理。
 
-不要每次提交都切发版。发版给用户提供锚点；内部重构不需要单独
-发版。
+| 版本 | 适用变更 |
+| --- | --- |
+| 补丁版 `X.Y.Z` | 保持兼容的缺陷修复。 |
+| 次版本 `X.Y.0` | 保持兼容的公开接口新增。 |
+| 主版本 `X.0.0` | 完成弃用周期后，对稳定接口进行不兼容变更。 |
 
-## 发版前检查
+对照上一版本核对名称、签名、文档规定的行为和拓扑快照格式，按各接口的 [API 稳定性约定](../api-stability.md) 判断兼容性。稳定和暂定接口遵循各自的弃用规则，实验性接口按其分级处理。有调用方式变更时，写明迁移步骤。
 
-在 `main` 分支的干净检出上运行：
+## 验证候选版本 { #发版前检查 }
 
-```
-git status -sb                 # 必须干净
-git pull --ff-only origin main
-ruff check .
-ruff format --check .
-mypy src/p4net
-pytest
-pre-commit run --all-files
-```
+使用干净的工作区，记录候选提交。先确认外部工具可用，再检查代码规范、格式、类型、文档和完整运行测试：
 
-接着运行需要额外二进制或 root 的标记套件：
-
-```
-echo "$SUDO_PASS" | sudo -S "$(which pytest)" -m integration --run-integration
-pytest --run-p4c -m requires_p4c
-pytest --run-bmv2 --run-p4c -m requires_bmv2
-sudo -E env "PATH=$PATH" pytest \
-    --run-integration --run-p4c --run-bmv2 \
-    -m "integration and requires_p4c and requires_bmv2"
+```bash
+git status --short
+git rev-parse HEAD
+p4c --version
+simple_switch_grpc --version
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy src/p4net tools/benchmark.py
+python -m mkdocs build --strict
+sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
+  --run-integration --run-p4c --run-bmv2
 ```
 
-覆盖率目标（来自上面的合并运行）：
+三个 pytest 开关在同一次运行中启用。不同 Python 环境串行测试，避免共享的命名空间和接口清理相互影响。记录 Python、p4c、BMv2 版本、测试结果、警告、跳过及未选中的用例，并检查测试命名空间、接口和 BMv2 进程已回收。
 
-- `p4net.control` ≥ 90%
-- `p4net.network` ≥ 85%
-- `p4net.cli` ≥ 85%
+当前 [CI 工作流](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml) 覆盖 Ubuntu 22.04、24.04 上的 Python 3.10～3.13，另有 root 集成测试和安装包检查。版本矩阵运行默认测试集，root 任务没有安装 p4c、BMv2，因此完整工具链测试仍需在准备好的 Linux 环境中执行。文档工作流使用 Python 3.10、3.12 严格构建。最终候选提交的两个工作流都应通过。
 
-合规性 grep 必须干净（不存在任何第三方作者归属字样）。
+## 更新版本与变更日志 { #版本号变更 }
 
-## 版本号变更
+将 `pyproject.toml` 的 `project.version` 和 `src/p4net/__init__.py` 的 `__version__` 设为同一版本。
 
-修改两个文件：
+<span id="changelog"></span>
 
-- `pyproject.toml`：`version = "X.Y.Z"`。
-- `src/p4net/__init__.py`：`__version__ = "X.Y.Z"`。
+检查上一版本以来的提交，补齐 [CHANGELOG.md](../changelog.md)，按新增、变更和修复整理用户可见的内容，并说明兼容性影响。将本次内容放在 `## [X.Y.Z] - YYYY-MM-DD` 下，顶部保留空的 `## [Unreleased]`。日期以本机系统时间为准：
 
-提交：
-
-```
-git commit -am "chore: bump version to X.Y.Z"
+```bash
+release_version=X.Y.Z
+date +%F
 ```
 
-## CHANGELOG
+提交版本信息后，记录最终提交，再构建交付包。验证后若代码或元数据发生变化，重新运行受影响的检查，并从该提交重新构建。
 
-把 `## [Unreleased]` 中的内容移到新的 `## [X.Y.Z] - YYYY-MM-DD`
-（UTC 日期）下，然后在最上方重新加一个空的 `## [Unreleased]`。
-如果版本号提交本身很小，把 CHANGELOG 改动并入；否则单独提交：
+## 构建 wheel 和源码包 { #构建-wheel }
 
-```
-git commit -am "chore: update CHANGELOG for X.Y.Z"
-```
+安装构建工具，创建独立的输出目录。`python -m build` 同时生成 wheel 和源码包，[Twine check](https://twine.readthedocs.io/en/stable/#twine-check) 检查包的描述能否在 PyPI 正确渲染。
 
-## 构建 wheel
-
-```
-pip install --upgrade build
-rm -rf dist
-python -m build
-ls -la dist/
-unzip -p dist/p4net-X.Y.Z-py3-none-any.whl p4net/__init__.py | grep __version__
+```bash
+set -e
+python -m pip install build twine
+mkdir -p dist
+release_dir="$(mktemp -d "$PWD/dist/p4net-release.XXXXXX")"
+python -m build --outdir "$release_dir"
+python -m twine check --strict "$release_dir"/*.whl "$release_dir"/*.tar.gz
 ```
 
-最后一行必须打印 `__version__ = "X.Y.Z"`。否则 wheel 元数据
-过时——继续之前先排查。
+核对包内容和版本。wheel 应包含库代码，源码包应包含 `pyproject.toml` 选定的源码、文档、示例和测试。CI 的安装包任务会将源码包的文件清单和内容与 Git 已跟踪文件逐一比对。
 
-## TestPyPI 冒烟测试
+## 分别验证两种安装方式
 
-先上传到 TestPyPI，再在新的虚拟环境里安装一遍，验证元数据与运行
-时行为：
+将 wheel 和源码包安装到两个全新环境，检查依赖、版本一致性和命令行入口。导入与命令行检查在源码目录之外执行：
 
-```
-pip install --upgrade twine
-python -m twine upload --repository testpypi dist/p4net-X.Y.Z-py3-none-any.whl
+```bash
+smoke_dir="$(mktemp -d "${TMPDIR:-/tmp}/p4net-install.XXXXXX")"
+for kind in wheel sdist; do
+  env_path="$smoke_dir/$kind"
+  python -m venv "$env_path"
+  if [ "$kind" = wheel ]; then
+    "$env_path/bin/python" -m pip install "$release_dir"/*.whl
+  else
+    "$env_path/bin/python" -m pip install "$release_dir"/*.tar.gz
+  fi
+  "$env_path/bin/python" -m pip check
+  (
+    cd "$smoke_dir"
+    "$env_path/bin/python" -I - "$release_version" <<'PY'
+import importlib.metadata
+import sys
 
-python -m venv /tmp/p4net-testpypi
-source /tmp/p4net-testpypi/bin/activate
-pip install --index-url https://test.pypi.org/simple/ \
-            --extra-index-url https://pypi.org/simple/ \
-            p4net==X.Y.Z
-python -c "import p4net; print(p4net.__version__)"
-```
+import p4net
 
-`--extra-index-url https://pypi.org/simple/` 必须加上，让传递依赖
-（`grpcio`、`prompt_toolkit` 等）从真正的 PyPI 解析，而不是从
-TestPyPI 那个小得多的镜像里找。
-
-## 发布到 PyPI
-
-使用项目级 API token（PyPI → Account settings → API tokens →
-Add API token，scope 选 "Project: p4net"）。把它作为
-`__token__` 的密码存到 `~/.pypirc`，或在命令行传入：
-
-```
-python -m twine upload dist/p4net-X.Y.Z-py3-none-any.whl
-```
-
-在 `https://pypi.org/project/p4net/X.Y.Z/` 验证发布记录。
-
-## 打 tag
-
-只用带注解的 tag——`pip install p4net==X.Y.Z` 的用户会看到 tag
-元数据，`git describe` 读取的也是它：
-
-```
-git tag -a vX.Y.Z -m "p4net X.Y.Z"
-git push origin vX.Y.Z
-git ls-remote --tags origin | grep vX.Y.Z
+assert importlib.metadata.version("p4net") == p4net.__version__ == sys.argv[1]
+print(p4net.__version__, p4net.__file__)
+PY
+    "$env_path/bin/p4net" --help
+  )
+done
 ```
 
-最后一行应该有一条记录，其反引用提交（`^{}`）与 `main` 顶端
-一致。
+在本次验证矩阵的各 Python 版本中重复安装检查，并通过已安装的包验证本次变更涉及的功能。涉及编译或交换机运行时，要覆盖真实 p4c、BMv2 操作。日志与候选提交、工具版本一同保存。
 
-## GitHub 发布说明
+## 整理本地交付包
 
-从 `CHANGELOG.md` 中抽取本次发版段落，作为 GitHub Release notes
-发布：
+将源码提交、变更日志和校验文件保存在发布包目录：
 
+```bash
+git rev-parse HEAD > "$release_dir/REVISION"
+cp CHANGELOG.md "$release_dir/CHANGELOG.md"
+(
+  cd "$release_dir"
+  sha256sum ./*.whl ./*.tar.gz > SHA256SUMS
+  sha256sum --check SHA256SUMS
+)
 ```
-gh release create vX.Y.Z \
-   --notes-file <(sed -n '/## \[X.Y.Z\]/,/## \[/p' CHANGELOG.md | sed '$d')
-```
 
-如果想在 Release 页面挂上离线可装的产物，把 wheel 作为附件
-传上去。
+交付 wheel、源码包、`SHA256SUMS`、`REVISION`、变更日志和验证摘要，注明测试系统、Python 与工具链版本，以及未执行的检查。性能结果应标明实际测量的提交；需要重新采集时，按[性能指南](../performance.md)准备稳定的测量环境。
 
-## 发版后
+## 公开发布
 
-- 不要改回 `-dev` 标记。`pyproject.toml` 一直保持已发布版本，
-  直到下一次变更。
-- 如果发版后浮现问题（损坏的 sdist、错误的元数据、安装回归），
-  开一个标签为 `release-followup` 的 issue，再切补丁版。不要
-  撤回已发布的 wheel——在 PyPI 上把它 yank（标记为不推荐安装），
-  这样已经把版本钉死的用户的 `pip install p4net==X.Y.Z` 仍然
-  能工作。
-- 如果新版本关闭了路线图「下一发版」中的某些条目，相应更新
-  路线图。
+公开发布时，用 `vX.Y.Z` 标签标识已验证的源码提交。根据变更日志撰写 [GitHub 发布说明](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)，附上已测试的 wheel、源码包和校验文件。
+
+将同一批发布文件上传到 PyPI，也可以先通过 TestPyPI 验证上传流程。账户、认证和上传步骤参考 [PyPA 打包指南](https://packaging.python.org/en/latest/tutorials/packaging-projects/)与 [Twine 文档](https://twine.readthedocs.io/en/stable/)。安装后的包显示发行版本，Git 标签用于定位源码提交。
+
+发布后记录新增问题，用新版本交付后续修复。完成路线图中的事项时，同步更新路线图。
