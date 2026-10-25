@@ -11,6 +11,7 @@ site_dir: site
 
 hooks:
   - docs/.hooks/hreflang.py
+  - docs/.hooks/indexing.py
 
 nav:
   - Home: index.md
