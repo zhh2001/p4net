@@ -9,6 +9,9 @@ edit_uri: edit/main/docs/
 docs_dir: docs
 site_dir: site
 
+hooks:
+  - docs/.hooks/hreflang.py
+
 nav:
   - Home: index.md
   - Getting Started:
