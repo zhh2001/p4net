@@ -16,6 +16,7 @@ import shutil
 import socket
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -46,18 +47,56 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+@pytest.fixture
+def service_ports() -> tuple[int, int]:
+    """Select the service ports while both loopback reservations are held."""
+    with (
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as grpc,
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM) as thrift,
+    ):
+        grpc.bind(("127.0.0.1", 0))
+        thrift.bind(("127.0.0.1", 0))
+        return int(grpc.getsockname()[1]), int(thrift.getsockname()[1])
+
+
+def test_service_ports_do_not_reuse_a_released_port(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    bound: set[int] = set()
+
+    def socket_factory(*_args: object) -> MagicMock:
+        sock = MagicMock()
+        sock.__enter__.return_value = sock
+
+        def bind(_address: object) -> None:
+            port = next(port for port in (50001, 50002) if port not in bound)
+            bound.add(port)
+            sock.getsockname.return_value = ("127.0.0.1", port)
+
+        sock.bind.side_effect = bind
+        sock.__exit__.side_effect = lambda *_: bound.remove(sock.getsockname()[1])
+        return sock
+
+    monkeypatch.setattr(socket, "socket", socket_factory)
+    grpc_port, thrift_port = request.getfixturevalue("service_ports")
+    assert grpc_port != thrift_port
+    assert not bound
+
+
 # ---------------------------------------------------------------------------
 # 1. Empty-start lifecycle
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.requires_p4c
-def test_empty_start_lifecycle(compiled_json: Path, tmp_path: Path) -> None:
+def test_empty_start_lifecycle(
+    compiled_json: Path, tmp_path: Path, service_ports: tuple[int, int]
+) -> None:
     sw = BMv2Switch(
         "s1",
         device_id=0,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
@@ -81,13 +120,13 @@ def test_empty_start_lifecycle(compiled_json: Path, tmp_path: Path) -> None:
 @pytest.mark.requires_p4c
 @pytest.mark.parametrize("timeout", [float("nan"), float("inf"), -float("inf"), 0, -1, True])
 def test_invalid_ready_timeout_preserves_running_process(
-    compiled_json: Path, tmp_path: Path, timeout: float
+    compiled_json: Path, tmp_path: Path, timeout: float, service_ports: tuple[int, int]
 ) -> None:
     with BMv2Switch(
         "s_timeout",
         device_id=0,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
@@ -104,13 +143,17 @@ def test_invalid_ready_timeout_preserves_running_process(
 @pytest.mark.parametrize("startup_timeout", [10, 10.5])
 @pytest.mark.parametrize("timeout", [None, 10, 10.5])
 def test_finite_ready_timeouts_on_real_process(
-    compiled_json: Path, tmp_path: Path, startup_timeout: float, timeout: float | None
+    compiled_json: Path,
+    tmp_path: Path,
+    startup_timeout: float,
+    timeout: float | None,
+    service_ports: tuple[int, int],
 ) -> None:
     switch = BMv2Switch(
         "s_finite",
         device_id=0,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
@@ -133,9 +176,10 @@ def test_finite_ready_timeouts_on_real_process(
 
 
 @pytest.mark.requires_p4c
-def test_context_manager_real(compiled_json: Path, tmp_path: Path) -> None:
-    grpc_port = _free_port()
-    thrift_port = _free_port()
+def test_context_manager_real(
+    compiled_json: Path, tmp_path: Path, service_ports: tuple[int, int]
+) -> None:
+    grpc_port, thrift_port = service_ports
     log_dir = tmp_path / "logs"
     name = "s_ctx"
     with BMv2Switch(
@@ -161,14 +205,14 @@ def test_context_manager_real(compiled_json: Path, tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_bad_json_path_raises_startup_error(tmp_path: Path) -> None:
+def test_bad_json_path_raises_startup_error(tmp_path: Path, service_ports: tuple[int, int]) -> None:
     bad_json = tmp_path / "nonexistent.json"
     log_dir = tmp_path / "logs"
     sw = BMv2Switch(
         "s_badjson",
         device_id=2,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=bad_json,
         port_to_iface={},
         log_dir=log_dir,
@@ -227,14 +271,14 @@ def test_port_collision_raises(compiled_json: Path, tmp_path: Path, service: str
 
 @pytest.mark.requires_p4c
 def test_collision_with_running_bmv2_preserves_original(
-    compiled_json: Path, tmp_path: Path
+    compiled_json: Path, tmp_path: Path, service_ports: tuple[int, int]
 ) -> None:
-    port = _free_port()
+    port, thrift_port = service_ports
     with BMv2Switch(
         "s_original",
         device_id=0,
         grpc_port=port,
-        thrift_port=_free_port(),
+        thrift_port=thrift_port,
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
@@ -281,13 +325,13 @@ def test_collision_with_running_bmv2_preserves_original(
     ],
 )
 def test_invalid_stop_timeout_preserves_running_process(
-    compiled_json: Path, tmp_path: Path, timeout: object
+    compiled_json: Path, tmp_path: Path, timeout: object, service_ports: tuple[int, int]
 ) -> None:
     with BMv2Switch(
         "s_stopbad",
         device_id=0,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
@@ -309,13 +353,17 @@ def test_invalid_stop_timeout_preserves_running_process(
 @pytest.mark.parametrize("timeout", [1, 1.5])
 @pytest.mark.parametrize("already_exited", [False, True])
 def test_finite_stop_timeout_cleans_up_real_process(
-    compiled_json: Path, tmp_path: Path, timeout: float, already_exited: bool
+    compiled_json: Path,
+    tmp_path: Path,
+    timeout: float,
+    already_exited: bool,
+    service_ports: tuple[int, int],
 ) -> None:
     switch = BMv2Switch(
         "s_stopgood",
         device_id=0,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
@@ -337,12 +385,14 @@ def test_finite_stop_timeout_cleans_up_real_process(
 
 
 @pytest.mark.requires_p4c
-def test_stop_idempotent_on_real_process(compiled_json: Path, tmp_path: Path) -> None:
+def test_stop_idempotent_on_real_process(
+    compiled_json: Path, tmp_path: Path, service_ports: tuple[int, int]
+) -> None:
     sw = BMv2Switch(
         "s_idem",
         device_id=4,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
@@ -363,13 +413,15 @@ def test_stop_idempotent_on_real_process(compiled_json: Path, tmp_path: Path) ->
 
 
 @pytest.mark.requires_p4c
-def test_boot_timestamp_us_real_wall_clock(compiled_json: Path, tmp_path: Path) -> None:
+def test_boot_timestamp_us_real_wall_clock(
+    compiled_json: Path, tmp_path: Path, service_ports: tuple[int, int]
+) -> None:
 
     sw = BMv2Switch(
         "s_boot",
         device_id=5,
-        grpc_port=_free_port(),
-        thrift_port=_free_port(),
+        grpc_port=service_ports[0],
+        thrift_port=service_ports[1],
         bmv2_json=compiled_json,
         port_to_iface={},
         log_dir=tmp_path / "logs",
