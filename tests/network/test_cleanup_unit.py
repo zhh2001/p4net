@@ -48,7 +48,7 @@ if child_pid == 0:
         if mode in ("sigterm", "sigint"):
             os.write(ready_w, b"ready")
             while True:
-                signal.pause()
+                time.sleep(0.01)
         else:
             if mode in ("child-network", "locked-registry"):
                 child = TrackedNetwork("child")
@@ -77,6 +77,9 @@ try:
             reaped = True
             break
         time.sleep(0.01)
+    if not reaped:
+        pid, status = os.waitpid(child_pid, os.WNOHANG)
+        reaped = bool(pid)
     assert reaped, "child cleanup blocked after fork"
     expected_exit = -signal.SIGTERM if mode == "sigterm" else (
         128 + signal.SIGINT if mode == "sigint" else 0
@@ -122,6 +125,33 @@ def test_forked_child_cleans_up_only_its_own_networks(
             mode,
             str(tmp_path / "cleanup.log"),
         ],
+        capture_output=True,
+        text=True,
+        timeout=12.0,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("entry", ["sync", "async"])
+def test_forked_child_exit_is_observed_after_poll_deadline(tmp_path: Path, entry: str) -> None:
+    script = _FORK_SCRIPT if entry == "sync" else _ASYNC_FORK_SCRIPT
+    assert script.count("deadline = time.monotonic() + 5.0") == 1
+    indent = "        " if entry == "async" else "    "
+    script = script.replace(
+        f"{indent}deadline = time.monotonic() + 5.0",
+        textwrap.indent(
+            "exit_deadline = time.monotonic() + 5.0\n"
+            "while os.waitid(os.P_PID, child_pid, "
+            "os.WEXITED | os.WNOWAIT | os.WNOHANG) is None:\n"
+            "    assert time.monotonic() < exit_deadline, 'child did not exit'\n"
+            "    time.sleep(0.01)\n"
+            "deadline = time.monotonic() - 1.0",
+            indent,
+        ),
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, "sigterm", str(tmp_path / "cleanup.log")],
         capture_output=True,
         text=True,
         timeout=12.0,
