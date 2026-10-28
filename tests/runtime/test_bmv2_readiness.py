@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import socket
 import sys
 import time
@@ -142,6 +143,41 @@ def test_readiness_requires_both_owned_listeners(
     with pytest.raises(BMv2StartupError, match="ports within"):
         sw.wait_until_ready(timeout=0.5)
     assert sw.is_running()
+
+
+@pytest.mark.parametrize("mode", ["none", "grpc", "thrift"])
+def test_timeout_preserves_live_child_diagnostics_before_cleanup(
+    python_switch: Callable[..., BMv2Switch], tmp_path: Path, mode: str
+) -> None:
+    sw = python_switch(mode=mode)
+    ready = tmp_path / f"{mode}.ready"
+    deadline = time.monotonic() + 3.0
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ready.exists(), sw.log_file.read_text()
+
+    with pytest.raises(BMv2StartupError, match="ports within") as caught:
+        sw.wait_until_ready(timeout=0.5)
+    (path,) = tmp_path.glob(f"{sw.name}.startup-*.json")
+    assert str(path) in str(caught.value)
+    record = json.loads(path.read_text())
+    assert record["pid"] == sw.pid
+    assert record["returncode"] is None
+    assert record["timeout_seconds"] == 0.5
+    assert record["completed_polls"] > 0
+    sample = record["last_observation"]
+    assert len(sample["grpc_socket_inodes"]) == int(mode == "grpc")
+    assert len(sample["thrift_socket_inodes"]) == int(mode == "thrift")
+    assert set(sample["grpc_socket_inodes"] + sample["thrift_socket_inodes"]) <= set(
+        sample["owned_socket_inodes"]
+    )
+    assert str(sw.pid) in record["process"]["stat"]
+    assert str(sw.pid) in record["threads"]
+    assert record["process"]["status"]
+    assert record["process"]["wchan"]
+    assert sw.is_running()
+    sw.stop()
+    assert json.loads(path.read_text()) == record
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0", "localhost"])

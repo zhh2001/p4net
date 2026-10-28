@@ -51,6 +51,8 @@ Install missing tools using [Installation](getting-started/installation.md#requi
 
 `BMv2StartupError` reports an early process exit (`exited before becoming ready`), a port owned by another process (`already in use by another process`), or a timeout (`did not open its gRPC and Thrift ports within 10.0s`). Check the reported switch log for the cause, such as an invalid BMv2 argument, an interface error or a port conflict.
 
+On a timeout, p4net saves a `s1.startup-<pid>-<timestamp>.json` diagnostic file beside the switch log and includes its path in the exception. It records the last listener observations and the process and thread states before startup rollback stops BMv2. Check this file when the switch log is empty. Unreadable procfs entries are listed in `read_errors`; an unavailable diagnostic file leaves the original timeout error intact.
+
 BMv2 uses both a gRPC port and a Thrift port. For the first switch, the defaults are 50051 and 9090; subsequent switches increment each port by one. Check both listeners:
 
 ```bash

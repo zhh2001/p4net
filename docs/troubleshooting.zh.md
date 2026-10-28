@@ -51,6 +51,8 @@ command -v p4c simple_switch_grpc ip tc ping sysctl
 
 `BMv2StartupError` 会报告进程提前退出（`exited before becoming ready`）、端口被其他进程占用（`already in use by another process`）或等待超时（`did not open its gRPC and Thrift ports within 10.0s`）。先查看异常指出的交换机日志，检查 BMv2 参数、接口错误和端口冲突。
 
+等待超时时，p4net 会在交换机日志旁保存 `s1.startup-<pid>-<timestamp>.json` 诊断文件，并在异常中给出路径。文件保留最后一次监听检查结果，以及启动回滚停止 BMv2 前的进程和线程状态。交换机日志为空时可查看该文件。无法读取的 procfs 项会列在 `read_errors` 中；诊断文件写入失败时仍报告原始超时错误。
+
 BMv2 同时使用 gRPC 和 Thrift 端口。第一个交换机默认使用 50051 和 9090，后续交换机的端口依次加一。分别检查两个监听端口：
 
 ```bash

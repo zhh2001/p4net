@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -70,6 +71,46 @@ def _patch_popen(mocker: MockerFixture, proc: MagicMock | None = None) -> MagicM
         "p4net.runtime.bmv2.subprocess.Popen",
         return_value=proc,
     )
+
+
+def _start_diagnostic_switch(tmp_path: Path, mocker: MockerFixture) -> BMv2Switch:
+    _patch_which(mocker)
+    process = _patch_popen(mocker).return_value
+    process.args = ["/usr/local/bin/simple_switch_grpc", str(tmp_path / "program.json")]
+    switch = _make_switch(tmp_path)
+    switch.start()
+    mocker.patch("p4net.runtime.bmv2.time.monotonic", side_effect=[10.0, 10.0, 10.3, 10.35])
+    return switch
+
+
+def _mock_procfs(
+    mocker: MockerFixture,
+    *,
+    read_errors: dict[str, OSError] | None = None,
+    task_error: OSError | None = None,
+) -> None:
+    proc = Path("/proc/12345")
+    original_read = Path.read_text
+    original_iterdir = Path.iterdir
+
+    def read(path: Path, *args: object, **kwargs: object) -> str:
+        if not path.is_relative_to("/proc"):
+            return original_read(path, *args, **kwargs)
+        relative = str(path.relative_to(proc))
+        if read_errors and relative in read_errors:
+            raise read_errors[relative]
+        return f"procfs {relative}\n"
+
+    def tasks(path: Path) -> object:
+        if not path.is_relative_to("/proc"):
+            return original_iterdir(path)
+        assert path == proc / "task"
+        if task_error is not None:
+            raise task_error
+        return iter([proc / "task" / "12346", proc / "task" / "12345"])
+
+    mocker.patch.object(Path, "read_text", autospec=True, side_effect=read)
+    mocker.patch.object(Path, "iterdir", autospec=True, side_effect=tasks)
 
 
 # ---------------------------------------------------------------------------
@@ -329,9 +370,11 @@ def test_wait_until_ready_succeeds_with_owned_listeners(
     _patch_popen(mocker, proc=proc)
     mocker.patch.object(BMv2Switch, "_listening_inodes", return_value=({"grpc"}, {"thrift"}))
     mocker.patch.object(BMv2Switch, "_socket_inodes", return_value={"grpc", "thrift"})
+    diagnostics = mocker.patch.object(BMv2Switch, "_save_startup_diagnostics")
     sw = _make_switch(tmp_path)
     sw.start()
     sw.wait_until_ready(timeout=1.0)
+    diagnostics.assert_not_called()
 
 
 def test_wait_until_ready_raises_when_process_exits(tmp_path: Path, mocker: MockerFixture) -> None:
@@ -341,22 +384,18 @@ def test_wait_until_ready_raises_when_process_exits(tmp_path: Path, mocker: Mock
     proc.poll.return_value = 7  # already exited with rc 7
     proc.returncode = 7
     _patch_popen(mocker, proc=proc)
+    diagnostics = mocker.patch.object(BMv2Switch, "_save_startup_diagnostics")
     sw = _make_switch(tmp_path)
     sw.start()
     with pytest.raises(BMv2StartupError, match="returncode=7"):
         sw.wait_until_ready(timeout=1.0)
+    diagnostics.assert_not_called()
 
 
 def test_wait_until_ready_raises_on_timeout(tmp_path: Path, mocker: MockerFixture) -> None:
     _patch_which(mocker)
-    proc = MagicMock()
-    proc.pid = 1
-    proc.poll.return_value = None  # stays alive forever
-    _patch_popen(mocker, proc=proc)
-    mocker.patch(
-        "p4net.runtime.bmv2.socket.create_connection",
-        side_effect=OSError("connection refused"),
-    )
+    _patch_popen(mocker)
+    mocker.patch.object(BMv2Switch, "_save_startup_diagnostics", return_value=None)
     # Make sleep instantaneous and time progression deterministic.
     mocker.patch("p4net.runtime.bmv2.time.sleep")
     times = iter([0.0, 0.05, 0.2, 1.0, 5.0])
@@ -368,6 +407,175 @@ def test_wait_until_ready_raises_on_timeout(tmp_path: Path, mocker: MockerFixtur
     sw.start()
     with pytest.raises(BMv2StartupError, match=r"0\.1s"):
         sw.wait_until_ready(timeout=0.1)
+
+
+@pytest.mark.parametrize("service", ["grpc", "thrift"])
+def test_timeout_diagnostics_preserve_last_partial_observation(
+    tmp_path: Path, mocker: MockerFixture, service: str
+) -> None:
+    switch = _start_diagnostic_switch(tmp_path, mocker)
+    _mock_procfs(mocker)
+    mocker.patch(
+        "p4net.runtime.bmv2.time.monotonic",
+        side_effect=[10.0, 10.0, 10.0, 10.05, 10.1, 10.2, 10.3, 10.35],
+    )
+    mocker.patch("p4net.runtime.bmv2.time.sleep")
+    partial = ({"socket:[3]"}, set()) if service == "grpc" else (set(), {"socket:[3]"})
+    listeners = mocker.patch.object(
+        switch, "_listening_inodes", side_effect=[(set(), set()), partial]
+    )
+    mocker.patch.object(switch, "_socket_inodes", side_effect=[set(), {"socket:[4]", "socket:[3]"}])
+    with pytest.raises(BMv2StartupError, match=r"0\.25s") as caught:
+        switch.wait_until_ready(timeout=0.25)
+
+    (diagnostic,) = (tmp_path / "logs").glob("*.startup-*.json")
+    record = json.loads(diagnostic.read_text())
+    assert str(diagnostic) in str(caught.value)
+    assert record["pid"] == 12345
+    assert record["argv"] == ["/usr/local/bin/simple_switch_grpc", str(tmp_path / "program.json")]
+    assert record["returncode"] is None
+    assert record["timeout_seconds"] == 0.25
+    assert record["elapsed_seconds"] == pytest.approx(0.35)
+    assert record["completed_polls"] == 2
+    observation = record["last_observation"]
+    assert observation["elapsed_seconds"] == pytest.approx(0.2)
+    assert observation["grpc_socket_inodes"] == sorted(partial[0])
+    assert observation["thrift_socket_inodes"] == sorted(partial[1])
+    assert observation["owned_socket_inodes"] == ["socket:[3]", "socket:[4]"]
+    assert record["process"]["status"] == "procfs status\n"
+    assert record["threads"]["12346"]["wchan"] == "procfs task/12346/wchan\n"
+    assert record["read_errors"] == {}
+    assert listeners.call_count == 2
+
+
+def test_timeout_diagnostics_distinguish_unobserved_listeners(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    switch = _start_diagnostic_switch(tmp_path, mocker)
+    _mock_procfs(mocker)
+    listeners = mocker.patch.object(switch, "_listening_inodes")
+    descriptors = mocker.patch.object(switch, "_socket_inodes")
+    with pytest.raises(BMv2StartupError, match="startup diagnostics:"):
+        switch.wait_until_ready(timeout=0.25)
+
+    (diagnostic,) = (tmp_path / "logs").glob("*.startup-*.json")
+    record = json.loads(diagnostic.read_text())
+    assert record["completed_polls"] == 0
+    assert record["last_observation"] is None
+    listeners.assert_not_called()
+    descriptors.assert_not_called()
+
+
+@pytest.mark.parametrize("exit_path", ["descriptor-scan", "ready-check"])
+def test_timeout_diagnostics_skip_procfs_after_reaping_child(
+    tmp_path: Path, mocker: MockerFixture, exit_path: str
+) -> None:
+    switch = _start_diagnostic_switch(tmp_path, mocker)
+    process = switch._proc
+    assert process is not None
+    returncodes = iter([None, 7, 7])
+
+    def poll() -> int | None:
+        process.returncode = next(returncodes)
+        return process.returncode
+
+    mocker.patch.object(process, "poll", side_effect=poll)
+    mocker.patch("p4net.runtime.bmv2.time.sleep")
+    if exit_path == "descriptor-scan":
+        times = [10.0, 10.0, 10.0, 10.3, 10.35]
+        mocker.patch.object(switch, "_listening_inodes", return_value=(set(), set()))
+        mocker.patch.object(switch, "_socket_inodes", side_effect=FileNotFoundError())
+    else:
+        times = [10.0, 10.0, 10.0, 10.1, 10.3, 10.35]
+        mocker.patch.object(switch, "_listening_inodes", return_value=({"grpc"}, {"thrift"}))
+        mocker.patch.object(switch, "_socket_inodes", return_value={"grpc", "thrift"})
+    mocker.patch("p4net.runtime.bmv2.time.monotonic", side_effect=times)
+    read = mocker.patch.object(
+        Path, "read_text", side_effect=AssertionError("reaped PID must not be inspected")
+    )
+    tasks = mocker.patch.object(
+        Path, "iterdir", side_effect=AssertionError("reaped PID must not be inspected")
+    )
+
+    with pytest.raises(BMv2StartupError, match="startup diagnostics:"):
+        switch.wait_until_ready(timeout=0.25)
+
+    read.assert_not_called()
+    tasks.assert_not_called()
+    (diagnostic,) = (tmp_path / "logs").glob("*.startup-*.json")
+    with diagnostic.open(encoding="utf-8") as source:
+        record = json.load(source)
+    assert record["pid"] == 12345
+    assert record["returncode"] == 7
+    assert record["process"] is None
+    assert record["threads"] == {}
+    if exit_path == "descriptor-scan":
+        assert record["completed_polls"] == 0
+        assert record["last_observation"] is None
+    else:
+        assert record["completed_polls"] == 1
+        assert record["last_observation"]["grpc_socket_inodes"] == ["grpc"]
+        assert record["last_observation"]["thrift_socket_inodes"] == ["thrift"]
+
+
+@pytest.mark.parametrize("failure", ["read", "task-list"])
+def test_timeout_diagnostics_preserve_partial_procfs_on_errors(
+    tmp_path: Path, mocker: MockerFixture, failure: str
+) -> None:
+    switch = _start_diagnostic_switch(tmp_path, mocker)
+    if failure == "read":
+        _mock_procfs(
+            mocker,
+            read_errors={
+                "stack": PermissionError("stack access denied"),
+                "task/12346/status": FileNotFoundError("thread exited"),
+            },
+        )
+    else:
+        _mock_procfs(mocker, task_error=FileNotFoundError("process exited"))
+    with pytest.raises(BMv2StartupError, match="startup diagnostics:"):
+        switch.wait_until_ready(timeout=0.25)
+
+    (diagnostic,) = (tmp_path / "logs").glob("*.startup-*.json")
+    record = json.loads(diagnostic.read_text())
+    assert record["process"]["status"] == "procfs status\n"
+    assert record["process"]["stat"] == "procfs stat\n"
+    if failure == "read":
+        assert record["process"]["stack"] is None
+        assert record["threads"]["12346"]["status"] is None
+        assert record["threads"]["12346"]["wchan"] == "procfs task/12346/wchan\n"
+        assert record["read_errors"] == {
+            "stack": "stack access denied",
+            "task/12346/status": "thread exited",
+        }
+    else:
+        assert record["threads"] == {}
+        assert record["read_errors"] == {"task": "process exited"}
+
+
+@pytest.mark.parametrize("failure", ["capture", "serialization", "open", "write"])
+def test_diagnostic_failure_preserves_timeout_without_artifact_link(
+    tmp_path: Path, mocker: MockerFixture, failure: str
+) -> None:
+    switch = _start_diagnostic_switch(tmp_path, mocker)
+    _mock_procfs(mocker)
+    if failure == "capture":
+        mocker.patch.object(Path, "read_text", side_effect=RuntimeError("snapshot failed"))
+    elif failure == "serialization":
+        mocker.patch("p4net.runtime.bmv2.json.dumps", side_effect=TypeError("invalid value"))
+    elif failure == "open":
+        mocker.patch.object(Path, "open", side_effect=PermissionError("read-only directory"))
+    else:
+        output = mocker.patch.object(Path, "open").return_value.__enter__.return_value
+        output.write.side_effect = OSError("disk full")
+
+    with pytest.raises(BMv2StartupError) as caught:
+        switch.wait_until_ready(timeout=0.25)
+
+    assert str(caught.value) == (
+        f"BMv2 's1' did not open its gRPC and Thrift ports within 0.25s; see {switch.log_file}"
+    )
+    assert not list((tmp_path / "logs").glob("*.startup-*.json"))
 
 
 def test_wait_until_ready_requires_start_first(tmp_path: Path) -> None:
@@ -434,7 +642,10 @@ def test_wait_until_ready_uses_configured_startup_timeout(
     _patch_popen(mocker)
     switch = _make_switch(tmp_path, startup_timeout=0.25)
     switch.start()
-    mocker.patch("p4net.runtime.bmv2.time.monotonic", side_effect=[10.0, 10.0, 10.0, 10.3])
+    mocker.patch(
+        "p4net.runtime.bmv2.time.monotonic", side_effect=[10.0, 10.0, 10.0, 10.05, 10.3, 10.3]
+    )
+    mocker.patch.object(switch, "_save_startup_diagnostics", return_value=None)
     sleep = mocker.patch("p4net.runtime.bmv2.time.sleep")
     listeners = mocker.patch.object(switch, "_listening_inodes", return_value=(set(), set()))
     mocker.patch.object(switch, "_socket_inodes", return_value=set())

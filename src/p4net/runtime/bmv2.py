@@ -29,6 +29,7 @@ target-specific.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import shutil
@@ -270,6 +271,8 @@ class BMv2Switch:
         _validate_timeout(effective_timeout, "timeout")
         deadline = time.monotonic() + effective_timeout
         start_time = time.monotonic()
+        polls = 0
+        last_observation: dict[str, object] | None = None
         try:
             addresses = {
                 ip_address(info[4][0])
@@ -299,6 +302,13 @@ class BMv2Switch:
                 raise BMv2StartupError(
                     f"cannot inspect BMv2 {self._name!r} listeners (pid={self.pid}): {exc}"
                 ) from exc
+            polls += 1
+            last_observation = {
+                "elapsed_seconds": time.monotonic() - start_time,
+                "grpc_socket_inodes": sorted(grpc_inodes),
+                "thrift_socket_inodes": sorted(thrift_inodes),
+                "owned_socket_inodes": sorted(owned_inodes),
+            }
             for service, port, inodes in (
                 ("gRPC", self._grpc_port, grpc_inodes),
                 ("Thrift", self._thrift_port, thrift_inodes),
@@ -313,10 +323,81 @@ class BMv2Switch:
                 logger.debug("BMv2 %r became ready after %.3fs", self._name, elapsed)
                 return
             time.sleep(_READY_POLL_INTERVAL)
-        raise BMv2StartupError(
+        message = (
             f"BMv2 {self._name!r} did not open its gRPC and Thrift ports within "
             f"{effective_timeout}s; see {self.log_file}"
         )
+        diagnostic = self._save_startup_diagnostics(
+            timeout=effective_timeout,
+            elapsed=time.monotonic() - start_time,
+            polls=polls,
+            last_observation=last_observation,
+        )
+        if diagnostic is not None:
+            message += f"; startup diagnostics: {diagnostic}"
+        raise BMv2StartupError(message)
+
+    def _save_startup_diagnostics(
+        self,
+        *,
+        timeout: float,
+        elapsed: float,
+        polls: int,
+        last_observation: dict[str, object] | None,
+    ) -> Path | None:
+        """Preserve the timeout scene before the caller stops the child."""
+        try:
+            proc = Path(f"/proc/{self.pid}")
+            errors: dict[str, str] = {}
+
+            def read(path: Path) -> str | None:
+                try:
+                    return path.read_text(errors="replace")
+                except OSError as exc:
+                    errors[str(path.relative_to(proc))] = str(exc)
+                    return None
+
+            process = None
+            tasks = []
+            # An earlier readiness poll may already have reaped the child.
+            # Its old PID can then belong to another process.
+            if self._proc is not None and self._proc.returncode is None:
+                try:
+                    tasks = sorted((proc / "task").iterdir())
+                except OSError as exc:
+                    errors["task"] = str(exc)
+                process = {
+                    name: read(proc / name)
+                    for name in ("status", "stat", "schedstat", "wchan", "syscall", "stack", "maps")
+                }
+            record = {
+                "schema_version": 1,
+                "pid": self.pid,
+                "argv": None if self._proc is None else self._proc.args,
+                "timeout_seconds": timeout,
+                "elapsed_seconds": elapsed,
+                "completed_polls": polls,
+                "last_observation": last_observation,
+                "process": process,
+                "threads": {
+                    task.name: {
+                        name: read(task / name) for name in ("status", "wchan", "syscall", "stack")
+                    }
+                    for task in tasks
+                },
+                "read_errors": errors,
+                # Poll after procfs capture: reaping a dead child earlier could
+                # allow its PID to be reused while these files are being read.
+                "returncode": self.returncode(),
+            }
+            content = json.dumps(record, indent=2) + "\n"
+            path = self._log_dir / f"{self._name}.startup-{self.pid}-{time.time_ns()}.json"
+            with path.open("x", encoding="utf-8") as output:
+                output.write(content)
+            return path
+        except Exception:
+            logger.debug("Cannot save BMv2 %r startup diagnostics", self._name, exc_info=True)
+            return None
 
     def _listening_inodes(
         self, addresses: set[IPv4Address | IPv6Address]
