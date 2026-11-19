@@ -122,6 +122,10 @@ Deliver the wheel, sdist, `SHA256SUMS`, `REVISION`, changelog and validation sum
 
 For a public release, use a `vX.Y.Z` tag pointing to the verified source revision. Create [GitHub release notes](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository) from the changelog and attach the tested wheel, sdist and checksum file.
 
-Upload those same distribution files to PyPI. TestPyPI can be used to check the upload workflow first. Follow the [PyPA packaging guide](https://packaging.python.org/en/latest/tutorials/packaging-projects/) and [Twine documentation](https://twine.readthedocs.io/en/stable/) for account setup, authentication and uploads. The installed package reports its distribution version; the Git tag identifies its source revision.
+For the first upload through GitHub Actions, add a [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/) in the `p4net` project settings on PyPI. Use `zhh2001` for the owner, `p4net` for the repository, `publish.yml` for the workflow, and `pypi` for the environment.
+
+After publishing the GitHub Release, run [Publish to PyPI](https://github.com/zhh2001/p4net/actions/workflows/publish.yml) from `main` and enter the release tag. The workflow checks the wheel and sdist against `SHA256SUMS` and uploads those files with signed publish attestations. If only one file uploads, run the workflow again with the same tag. It checks the published file's checksum before uploading the remaining file.
+
+On PyPI, confirm that both files show Trusted Publishing and offer provenance. Install the published version in a fresh environment and check the CLI from that installation.
 
 After release, record follow-up bugs and publish fixes under a new version. Update the roadmap when a release completes a listed item.

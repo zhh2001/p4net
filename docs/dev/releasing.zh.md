@@ -122,6 +122,10 @@ cp CHANGELOG.md "$release_dir/CHANGELOG.md"
 
 公开发布时，用 `vX.Y.Z` 标签标识已验证的源码提交。根据变更日志撰写 [GitHub 发布说明](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)，附上已测试的 wheel、源码包和校验文件。
 
-将同一批发布文件上传到 PyPI，也可以先通过 TestPyPI 验证上传流程。账户、认证和上传步骤参考 [PyPA 打包指南](https://packaging.python.org/en/latest/tutorials/packaging-projects/)与 [Twine 文档](https://twine.readthedocs.io/en/stable/)。安装后的包显示发行版本，Git 标签用于定位源码提交。
+首次通过 GitHub Actions 上传时，在 PyPI 的 `p4net` 项目设置中添加 [Trusted Publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)。所有者填 `zhh2001`，仓库填 `p4net`，工作流文件填 `publish.yml`，环境填 `pypi`。
+
+公开 GitHub Release 后，在 `main` 分支运行 [Publish to PyPI](https://github.com/zhh2001/p4net/actions/workflows/publish.yml)，输入发布标签。工作流依据 `SHA256SUMS` 校验 wheel 和源码包，再上传这两份文件和签名发布证明。如果只上传成功了一份文件，用同一标签重新运行工作流。它会先核对已发布文件的校验和，再上传剩余文件。
+
+在 PyPI 上确认两份文件都显示 Trusted Publishing，并提供来源证明。在干净的环境中安装已发布的版本，验证命令行入口。
 
 发布后记录新增问题，用新版本交付后续修复。完成路线图中的事项时，同步更新路线图。
