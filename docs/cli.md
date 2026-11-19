@@ -264,9 +264,11 @@ ok
 
 Delete all entries from the table and return `cleared N entries`.
 
-### `<switch> counter <name> [<index> | --all]` { #counter-reset-- }
+### `<switch> counter <name> [<index> | --all | --nonzero]` { #counter-reset-- }
 
-Read an indirect counter. A specific index returns `pkts=N bytes=M`. The table lists cells in index order and reports how many cells it omits because both counts are zero. When all returned cells are zero, the shell prints only the omission message. Add `--all` after the counter name to show every returned cell. If the switch returns no cells, the shell displays `(no populated cells)`.
+Read an indirect counter. A specific index returns `pkts=N bytes=M`. With just the counter name or with `--all`, the table lists every returned cell in index order. If the switch returns no cells, the shell displays `(no populated cells)`.
+
+Add `--nonzero` after the counter name to omit cells whose packet and byte counts are both zero. The shell reports how many cells were omitted. When all returned cells are zero, this view shows only the omission message.
 
 Table columns are right-aligned. The P4 counter type determines which counts are recorded. Use `<switch> counter reset <name> [<index>]` to clear a specific cell or all returned cells.
 

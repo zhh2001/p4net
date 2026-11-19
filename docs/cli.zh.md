@@ -264,9 +264,11 @@ ok
 
 删除表中所有表项，返回 `cleared N entries`。
 
-### `<switch> counter <name> [<index> | --all]` { #counter-reset-- }
+### `<switch> counter <name> [<index> | --all | --nonzero]` { #counter-reset-- }
 
-读取间接计数器。指定索引时返回 `pkts=N bytes=M`。列表按索引顺序显示计数单元，省略包数和字节数都为零的单元，并注明省略数量。所有返回的单元均为零时，只显示省略提示。在计数器名称后加 `--all` 可以显示全部返回的单元。交换机没有返回单元时显示 `(no populated cells)`。
+读取间接计数器。指定索引时返回 `pkts=N bytes=M`。仅指定计数器名称或加上 `--all` 时，按索引顺序列出交换机返回的全部单元。交换机没有返回单元时显示 `(no populated cells)`。
+
+在计数器名称后加 `--nonzero`，可省略包数和字节数都为零的单元。输出会注明省略数量。所有返回的单元均为零时，精简视图只显示省略提示。
 
 表头和数值右对齐。P4 计数器类型决定记录哪些计数。使用 `<switch> counter reset <name> [<index>]` 可清零指定单元，省略索引则清零所有返回的单元。
 

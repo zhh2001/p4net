@@ -593,13 +593,14 @@ def test_counter_single_index_renders_one_line(
     assert args == ("MyIngress.ingress_pkts", 0)
 
 
-def test_counter_no_index_renders_table(network: MagicMock) -> None:
+@pytest.mark.parametrize("suffix", ["", " --nonzero"])
+def test_counter_no_index_renders_table(network: MagicMock, suffix: str) -> None:
     from p4net.control import CounterData
 
     sw = network.switches["s1"]
     sw.client.read_counter = MagicMock(return_value={5: CounterData(2, 128), 0: CounterData(1, 64)})
     d = CommandDispatcher(network)
-    out = d.dispatch("s1 counter MyIngress.ingress_pkts")
+    out = d.dispatch(f"s1 counter MyIngress.ingress_pkts{suffix}")
     assert out.splitlines() == [
         "index  pkts  bytes",
         "    0     1     64",
@@ -608,7 +609,7 @@ def test_counter_no_index_renders_table(network: MagicMock) -> None:
     sw.client.read_counter.assert_called_once_with("MyIngress.ingress_pkts")
 
 
-def test_counter_omits_only_cells_with_both_counts_zero(network: MagicMock) -> None:
+def test_counter_nonzero_omits_only_cells_with_both_counts_zero(network: MagicMock) -> None:
     from p4net.control import CounterData
 
     sw = network.switches["s1"]
@@ -618,22 +619,25 @@ def test_counter_omits_only_cells_with_both_counts_zero(network: MagicMock) -> N
         0: CounterData(0, 0),
     }
     d = CommandDispatcher(network)
-    assert d.dispatch("s1 counter MyIngress.ingress_pkts").splitlines() == [
+    command = "s1 counter MyIngress.ingress_pkts"
+    assert d.dispatch(f"{command} --nonzero").splitlines() == [
         "index  pkts  bytes",
         "    5     0    100",
         "   20     3      0",
         "(1 zero cell omitted. Use --all for the full table.)",
     ]
-    assert d.dispatch("s1 counter MyIngress.ingress_pkts --all").splitlines() == [
+    full = d.dispatch(command)
+    assert full.splitlines() == [
         "index  pkts  bytes",
         "    0     0      0",
         "    5     0    100",
         "   20     3      0",
     ]
-    assert sw.client.read_counter.call_args_list == [call("MyIngress.ingress_pkts")] * 2
+    assert d.dispatch(f"{command} --all") == full
+    assert sw.client.read_counter.call_args_list == [call("MyIngress.ingress_pkts")] * 3
 
 
-def test_counter_all_zero_reports_omitted_count(network: MagicMock) -> None:
+def test_counter_all_zero_in_full_and_nonzero_views(network: MagicMock) -> None:
     from p4net.control import CounterData
 
     network.switches["s1"].client.read_counter.return_value = {
@@ -641,7 +645,13 @@ def test_counter_all_zero_reports_omitted_count(network: MagicMock) -> None:
         3: CounterData(0, 0),
     }
     d = CommandDispatcher(network)
-    assert d.dispatch("s1 counter MyIngress.ingress_pkts") == (
+    command = "s1 counter MyIngress.ingress_pkts"
+    assert d.dispatch(command).splitlines() == [
+        "index  pkts  bytes",
+        "    3     0      0",
+        "    8     0      0",
+    ]
+    assert d.dispatch(f"{command} --nonzero") == (
         "(2 zero cells omitted. Use --all for the full table.)"
     )
 
@@ -670,7 +680,7 @@ def test_counter_table_columns_expand_for_large_values(network: MagicMock) -> No
     ]
 
 
-@pytest.mark.parametrize("suffix", ["", " --all"])
+@pytest.mark.parametrize("suffix", ["", " --all", " --nonzero"])
 def test_counter_no_index_empty(network: MagicMock, suffix: str) -> None:
     sw = network.switches["s1"]
     sw.client.read_counter = MagicMock(return_value={})
@@ -711,9 +721,15 @@ def test_counter_missing_name(network: MagicMock) -> None:
         "counter MyIngress.ingress_pkts --all 0",
         "counter MyIngress.ingress_pkts --all --all",
         "counter reset MyIngress.ingress_pkts --all",
+        "counter MyIngress.ingress_pkts 0 --nonzero",
+        "counter MyIngress.ingress_pkts --nonzero 0",
+        "counter MyIngress.ingress_pkts --nonzero --nonzero",
+        "counter MyIngress.ingress_pkts --nonzero --all",
+        "counter MyIngress.ingress_pkts --all --nonzero",
+        "counter reset MyIngress.ingress_pkts --nonzero",
     ],
 )
-def test_counter_all_rejected_with_other_arguments(network: MagicMock, command: str) -> None:
+def test_counter_view_options_exclude_other_arguments(network: MagicMock, command: str) -> None:
     d = CommandDispatcher(network)
     with pytest.raises(CLIUsageError):
         d.dispatch(f"s1 {command}")
@@ -722,9 +738,10 @@ def test_counter_all_rejected_with_other_arguments(network: MagicMock, command: 
     client.reset_counter.assert_not_called()
 
 
-def test_counter_help_shows_index_or_all(network: MagicMock) -> None:
+def test_counter_help_shows_index_and_view_options(network: MagicMock) -> None:
     assert CommandDispatcher(network).dispatch("help s1 counter") == (
-        "s1 counter <name> [<index> | --all]\n  Read a counter cell or list nonzero cells."
+        "s1 counter <name> [<index> | --all | --nonzero]\n"
+        "  Read a counter cell or list returned cells."
     )
 
 

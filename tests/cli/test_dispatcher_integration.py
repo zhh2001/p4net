@@ -335,11 +335,13 @@ def test_switch_counter_read_views(network: Network) -> None:
     command = f"{s1} counter MyIngress.ingress_pkts"
     assert d.dispatch(f"{command} 0") == "pkts=0 bytes=0"
     assert "2/2 succeeded" in d.dispatch("pingall")
-    header, *full_rows = d.dispatch(f"{command} --all").splitlines()
+    full = d.dispatch(command)
+    assert d.dispatch(f"{command} --all") == full
+    header, *full_rows = full.splitlines()
     assert len(full_rows) == 256
     nonzero_rows = [row for row in full_rows if row.split()[1:] != ["0", "0"]]
     assert [int(row.split()[0]) for row in nonzero_rows] == [1, 2]
-    assert d.dispatch(command).splitlines() == [
+    assert d.dispatch(f"{command} --nonzero").splitlines() == [
         header,
         *nonzero_rows,
         "(254 zero cells omitted. Use --all for the full table.)",

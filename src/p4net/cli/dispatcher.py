@@ -102,8 +102,8 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "<switch> table clear <table>",
     ),
     "<switch> counter": (
-        "Read a counter cell or list nonzero cells.",
-        "<switch> counter <name> [<index> | --all]",
+        "Read a counter cell or list returned cells.",
+        "<switch> counter <name> [<index> | --all | --nonzero]",
     ),
     "<switch> counter reset": (
         "Zero a counter cell or every cell.",
@@ -708,8 +708,12 @@ class CommandDispatcher:
         # read
         counter = tokens[0]
         read_args = tokens[1:]
-        show_all = read_args == ["--all"]
-        index = None if show_all else _parse_optional_int(read_args, label=f"{switch_name} counter")
+        nonzero_only = read_args == ["--nonzero"]
+        index = (
+            None
+            if nonzero_only or read_args == ["--all"]
+            else _parse_optional_int(read_args, label=f"{switch_name} counter")
+        )
         try:
             data = (
                 sw.client.read_counter(counter, index)
@@ -726,7 +730,7 @@ class CommandDispatcher:
         visible_cells = (
             (idx, cell)
             for idx, cell in data.items()
-            if show_all or cell.packet_count != 0 or cell.byte_count != 0
+            if not nonzero_only or cell.packet_count != 0 or cell.byte_count != 0
         )
         values = [
             (str(idx), str(cell.packet_count), str(cell.byte_count))
