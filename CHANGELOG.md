@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-11-19
+
+### Fixed
+
+- The synchronous P4Runtime client uses gRPC's default keepalive policy. This fixes `too_many_pings` disconnects that BMv2 could trigger after idle periods with the previous 10-second interval. Callers can set a keepalive interval explicitly through `channel_options`.
+
 ## [1.8.1] - 2026-11-19
 
 ### Changed

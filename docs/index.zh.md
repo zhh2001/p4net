@@ -63,6 +63,6 @@ with Network(topo) as net:
 
 ## 项目状态
 
-p4net **v1.8.1** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
+p4net **v1.8.2** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
 
-本版本改进交互式帮助、错误提示和表格对齐，并在 BMv2 启动超时时保存诊断信息。通过 pipx 全局安装后，可直接用 `sudo p4net` 运行教程示例。发布详情见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。
+本补丁修复了此前的保活周期可能导致 BMv2 上的 P4Runtime 连接在空闲后断开的问题。发布详情见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。
