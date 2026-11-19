@@ -18,6 +18,16 @@ description: p4net 命令行参考，介绍拓扑启动、连通性测试、主�
 sudo p4net topology.py
 ```
 
+在交互模式下，网络启动且 `setup(net)` 执行完成后显示 `Ready`。退出时先显示 `Stopping topology...`，再清理网络资源。
+
+```text
+Starting topology.py...
+Ready (2 hosts, 1 switch). Type 'help' for commands.
+
+p4net> exit
+Stopping topology...
+```
+
 启动命令接受以下参数。
 
 ```text

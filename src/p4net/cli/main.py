@@ -165,6 +165,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         unsafe=ns.unsafe,
         extra_compile_args=tuple(ns.extra_compile_arg),
     )
+    if not ns.no_shell:
+        print(f"Starting {ns.topology_file.name}...", flush=True)
+
     with network as net:
         if setup_fn is not None:
             setup_fn(net)
@@ -177,8 +180,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             # paranoia, but it keeps `--help` cheap and side-effect-free).
             from p4net.cli.shell import P4NetShell
 
+            host_count = len(net.hosts)
+            switch_count = len(net.switches)
+            host_label = "host" if host_count == 1 else "hosts"
+            switch_label = "switch" if switch_count == 1 else "switches"
+            print(
+                f"Ready ({host_count} {host_label}, {switch_count} {switch_label}). "
+                "Type 'help' for commands.\n",
+                flush=True,
+            )
             with contextlib.suppress(KeyboardInterrupt):
                 P4NetShell(net).run()
+            print("Stopping topology...", flush=True)
     return 0
 
 

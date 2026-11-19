@@ -244,7 +244,10 @@ def test_main_setup_called_after_enter(
 
 
 def test_main_no_shell_skips_shell(
-    tmp_path: Path, mock_network: MagicMock, mocker: MockerFixture
+    tmp_path: Path,
+    mock_network: MagicMock,
+    mocker: MockerFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     p = _write_topology_file(tmp_path)
     fake_pause = mocker.patch("p4net.cli.main._wait_for_signal", return_value=None)
@@ -252,19 +255,72 @@ def test_main_no_shell_skips_shell(
     cli_main.main([str(p), "--no-shell"])
     fake_pause.assert_called_once()
     shell_factory.assert_not_called()
+    assert capsys.readouterr().out == ""
 
 
 def test_main_default_runs_shell(
-    tmp_path: Path, mock_network: MagicMock, mocker: MockerFixture
+    tmp_path: Path,
+    mock_network: MagicMock,
+    mocker: MockerFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    p = _write_topology_file(tmp_path)
+    p = _write_topology_file(tmp_path, has_setup=True)
+    module = cli_main._load_topology_module(p)
+    mocker.patch("p4net.cli.main._load_topology_module", return_value=module)
+    network = mock_network._instance
+    network.hosts = {"h1": object(), "h2": object()}
+    network.switches = {"s1": object()}
+
+    def enter() -> MagicMock:
+        assert capsys.readouterr().out == "Starting topo.py...\n"
+        return network
+
+    def run() -> None:
+        assert module.setup.called_with is network
+        assert capsys.readouterr().out == (
+            "Ready (2 hosts, 1 switch). Type 'help' for commands.\n\n"
+        )
+
+    def leave(*_exc: object) -> bool:
+        assert capsys.readouterr().out == "Stopping topology...\n"
+        return False
+
+    network.__enter__.side_effect = enter
+    network.__exit__.side_effect = leave
     shell_factory = mocker.patch("p4net.cli.shell.P4NetShell")
-    shell = MagicMock()
-    shell_factory.return_value = shell
+    shell_factory.return_value.run.side_effect = run
     rc = cli_main.main([str(p)])
     assert rc == 0
-    shell_factory.assert_called_once()
-    shell.run.assert_called_once()
+    shell_factory.assert_called_once_with(network)
+    shell_factory.return_value.run.assert_called_once()
+    network.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize("stage", ["network", "setup"])
+def test_main_reports_start_without_ready_on_failure(
+    tmp_path: Path,
+    mock_network: MagicMock,
+    mocker: MockerFixture,
+    capsys: pytest.CaptureFixture[str],
+    stage: str,
+) -> None:
+    p = _write_topology_file(tmp_path, has_setup=True)
+    module = cli_main._load_topology_module(p)
+    mocker.patch("p4net.cli.main._load_topology_module", return_value=module)
+    network = mock_network._instance
+    error = RuntimeError(f"{stage} failed")
+    if stage == "network":
+        network.__enter__.side_effect = error
+    else:
+        module.setup = mocker.Mock(side_effect=error)
+
+    shell_factory = mocker.patch("p4net.cli.shell.P4NetShell")
+    with pytest.raises(RuntimeError, match=f"{stage} failed"):
+        cli_main.main([str(p)])
+
+    assert capsys.readouterr().out == "Starting topo.py...\n"
+    shell_factory.assert_not_called()
+    assert network.__exit__.call_count == (1 if stage == "setup" else 0)
 
 
 # ---------------------------------------------------------------------------

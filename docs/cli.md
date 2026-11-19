@@ -18,6 +18,16 @@ After [installing the CLI with pipx](getting-started/installation.md#install-cli
 sudo p4net topology.py
 ```
 
+In interactive mode, `Ready` appears after the network starts and `setup(net)` finishes. On exit, `Stopping topology...` appears before cleanup starts.
+
+```text
+Starting topology.py...
+Ready (2 hosts, 1 switch). Type 'help' for commands.
+
+p4net> exit
+Stopping topology...
+```
+
 The CLI accepts the following arguments.
 
 ```text
