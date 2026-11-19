@@ -89,9 +89,9 @@ h2    10.0.0.2/24  fd00::2/64   h2-eth0
 
 ```text
 p4net> pingall 2 2.0
-H \ H h1  h2
-h1  -   1
-h2  1   -
+H \ H  h1   h2
+h1     -    1
+h2     1    -
 2/2 succeeded
 ```
 
@@ -101,9 +101,9 @@ h2  1   -
 
 ```text
 p4net> pingall6
-H \ H h1  h2
-h1  -   1
-h2  1   -
+H \ H  h1   h2
+h1     -    1
+h2     1    -
 2/2 succeeded
 ```
 

@@ -55,9 +55,9 @@ h1    10.0.0.1/24  -            h1-eth0
 h2    10.0.0.2/24  -            h2-eth0
 
 p4net> pingall
-H \ H   h1   h2
-   h1    -    1
-   h2    1    -
+H \ H  h1   h2
+h1     -    1
+h2     1    -
 2/2 succeeded
 ```
 

@@ -68,9 +68,9 @@ p4net> s1 table dump MyIngress.ipv6_lpm
   params:   {'port': '2'}
 
 p4net> pingall6
-H \ H   h1   h2
-   h1    -    1
-   h2    1    -
+H \ H  h1   h2
+h1     -    1
+h2     1    -
 2/2 succeeded
 
 p4net> s1 counter MyIngress.ipv6_pkts 2

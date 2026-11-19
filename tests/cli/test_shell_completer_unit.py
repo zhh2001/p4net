@@ -108,6 +108,23 @@ def test_render_pingall_with_unknown_pair_renders_question_mark() -> None:
 
 
 @pytest.mark.parametrize("color", [False, True])
-def test_render_pingall_color_param_does_not_crash(color: bool) -> None:
-    out = render_pingall_matrix(["h1"], {}, color=color)
-    assert "h1" in out
+def test_render_pingall_aligns_short_host_names(color: bool) -> None:
+    result = {("h1", "h2"): True, ("h2", "h1"): False}
+    out = render_pingall_matrix(["h1", "h2"], result, color=color)
+    label = "\x1b[1mH \\ H\x1b[0m" if color else "H \\ H"
+    assert [line.rstrip() for line in out.splitlines()] == [
+        f"{label}  h1   h2",
+        "h1     -    1",
+        "h2     X    -",
+        "1/2 succeeded",
+    ]
+
+
+def test_render_pingall_aligns_mixed_host_name_lengths() -> None:
+    out = render_pingall_matrix(["h1", "hostlong"], {("h1", "hostlong"): True})
+    assert [line.rstrip() for line in out.splitlines()] == [
+        "H \\ H     h1        hostlong",
+        "h1        -         1",
+        "hostlong  ?         -",
+        "1/1 succeeded",
+    ]

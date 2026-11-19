@@ -89,9 +89,9 @@ Run IPv4 ping between hosts with a configured primary IPv4 address, in both dire
 
 ```text
 p4net> pingall 2 2.0
-H \ H h1  h2
-h1  -   1
-h2  1   -
+H \ H  h1   h2
+h1     -    1
+h2     1    -
 2/2 succeeded
 ```
 
@@ -101,9 +101,9 @@ Run IPv6 ping between hosts with a configured primary IPv6 address. Hosts withou
 
 ```text
 p4net> pingall6
-H \ H h1  h2
-h1  -   1
-h2  1   -
+H \ H  h1   h2
+h1     -    1
+h2     1    -
 2/2 succeeded
 ```
 

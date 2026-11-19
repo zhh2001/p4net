@@ -358,16 +358,16 @@ h3    10.0.0.3/24  fd00::3/64   h3-eth0
 h4    10.0.0.4/24  fd00::4/64   h4-eth0
 
 p4net> pingall
-H \ H   h1   h2   h3   h4
-   h1    -    1    1    1
-   h2    1    -    1    1
-   h3    1    1    -    1
-   h4    1    1    1    -
+H \ H  h1   h2   h3   h4
+h1     -    1    1    1
+h2     1    -    1    1
+h3     1    1    -    1
+h4     1    1    1    -
 12/12 succeeded
 
 p4net> pingall6
-H \ H   h1   h2   h3   h4
-   h1    -    1    1    1
+H \ H  h1   h2   h3   h4
+h1     -    1    1    1
    ...
 12/12 succeeded
 
