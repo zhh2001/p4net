@@ -323,18 +323,25 @@ def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path, range_valu
 
 
 # ---------------------------------------------------------------------------
-# 6. counter read renders single-line text
+# 6. Counter read views
 # ---------------------------------------------------------------------------
 
 
-def test_switch_counter_single_index(network: Network) -> None:
+def test_switch_counter_read_views(network: Network) -> None:
     _h1, _h2, s1 = _names(network)
     d = CommandDispatcher(network, color=False)
-    # After test 2's pingall, port-2 cell is non-zero. We don't know the exact
-    # number, but the format must be 'pkts=N bytes=M'.
-    out = d.dispatch(f"{s1} counter MyIngress.ingress_pkts 0")
-    assert out.startswith("pkts=")
-    assert " bytes=" in out
+    command = f"{s1} counter MyIngress.ingress_pkts"
+    assert d.dispatch(f"{command} 0") == "pkts=0 bytes=0"
+    assert "2/2 succeeded" in d.dispatch("pingall")
+    header, *full_rows = d.dispatch(f"{command} --all").splitlines()
+    assert len(full_rows) == 256
+    nonzero_rows = [row for row in full_rows if row.split()[1:] != ["0", "0"]]
+    assert [int(row.split()[0]) for row in nonzero_rows] == [1, 2]
+    assert d.dispatch(command).splitlines() == [
+        header,
+        *nonzero_rows,
+        "(254 zero cells omitted. Use --all for the full table.)",
+    ]
 
 
 # ---------------------------------------------------------------------------

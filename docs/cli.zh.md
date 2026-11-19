@@ -254,9 +254,11 @@ ok
 
 删除表中所有表项，返回 `cleared N entries`。
 
-### `<switch> counter [reset] <name> [<index>]`
+### `<switch> counter <name> [<index> | --all]` { #counter-reset-- }
 
-读取间接计数器，或用 `reset` 清零。指定索引时，读取结果为 `pkts=N bytes=M`。不指定索引时，按索引顺序列出返回的计数单元，没有结果则显示 `(no populated cells)`。表头和数值右对齐，列宽随内容调整。实际记录包数还是字节数由 P4 计数器类型决定，不指定索引的清零操作会清空所有返回的单元。
+读取间接计数器。指定索引时返回 `pkts=N bytes=M`。列表按索引顺序显示计数单元，省略包数和字节数都为零的单元，并注明省略数量。所有返回的单元均为零时，只显示省略提示。在计数器名称后加 `--all` 可以显示全部返回的单元。交换机没有返回单元时显示 `(no populated cells)`。
+
+表头和数值右对齐。P4 计数器类型决定记录哪些计数。使用 `<switch> counter reset <name> [<index>]` 可清零指定单元，省略索引则清零所有返回的单元。
 
 ```text
 p4net> s1 counter reset MyIngress.ingress_pkts 1

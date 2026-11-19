@@ -102,8 +102,8 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "<switch> table clear <table>",
     ),
     "<switch> counter": (
-        "Read a counter cell or all populated cells.",
-        "<switch> counter <name> [<index>]",
+        "Read a counter cell or list nonzero cells.",
+        "<switch> counter <name> [<index> | --all]",
     ),
     "<switch> counter reset": (
         "Zero a counter cell or every cell.",
@@ -696,7 +696,9 @@ class CommandDispatcher:
             return "ok"
         # read
         counter = tokens[0]
-        index = _parse_optional_int(tokens[1:], label=f"{switch_name} counter")
+        read_args = tokens[1:]
+        show_all = read_args == ["--all"]
+        index = None if show_all else _parse_optional_int(read_args, label=f"{switch_name} counter")
         try:
             data = (
                 sw.client.read_counter(counter, index)
@@ -705,24 +707,40 @@ class CommandDispatcher:
             )
         except Exception as exc:
             return _CommandErrorOutput.from_exception(exc)
-        if isinstance(data, dict):
-            if not data:
-                return "(no populated cells)"
-            rows = [("index", "pkts", "bytes")]
-            rows.extend(
-                (str(idx), str(cell.packet_count), str(cell.byte_count))
-                for idx, cell in sorted(data.items())
-            )
-            index_w = max(len(row[0]) for row in rows)
-            pkts_w = max(len(row[1]) for row in rows)
-            bytes_w = max(len(row[2]) for row in rows)
-            lines = [
-                f"{idx:>{index_w}}  {pkts:>{pkts_w}}  {byte_count:>{bytes_w}}"
-                for idx, pkts, byte_count in rows
-            ]
-            lines[0] = bold(lines[0], color=self._color)
-            return "\n".join(lines)
-        return f"pkts={data.packet_count} bytes={data.byte_count}"
+        if not isinstance(data, dict):
+            return f"pkts={data.packet_count} bytes={data.byte_count}"
+        if not data:
+            return "(no populated cells)"
+
+        visible_cells = (
+            (idx, cell)
+            for idx, cell in data.items()
+            if show_all or cell.packet_count != 0 or cell.byte_count != 0
+        )
+        values = [
+            (str(idx), str(cell.packet_count), str(cell.byte_count))
+            for idx, cell in sorted(visible_cells)
+        ]
+        omitted = len(data) - len(values)
+        summary = ""
+        if omitted:
+            cell_label = "cell" if omitted == 1 else "cells"
+            summary = f"({omitted} zero {cell_label} omitted. Use --all for the full table.)"
+        if not values:
+            return summary
+
+        rows = [("index", "pkts", "bytes"), *values]
+        index_w = max(len(row[0]) for row in rows)
+        pkts_w = max(len(row[1]) for row in rows)
+        bytes_w = max(len(row[2]) for row in rows)
+        lines = [
+            f"{idx:>{index_w}}  {pkts:>{pkts_w}}  {byte_count:>{bytes_w}}"
+            for idx, pkts, byte_count in rows
+        ]
+        lines[0] = bold(lines[0], color=self._color)
+        if summary:
+            lines.append(summary)
+        return "\n".join(lines)
 
     def _cmd_switch_mcast(self, switch_name: str, tokens: list[str]) -> str:
         if not tokens:
