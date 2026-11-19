@@ -26,6 +26,7 @@ See the [changelog](changelog.md) for complete release notes.
 | 1.6.0 | 2026-05-14 | Provisional async P4Runtime client, lazy switch client access, and the async concurrent example. |
 | 1.7.0 | 2026-05-14 | `AsyncP4RuntimeClient`, `AsyncOperationCancelledError`, and `RunningSwitch.async_client` became stable. |
 | 1.8.0 | 2026-10-25 | Async network lifecycle, CLI ternary/range matches, benchmark tooling, and compiler, connection and topology fixes. |
+| 1.8.1 | 2026-11-19 | CLI output and help fixes, BMv2 startup timeout diagnostics, and global pipx installation guidance. |
 
 ## 1.x candidates (additive, no API breakage)
 

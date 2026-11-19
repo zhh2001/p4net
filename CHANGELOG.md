@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-19
+
+### Changed
+
+- The installation guide uses global pipx installation for the CLI so users can run the tutorials and examples with `sudo p4net`. The guide covers Ubuntu 24.04's pipx version and project virtual environments.
+
+### Fixed
+
+- Align the columns in `hosts`, the `pingall` and `pingall6` matrices, and switch counter output. Widen the spacing between ping matrix columns and right-align numeric counter values.
+- Resolve interactive help for actual host and switch names, complete help topics for those names, and display interactive command errors consistently.
+- When BMv2 startup times out, save the last listener observations and process and thread state before cleanup. The startup error includes the path to the diagnostic file when it is saved.
+- Serve the custom page for missing documentation URLs, keep error pages out of site search and indexing, and use absolute language-alternate URLs.
+
 ## [1.8.0] - 2026-10-25
 
 ### Added

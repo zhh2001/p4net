@@ -63,6 +63,6 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
 
 ## Project status
 
-p4net **v1.8.0** is a stable release. Public interfaces follow the [API stability rules](api-stability.md), including the deprecation cycle for stable and provisional APIs.
+p4net **v1.8.1** is a stable release. Public interfaces follow the [API stability rules](api-stability.md), including the deprecation cycle for stable and provisional APIs.
 
-This version adds asynchronous network startup and shutdown, ternary and range matches in the CLI, and a reproducible performance benchmark tool. It fixes compiler cache handling, connection cleanup, interface placement and topology validation. See the [Changelog](changelog.md) for details and upgrade notes, [Known Limitations](known-limitations.md) for current boundaries, and the [Roadmap](roadmap.md) for future plans.
+This release improves interactive help, error messages and column alignment, and saves diagnostic details when BMv2 startup times out. The CLI tutorials use `sudo p4net` after global installation with pipx. See the [Changelog](changelog.md) for release details, [Known Limitations](known-limitations.md) for current boundaries, and the [Roadmap](roadmap.md) for future plans.
