@@ -41,7 +41,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CHANNEL_OPTIONS: tuple[tuple[str, Any], ...] = (
     ("grpc.max_send_message_length", 16 * 1024 * 1024),
     ("grpc.max_receive_message_length", 16 * 1024 * 1024),
-    ("grpc.keepalive_time_ms", 10000),
 )
 
 _SENTINEL = object()

@@ -139,12 +139,12 @@ def patched_grpc(mocker: MockerFixture) -> dict[str, Any]:
         return stream
 
     stub.StreamChannel = MagicMock(side_effect=stream_channel)
-    mocker.patch("p4net.control.client.grpc.insecure_channel", return_value=chan)
+    channel_factory = mocker.patch("p4net.control.client.grpc.insecure_channel", return_value=chan)
     mocker.patch(
         "p4net.control.client.p4runtime_pb2_grpc.P4RuntimeStub",
         return_value=stub,
     )
-    return {"channel": chan, "stub": stub, "stream": stream}
+    return {"channel": chan, "channel_factory": channel_factory, "stub": stub, "stream": stream}
 
 
 def _grpc_error(code: grpc.StatusCode, detail: str = "") -> grpc.RpcError:
@@ -189,6 +189,36 @@ def test_connect_sends_arbitration_and_succeeds(
         assert sent.arbitration.election_id.low == 5
     finally:
         client.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("channel_options", "expected_options"),
+    [
+        pytest.param(
+            None,
+            [
+                ("grpc.max_send_message_length", 16 * 1024 * 1024),
+                ("grpc.max_receive_message_length", 16 * 1024 * 1024),
+            ],
+            id="defaults",
+        ),
+        pytest.param(
+            [("grpc.keepalive_time_ms", 300_000)],
+            [("grpc.keepalive_time_ms", 300_000)],
+            id="explicit-keepalive",
+        ),
+    ],
+)
+def test_connect_uses_grpc_keepalive_only_when_configured(
+    patched_grpc: dict[str, Any],
+    channel_options: list[tuple[str, int]] | None,
+    expected_options: list[tuple[str, int]],
+) -> None:
+    target = "127.0.0.1:50051"
+    stream: FakeStreamCall = patched_grpc["stream"]
+    stream.responses.put(_make_arbitration_response(1, (1, 0)))
+    with P4RuntimeClient(target, device_id=1, channel_options=channel_options):
+        patched_grpc["channel_factory"].assert_called_once_with(target, options=expected_options)
 
 
 def test_connect_with_role_includes_role_name(
