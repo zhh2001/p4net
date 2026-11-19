@@ -254,7 +254,7 @@ Delete all entries from the table and return `cleared N entries`.
 
 ### `<switch> counter [reset] <name> [<index>]`
 
-Read an indirect counter cell, or use `reset` to clear it. With an index, reading returns `pkts=N bytes=M`. Without an index, it returns a table of cells, or `(no populated cells)` if the switch returns none. The P4 counter type determines which counts are recorded. Resetting without an index clears all returned cells.
+Read an indirect counter cell, or use `reset` to clear it. With an index, reading returns `pkts=N bytes=M`. Without an index, it returns a table of cells in index order, or `(no populated cells)` if the switch returns none. Table headings and values are right-aligned, with each column sized to fit its contents. The P4 counter type determines which counts are recorded. Resetting without an index clears all returned cells.
 
 ```text
 p4net> s1 counter reset MyIngress.ingress_pkts 1

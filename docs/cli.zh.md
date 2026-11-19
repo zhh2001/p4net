@@ -254,7 +254,7 @@ ok
 
 ### `<switch> counter [reset] <name> [<index>]`
 
-读取间接计数器，或用 `reset` 清零。指定索引时，读取结果为 `pkts=N bytes=M`。不指定索引时，以表格列出返回的计数单元，没有结果则显示 `(no populated cells)`。实际记录包数还是字节数由 P4 计数器类型决定，不指定索引的清零操作会清空所有返回的单元。
+读取间接计数器，或用 `reset` 清零。指定索引时，读取结果为 `pkts=N bytes=M`。不指定索引时，按索引顺序列出返回的计数单元，没有结果则显示 `(no populated cells)`。表头和数值右对齐，列宽随内容调整。实际记录包数还是字节数由 P4 计数器类型决定，不指定索引的清零操作会清空所有返回的单元。
 
 ```text
 p4net> s1 counter reset MyIngress.ingress_pkts 1

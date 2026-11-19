@@ -567,14 +567,39 @@ def test_counter_no_index_renders_table(network: MagicMock) -> None:
     from p4net.control import CounterData
 
     sw = network.switches["s1"]
-    sw.client.read_counter = MagicMock(return_value={0: CounterData(1, 64), 5: CounterData(2, 128)})
+    sw.client.read_counter = MagicMock(return_value={5: CounterData(2, 128), 0: CounterData(1, 64)})
     d = CommandDispatcher(network)
     out = d.dispatch("s1 counter MyIngress.ingress_pkts")
-    assert "index" in out
-    assert "0" in out
-    assert "5" in out
-    assert "64" in out
-    assert "128" in out
+    assert out.splitlines() == [
+        "index  pkts  bytes",
+        "    0     1     64",
+        "    5     2    128",
+    ]
+    sw.client.read_counter.assert_called_once_with("MyIngress.ingress_pkts")
+
+
+def test_counter_table_columns_expand_for_large_values(network: MagicMock) -> None:
+    from p4net.control import CounterData
+
+    large_index = 12_345_678
+    large_packets = 1_234_567_890_123
+    large_bytes = 9_223_372_036_854_775_807
+    sw = network.switches["s1"]
+    sw.client.read_counter = MagicMock(
+        return_value={
+            large_index: CounterData(23, 45),
+            9: CounterData(large_packets, 45),
+            1: CounterData(0, large_bytes),
+        }
+    )
+    d = CommandDispatcher(network, color=True)
+    out = d.dispatch("s1 counter MyIngress.ingress_pkts")
+    assert out.splitlines() == [
+        f"\x1b[1m{'index':>8}  {'pkts':>13}  {'bytes':>19}\x1b[0m",
+        f"{1:>8}  {0:>13}  {large_bytes:>19}",
+        f"{9:>8}  {large_packets:>13}  {45:>19}",
+        f"{large_index:>8}  {23:>13}  {45:>19}",
+    ]
 
 
 def test_counter_no_index_empty(network: MagicMock) -> None:

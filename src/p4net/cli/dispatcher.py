@@ -658,10 +658,19 @@ class CommandDispatcher:
         if isinstance(data, dict):
             if not data:
                 return "(no populated cells)"
-            lines = [bold("index  pkts        bytes", color=self._color)]
-            for idx in sorted(data):
-                cell = data[idx]
-                lines.append(f"{idx:<6} {cell.packet_count:<11} {cell.byte_count}")
+            rows = [("index", "pkts", "bytes")]
+            rows.extend(
+                (str(idx), str(cell.packet_count), str(cell.byte_count))
+                for idx, cell in sorted(data.items())
+            )
+            index_w = max(len(row[0]) for row in rows)
+            pkts_w = max(len(row[1]) for row in rows)
+            bytes_w = max(len(row[2]) for row in rows)
+            lines = [
+                f"{idx:>{index_w}}  {pkts:>{pkts_w}}  {byte_count:>{bytes_w}}"
+                for idx, pkts, byte_count in rows
+            ]
+            lines[0] = bold(lines[0], color=self._color)
             return "\n".join(lines)
         return f"pkts={data.packet_count} bytes={data.byte_count}"
 
