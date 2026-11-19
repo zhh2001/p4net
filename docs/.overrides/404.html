@@ -1,0 +1,16 @@
+{% extends "main.html" %}
+
+{% set home = base_url.rstrip("/") ~ "/" %}
+{% set config = dict(config, extra=dict(config.extra, alternate=[
+  {"name": "English", "link": home, "lang": "en"},
+  {"name": "简体中文", "link": home ~ "zh/", "lang": "zh"}
+])) %}
+
+{% block htmltitle %}
+  <title>404 — Page not found | {{ config.site_name }}</title>
+{% endblock %}
+
+{% block content %}
+  {% set error_page = pages | selectattr("src_uri", "equalto", "404.md") | first %}
+  {{ error_page.page.content }}
+{% endblock %}
