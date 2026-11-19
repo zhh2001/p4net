@@ -4,6 +4,14 @@ description: p4net 的各版本变更与升级说明，以及完整英文版本�
 
 # 变更日志
 
+## 1.9.0 · 2026-11-20
+
+- 交互模式提示拓扑开始启动、网络与 `setup()` 就绪，以及开始清理。`packet listen` 在等待前显示交换机、目标包数和超时。
+- 新增 `counter <name> --nonzero`，省略包数和字节数均为零的单元。`counter <name>` 和 `counter <name> --all` 都列出交换机返回的全部单元。
+- 帮助总览按命令类型分组，长语法按参数组折行。命令输出与下一次提示符之间留一行空白。
+- `table dump` 在顶部显示表名和表项数，匹配字段及动作参数按 `名称=值` 逐行显示。
+- 通过 GitHub Actions Trusted Publishing 向 PyPI 上传发布文件，并附上签名的来源证明。
+
 ## 1.8.2 · 2026-11-19
 
 - 同步 P4Runtime 客户端改用 gRPC 的默认保活策略，修复此前 10 秒保活周期在空闲后可能触发的 BMv2 `too_many_pings` 断连。调用方可通过 `channel_options` 显式设置保活周期。

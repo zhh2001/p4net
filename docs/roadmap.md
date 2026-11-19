@@ -28,6 +28,7 @@ See the [changelog](changelog.md) for complete release notes.
 | 1.8.0 | 2026-10-25 | Async network lifecycle, CLI ternary/range matches, benchmark tooling, and compiler, connection and topology fixes. |
 | 1.8.1 | 2026-11-19 | CLI output and help fixes, BMv2 startup timeout diagnostics, and global pipx installation guidance. |
 | 1.8.2 | 2026-11-19 | Fix for idle P4Runtime disconnects caused by gRPC keepalive on BMv2. |
+| 1.9.0 | 2026-11-20 | Interactive startup, shutdown, and packet wait messages, compact counter reads, and clearer help and table dumps. |
 
 ## 1.x candidates (additive, no API breakage)
 

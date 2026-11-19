@@ -63,6 +63,6 @@ with Network(topo) as net:
 
 ## 项目状态
 
-p4net **v1.8.2** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
+p4net **v1.9.0** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
 
-本补丁修复了此前的保活周期可能导致 BMv2 上的 P4Runtime 连接在空闲后断开的问题。发布详情见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。
+本版本新增交互模式的启停提示、收包等待提示和 `counter --nonzero`，并改进帮助和表项的排版。发布详情见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。

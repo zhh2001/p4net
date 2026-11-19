@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-20
+
+### Added
+
+- The interactive shell reports when topology startup begins, when the network and `setup()` are ready, and when shutdown begins.
+- `packet listen` shows the switch, requested packet count, and timeout before waiting.
+- `counter <name> --nonzero` omits cells whose packet and byte counts are both zero. `counter <name>` and `counter <name> --all` list all returned cells.
+
+### Changed
+
+- Group interactive help by command type, wrap long usage lines at argument boundaries, and leave one blank line between command output and the next prompt.
+- `table dump` lists the table name and entry count once, then shows match fields and action parameters as `name=value` on separate lines.
+- Publish PyPI release files through GitHub Actions Trusted Publishing with signed attestations.
+
 ## [1.8.2] - 2026-11-19
 
 ### Fixed
