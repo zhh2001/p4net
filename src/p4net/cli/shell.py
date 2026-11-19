@@ -11,7 +11,8 @@ from prompt_toolkit.history import FileHistory
 
 from p4net.cli.completers import build_network_completer
 from p4net.cli.dispatcher import CommandDispatcher
-from p4net.cli.exceptions import CLIExit, CLIUsageError
+from p4net.cli.exceptions import CLIExit, CLIUsageError, _CommandErrorOutput
+from p4net.cli.formatting import red
 
 if TYPE_CHECKING:
     from p4net.network import Network
@@ -45,6 +46,9 @@ class P4NetShell:
         """The :class:`CommandDispatcher` this shell delegates each line to."""
         return self._dispatcher
 
+    def _print_error(self, detail: str) -> None:
+        print_formatted_text(ANSI(red(f"Error: {detail}", color=self._dispatcher.color)))
+
     def run(self) -> None:
         """Block, read lines, dispatch, until CLIExit or EOF."""
         history_path = self._history_file
@@ -72,10 +76,11 @@ class P4NetShell:
                 print_formatted_text(ANSI("\x1b[33m^C cancelled\x1b[0m"))
                 continue
             except CLIUsageError as exc:
-                print_formatted_text(ANSI(f"\x1b[31mError: {exc}\x1b[0m"))
-                continue
+                self._print_error(str(exc))
             except Exception as exc:
-                print_formatted_text(ANSI(f"\x1b[31mError: {type(exc).__name__}: {exc}\x1b[0m"))
-                continue
-            if output:
-                print_formatted_text(ANSI(output))
+                self._print_error(f"{type(exc).__name__}: {exc}")
+            else:
+                if isinstance(output, _CommandErrorOutput):
+                    self._print_error(output.detail)
+                elif output:
+                    print_formatted_text(ANSI(output))

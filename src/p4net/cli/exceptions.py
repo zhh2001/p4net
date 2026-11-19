@@ -15,3 +15,15 @@ class CLIUsageError(CLIError):
 
 class CLIExit(CLIError):
     """Raised by `exit` / `quit` to ask the shell to terminate cleanly."""
+
+
+class _CommandErrorOutput(str):
+    """Error text returned by a command handler for the shell to style."""
+
+    @classmethod
+    def from_exception(cls, exc: Exception) -> _CommandErrorOutput:
+        return cls(f"error: {type(exc).__name__}: {exc}")
+
+    @property
+    def detail(self) -> str:
+        return self.removeprefix("error: ")

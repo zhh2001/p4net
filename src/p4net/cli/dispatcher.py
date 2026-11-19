@@ -13,7 +13,7 @@ import shlex
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from p4net.cli.exceptions import CLIExit, CLIUsageError
+from p4net.cli.exceptions import CLIExit, CLIUsageError, _CommandErrorOutput
 from p4net.cli.formatting import bold, render_pingall_matrix
 
 if TYPE_CHECKING:
@@ -356,13 +356,13 @@ class CommandDispatcher:
         try:
             topo.validate()
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         if path is None:
             return topo.to_graphviz(layout=layout)
         try:
             topo.render_graphviz(path, layout=layout, format=fmt)
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         return str(path.resolve())
 
     # ------------------------------------------------------------------
@@ -438,7 +438,7 @@ class CommandDispatcher:
         try:
             proc = self._network.xterm(host_name)
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         return f"xterm spawned (pid={proc.pid})"
 
     # ------------------------------------------------------------------
@@ -606,7 +606,7 @@ class CommandDispatcher:
         except CLIUsageError:
             raise
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         return "ok"
 
     def _table_del(self, switch: object, tokens: list[str]) -> str:
@@ -627,7 +627,7 @@ class CommandDispatcher:
         except CLIUsageError:
             raise
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         return "ok"
 
     def _table_clear(self, switch: object, tokens: list[str]) -> str:
@@ -637,7 +637,7 @@ class CommandDispatcher:
         try:
             n = switch.client.clear_table(table)  # type: ignore[attr-defined]
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         return f"cleared {n} entries"
 
     def _cmd_switch_counter(self, switch_name: str, tokens: list[str]) -> str:
@@ -655,7 +655,7 @@ class CommandDispatcher:
                 else:
                     sw.client.reset_counter(counter, index)
             except Exception as exc:
-                return f"error: {type(exc).__name__}: {exc}"
+                return _CommandErrorOutput.from_exception(exc)
             return "ok"
         # read
         counter = tokens[0]
@@ -667,7 +667,7 @@ class CommandDispatcher:
                 else sw.client.read_counter(counter)
             )
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         if isinstance(data, dict):
             if not data:
                 return "(no populated cells)"
@@ -698,7 +698,7 @@ class CommandDispatcher:
             try:
                 groups = sw.client.list_multicast_groups()
             except Exception as exc:
-                return f"error: {type(exc).__name__}: {exc}"
+                return _CommandErrorOutput.from_exception(exc)
             if not groups:
                 return "(no multicast groups)"
             lines = []
@@ -723,7 +723,7 @@ class CommandDispatcher:
             try:
                 sw.client.add_multicast_group(gid, ports)
             except Exception as exc:
-                return f"error: {type(exc).__name__}: {exc}"
+                return _CommandErrorOutput.from_exception(exc)
             return "ok"
         if sub == "del":
             if len(rest) != 1:
@@ -735,7 +735,7 @@ class CommandDispatcher:
             try:
                 sw.client.delete_multicast_group(gid)
             except Exception as exc:
-                return f"error: {type(exc).__name__}: {exc}"
+                return _CommandErrorOutput.from_exception(exc)
             return "ok"
         raise CLIUsageError(
             f"{switch_name} mcast: unknown sub-verb {sub!r} (expected one of: list, add, del)"
@@ -772,7 +772,7 @@ class CommandDispatcher:
         try:
             switch.client.send_packet_out(payload, metadata=metadata)  # type: ignore[attr-defined]
         except Exception as exc:
-            return f"error: {type(exc).__name__}: {exc}"
+            return _CommandErrorOutput.from_exception(exc)
         return "ok"
 
     def _cmd_switch_packet_listen(self, switch_name: str, switch: object, tokens: list[str]) -> str:

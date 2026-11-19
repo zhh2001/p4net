@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import re
+import subprocess
+from io import StringIO
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+from prompt_toolkit.application import create_app_session
 from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.data_structures import Size
 from prompt_toolkit.document import Document
+from prompt_toolkit.output import ColorDepth
+from prompt_toolkit.output.plain_text import PlainTextOutput
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 from p4net.cli import CommandDispatcher, P4NetShell
 from p4net.cli.completers import build_network_completer
 from p4net.cli.formatting import bold, red, render_pingall_matrix
+from p4net.control import P4RuntimeError
 from p4net.network import Network
 
 
@@ -89,6 +98,56 @@ def test_shell_dispatcher_color_is_on() -> None:
     n = _network_with(["h1"], [])
     shell = P4NetShell(n)
     assert shell.dispatcher.color is True
+
+
+@pytest.mark.parametrize("color", [False, True])
+def test_shell_renders_errors_consistently(tmp_path: Path, color: bool) -> None:
+    network = _network_with(["h1"], ["s1"])
+    network.switches["s1"].client.read_counter.side_effect = P4RuntimeError(
+        "no counter named 'missing'"
+    )
+    host = network.hosts["h1"]
+    host.ping.side_effect = RuntimeError("ping unavailable")
+    host.exec.return_value = subprocess.CompletedProcess(
+        args=["printf"], returncode=0, stdout=b"error: from host\n", stderr=b""
+    )
+    session = MagicMock()
+    session.prompt.side_effect = [
+        "unknown",
+        "h1 ping",
+        "s1 counter missing",
+        "h1 ping 127.0.0.1",
+        "h1 cmd printf 'error: from host\\n'",
+        "exit",
+    ]
+    stream = StringIO()
+    output = (
+        Vt100_Output(
+            stream, lambda: Size(rows=24, columns=80), default_color_depth=ColorDepth.DEPTH_4_BIT
+        )
+        if color
+        else PlainTextOutput(stream)
+    )
+    shell = P4NetShell(network, history_file=tmp_path / "history")
+    with (
+        patch("p4net.cli.shell.PromptSession", return_value=session),
+        create_app_session(output=output),
+    ):
+        shell.run()
+
+    rendered = stream.getvalue()
+    errors = [
+        "Error: unknown command: 'unknown'",
+        "Error: h1 ping: missing target",
+        "Error: P4RuntimeError: no counter named 'missing'",
+        "Error: RuntimeError: ping unavailable",
+    ]
+    if color:
+        assert re.findall(r"\x1b\[[0-9;]*\b31m([^\x1b\r\n]+)", rendered) == errors
+    else:
+        assert "\x1b" not in rendered
+    plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", rendered)
+    assert plain.splitlines() == [*errors, "error: from host"]
 
 
 # ---------------------------------------------------------------------------
