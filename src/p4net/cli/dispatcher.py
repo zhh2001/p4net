@@ -11,6 +11,7 @@ import logging
 import math
 import shlex
 from collections.abc import Callable
+from textwrap import fill
 from typing import TYPE_CHECKING
 
 from p4net.cli.exceptions import CLIExit, CLIUsageError, _CommandErrorOutput
@@ -30,7 +31,11 @@ _MAX_PING_WAIT = ((1 << 31) - 1) // 1000
 SwitchHandler = Callable[[str, list[str]], str]
 
 
-# Help topics map to a short description and a usage line.
+# Keep help layout consistent across terminal widths, with room for 60-column terminals.
+_HELP_WIDTH = 60
+_HELP_TOPIC_WIDTH = 22
+
+# Help topics map to a short description and a usage synopsis.
 _TOPIC_HELP: dict[str, tuple[str, str]] = {
     "help": ("List commands or show details for one.", "help [command]"),
     "exit": ("Exit the shell.", "exit"),
@@ -48,7 +53,7 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
     ),
     "topology graph": (
         "Render the topology as a Graphviz DOT graph (or to PNG/SVG/PDF).",
-        "topology graph [path] [layout=LR|TB|BT|RL] [format=png|svg|pdf|dot]",
+        "topology graph [path] [layout=LR|TB|BT|RL]\n    [format=png|svg|pdf|dot]",
     ),
     "<host> ping": (
         "Ping a target from a host.",
@@ -84,12 +89,13 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
     ),
     "<switch> table add": (
         "Insert a table entry (ternary value&&&mask, range low..high).",
-        "<switch> table add <table> match: <k>=<v>[,<k>=<v>...] action: <name> "
-        "[params: <k>=<v>[,<k>=<v>...]] [priority: <int>]",
+        "<switch> table add <table>\n"
+        "    match: <k>=<v>[,<k>=<v>...] action: <name>\n"
+        "    [params: <k>=<v>[,<k>=<v>...]] [priority: <int>]",
     ),
     "<switch> table del": (
         "Delete a table entry (ternary value&&&mask, range low..high).",
-        "<switch> table del <table> match: <k>=<v>[,<k>=<v>...] [priority: <int>]",
+        "<switch> table del <table>\n    match: <k>=<v>[,<k>=<v>...] [priority: <int>]",
     ),
     "<switch> table clear": (
         "Delete every entry from a table.",
@@ -117,7 +123,7 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
     ),
     "<switch> packet send": (
         "Inject a PacketOut into the switch.",
-        "<switch> packet send <hex_payload> [metadata: <k>=<v>[,<k>=<v>...]]",
+        "<switch> packet send <hex_payload>\n    [metadata: <k>=<v>[,<k>=<v>...]]",
     ),
     "<switch> packet listen": (
         "Block until count PacketIns arrive (or timeout).",
@@ -216,10 +222,7 @@ class CommandDispatcher:
 
     def _cmd_help(self, tokens: list[str]) -> str:
         if not tokens:
-            lines = [bold("Commands", color=self._color)]
-            for topic, (desc, _usage) in self._help_topics.items():
-                lines.append(f"  {topic:<22} {desc}")
-            return "\n".join(lines)
+            return self._help_overview()
         topic = " ".join(tokens)
         info = self._help_topics.get(topic)
         node = tokens[0]
@@ -231,7 +234,41 @@ class CommandDispatcher:
         desc, usage = info
         if prefix is not None:
             usage = usage.replace(prefix, node, 1)
-        return f"{usage}\n\n{desc}"
+        description = fill(
+            desc,
+            width=_HELP_WIDTH,
+            initial_indent="  ",
+            subsequent_indent="  ",
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        return f"{bold(usage, color=self._color)}\n{description}"
+
+    def _help_overview(self) -> str:
+        groups: dict[str, tuple[str, list[str]]] = {
+            "": ("General commands", []),
+            "<host>": ("Host commands", []),
+            "<switch>": ("Switch commands", []),
+        }
+        for topic, (desc, _) in self._help_topics.items():
+            _, rows = groups.get(topic.partition(" ")[0], groups[""])
+            label = f"  {topic:<{_HELP_TOPIC_WIDTH}}  "
+            rows.append(
+                fill(
+                    desc,
+                    width=_HELP_WIDTH,
+                    initial_indent=label,
+                    subsequent_indent=" " * len(label),
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
+        sections = [
+            "\n".join([bold(title, color=self._color), *rows])
+            for title, rows in groups.values()
+            if rows
+        ]
+        return "\n\n".join(sections)
 
     def _node_help_prefix(self, name: str) -> str | None:
         if name in self._top_level_handlers:

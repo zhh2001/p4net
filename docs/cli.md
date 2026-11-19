@@ -48,13 +48,14 @@ The examples below use hosts `h1`, `h2` and switch `s1`. IPv6 commands use hosts
 
 ### `help` and `help <command>`
 
-`help` lists available commands. Give a topic to see its syntax and description:
+`help` groups commands into general, host, and switch commands. Give a topic to see its syntax and description.
 
 ```text
-p4net> help pingall
+p4net> help switches
 pingall [count] [timeout]
+  Ping every pair of hosts; print a result matrix.
 
-Ping every pair of hosts; print a result matrix.
+p4net>
 ```
 
 Use a host or switch name from the topology to see usage for that node, for example `help h1 ping` or `help s1 table add`. Use `help <host> ping` or `help <switch> table add` for the generic syntax. Press `Tab` after `help` to complete a topic.
@@ -130,6 +131,7 @@ p4net calculates the overall wait from the count, timeout, and default one-secon
 ```text
 p4net> h1 ping h2
 OK
+
 p4net> h1 ping 10.0.0.2 2 2
 OK
 ```
@@ -141,6 +143,7 @@ Run IPv6 ping with the same defaults as `ping`. A host name resolves to its prim
 ```text
 p4net> h1 ping6 h2
 OK
+
 p4net> h1 ping6 fd00::2
 OK
 ```
@@ -258,6 +261,7 @@ Read an indirect counter cell, or use `reset` to clear it. With an index, readin
 ```text
 p4net> s1 counter reset MyIngress.ingress_pkts 1
 ok
+
 p4net> s1 counter MyIngress.ingress_pkts 1
 pkts=0 bytes=0
 ```

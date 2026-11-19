@@ -100,6 +100,46 @@ def test_shell_dispatcher_color_is_on() -> None:
     assert shell.dispatcher.color is True
 
 
+def test_shell_separates_command_output_from_the_next_prompt(tmp_path: Path) -> None:
+    network = _network_with([], [])
+    network.topology.to_graphviz.return_value = "digraph p4net {\n\n}\n"
+    network.pingall.side_effect = [{}, KeyboardInterrupt]
+    session = MagicMock()
+    session.prompt.side_effect = [
+        "help switches",
+        "",
+        "# comment",
+        "pingall",
+        "topology graph",
+        "help unknown",
+        "pingall",
+        "exit",
+    ]
+    stream = StringIO()
+    shell = P4NetShell(network, history_file=tmp_path / "history")
+    with (
+        patch("p4net.cli.shell.PromptSession", return_value=session),
+        create_app_session(output=PlainTextOutput(stream)),
+    ):
+        shell.run()
+
+    assert stream.getvalue().splitlines() == [
+        "switches",
+        "  List switches and their gRPC addresses / pids.",
+        "",
+        "(no hosts to ping)",
+        "",
+        "digraph p4net {",
+        "",
+        "}",
+        "",
+        "Error: no help for 'unknown'",
+        "",
+        "^C cancelled",
+        "",
+    ]
+
+
 @pytest.mark.parametrize("color", [False, True])
 def test_shell_renders_errors_consistently(tmp_path: Path, color: bool) -> None:
     network = _network_with(["h1"], ["s1"])
@@ -107,7 +147,7 @@ def test_shell_renders_errors_consistently(tmp_path: Path, color: bool) -> None:
         "no counter named 'missing'"
     )
     host = network.hosts["h1"]
-    host.ping.side_effect = RuntimeError("ping unavailable")
+    host.ping.side_effect = RuntimeError("ping unavailable\n")
     host.exec.return_value = subprocess.CompletedProcess(
         args=["printf"], returncode=0, stdout=b"error: from host\n", stderr=b""
     )
@@ -147,7 +187,8 @@ def test_shell_renders_errors_consistently(tmp_path: Path, color: bool) -> None:
     else:
         assert "\x1b" not in rendered
     plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", rendered)
-    assert plain.splitlines() == [*errors, "error: from host"]
+    expected = "\n\n".join([*errors, "error: from host", ""])
+    assert plain.splitlines() == expected.splitlines()
 
 
 # ---------------------------------------------------------------------------

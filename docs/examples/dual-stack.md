@@ -57,6 +57,7 @@ p4net> h1 cmd ip -6 addr show dev h1-eth0
 
 p4net> pingall
 2/2 succeeded
+
 p4net> pingall6
 2/2 succeeded
 ```

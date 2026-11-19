@@ -21,6 +21,12 @@ if TYPE_CHECKING:
 _DEFAULT_HISTORY = Path.home() / ".p4net_history"
 
 
+def _print_output(text: str) -> None:
+    text = text.rstrip("\r\n")
+    if text:
+        print_formatted_text(ANSI(text), end="\n\n")
+
+
 class P4NetShell:
     """A thin prompt_toolkit REPL around a CommandDispatcher.
 
@@ -47,7 +53,8 @@ class P4NetShell:
         return self._dispatcher
 
     def _print_error(self, detail: str) -> None:
-        print_formatted_text(ANSI(red(f"Error: {detail}", color=self._dispatcher.color)))
+        detail = detail.rstrip("\r\n")
+        _print_output(red(f"Error: {detail}", color=self._dispatcher.color))
 
     def run(self) -> None:
         """Block, read lines, dispatch, until CLIExit or EOF."""
@@ -73,7 +80,7 @@ class P4NetShell:
                 break
             except KeyboardInterrupt:
                 # Ctrl-C while a command is running.
-                print_formatted_text(ANSI("\x1b[33m^C cancelled\x1b[0m"))
+                _print_output("\x1b[33m^C cancelled\x1b[0m")
                 continue
             except CLIUsageError as exc:
                 self._print_error(str(exc))
@@ -82,5 +89,5 @@ class P4NetShell:
             else:
                 if isinstance(output, _CommandErrorOutput):
                     self._print_error(output.detail)
-                elif output:
-                    print_formatted_text(ANSI(output))
+                else:
+                    _print_output(output)

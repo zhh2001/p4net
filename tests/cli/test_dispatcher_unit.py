@@ -105,11 +105,19 @@ def test_invalid_quotes_raise(two_host_network: MagicMock) -> None:
 def test_help_lists_every_command(two_host_network: MagicMock) -> None:
     d = CommandDispatcher(two_host_network)
     out = d.dispatch("help")
+    general, hosts, switches = out.split("\n\n")
+    assert general.startswith("General commands\n")
+    assert hosts.startswith("Host commands\n")
+    assert switches.startswith("Switch commands\n")
     for cmd in ("help", "exit", "quit", "status", "hosts", "switches", "pingall"):
-        assert cmd in out
-    assert "<host> ping" in out
-    assert "<host> cmd" in out
-    assert "<host> ifconfig" in out
+        assert f"  {cmd} " in general
+    assert "<host> ping" in hosts
+    assert "<host> cmd" in hosts
+    assert "<host> ifconfig" in hosts
+    assert "<switch> table add" in switches
+    assert max(map(len, out.splitlines())) <= 60
+    listen, continuation = switches.splitlines()[-2:]
+    assert listen.index("Block until") == len(continuation) - len(continuation.lstrip())
 
 
 def test_help_for_specific_topic(two_host_network: MagicMock) -> None:
@@ -123,6 +131,17 @@ def test_help_for_compound_topic(two_host_network: MagicMock) -> None:
     d = CommandDispatcher(two_host_network)
     out = d.dispatch("help <host> ping")
     assert "<host> ping" in out
+
+
+def test_help_keeps_long_usage_parameter_groups_together(two_host_network: MagicMock) -> None:
+    d = CommandDispatcher(two_host_network)
+    out = d.dispatch("help s1 table add")
+    assert out.splitlines()[:3] == [
+        "s1 table add <table>",
+        "    match: <k>=<v>[,<k>=<v>...] action: <name>",
+        "    [params: <k>=<v>[,<k>=<v>...]] [priority: <int>]",
+    ]
+    assert max(map(len, out.splitlines())) <= 60
 
 
 @pytest.mark.parametrize(

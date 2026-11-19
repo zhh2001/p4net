@@ -48,13 +48,14 @@ usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
 
 ### `help` 与 `help <command>`
 
-`help` 列出可用命令，指定主题后显示对应语法和说明：
+`help` 按通用、主机和交换机三组列出命令。指定主题后显示对应语法和说明。
 
 ```text
-p4net> help pingall
+p4net> help switches
 pingall [count] [timeout]
+  Ping every pair of hosts; print a result matrix.
 
-Ping every pair of hosts; print a result matrix.
+p4net>
 ```
 
 可以用当前拓扑中的节点名查询用法，例如 `help h1 ping` 或 `help s1 table add`。用 `help <host> ping` 或 `help <switch> table add` 可查看通用语法。在 `help` 后按 `Tab` 可补全帮助主题。
@@ -130,6 +131,7 @@ p4net 根据次数、超时和默认一秒的发送间隔计算整体等待时�
 ```text
 p4net> h1 ping h2
 OK
+
 p4net> h1 ping 10.0.0.2 2 2
 OK
 ```
@@ -141,6 +143,7 @@ OK
 ```text
 p4net> h1 ping6 h2
 OK
+
 p4net> h1 ping6 fd00::2
 OK
 ```
@@ -258,6 +261,7 @@ ok
 ```text
 p4net> s1 counter reset MyIngress.ingress_pkts 1
 ok
+
 p4net> s1 counter MyIngress.ingress_pkts 1
 pkts=0 bytes=0
 ```
