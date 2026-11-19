@@ -10,8 +10,9 @@ via the CPU port (510). The controller can also inject packets via
 
 ## What you'll see
 
-`s1 packet listen` displays incoming punts in real time as the host
-emits ARP / IPv6 ND / ICMP traffic. `s1 packet send` injects a
+`s1 packet listen` collects packets punted while the host emits ARP,
+IPv6 ND, or ICMP traffic. It shows the collected packets when the count
+is reached or the timeout expires. `s1 packet send` injects a
 controller-built frame back into the dataplane.
 
 ## Topology
@@ -52,6 +53,7 @@ In the shell:
 
 ```
 p4net> s1 packet listen count=3 timeout=5
+Waiting for 3 packets on s1 (up to 5s)...
 [ingress_port=1] 333300000016000000000001...
 [ingress_port=1] 333300000016000000000001...
 [ingress_port=1] ff02000000000000000000010002...

@@ -140,6 +140,33 @@ def test_shell_separates_command_output_from_the_next_prompt(tmp_path: Path) -> 
     ]
 
 
+def test_shell_prints_packet_listen_progress_before_waiting(tmp_path: Path) -> None:
+    network = _network_with([], ["s1"])
+    client = network.switches["s1"].client
+    deregister = client.on_packet_in.return_value
+    session = MagicMock()
+    session.prompt.side_effect = ["s1 packet listen count=2 timeout=3", "exit"]
+    stream = StringIO()
+    message = "Waiting for 2 packets on s1 (up to 3s)..."
+
+    def wait(*, timeout: float) -> bool:
+        assert timeout == 3.0
+        client.on_packet_in.assert_called_once()
+        assert stream.getvalue().splitlines() == [message]
+        return False
+
+    shell = P4NetShell(network, history_file=tmp_path / "history")
+    with (
+        patch("p4net.cli.shell.PromptSession", return_value=session),
+        patch("threading.Event.wait", side_effect=wait),
+        create_app_session(output=PlainTextOutput(stream)),
+    ):
+        shell.run()
+
+    assert stream.getvalue().splitlines() == [message, "(no packets within 3.0s)", ""]
+    deregister.assert_called_once()
+
+
 @pytest.mark.parametrize("color", [False, True])
 def test_shell_renders_errors_consistently(tmp_path: Path, color: bool) -> None:
     network = _network_with(["h1"], ["s1"])

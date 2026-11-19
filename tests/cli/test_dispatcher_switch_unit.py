@@ -960,10 +960,13 @@ def test_packet_listen_invalid_timeout_never_registers(
         return deregister
 
     client.on_packet_in.side_effect = register
+    progress = MagicMock()
+    dispatcher = CommandDispatcher(network, on_progress=progress)
     with pytest.raises(CLIUsageError, match="timeout") as error:
-        CommandDispatcher(network).dispatch(f"s1 packet listen timeout={value}")
+        dispatcher.dispatch(f"s1 packet listen timeout={value}")
     assert str(error.value).startswith("s1 packet listen:")
     client.on_packet_in.assert_not_called()
+    progress.assert_not_called()
     deregister.assert_not_called()
 
 
@@ -988,21 +991,30 @@ def test_packet_listen_valid_timeout_captures_and_deregisters(
 def test_packet_listen_zero_timeout_without_packets_deregisters(network: MagicMock) -> None:
     deregister = MagicMock()
     network.switches["s1"].client.on_packet_in.return_value = deregister
-    assert (
-        CommandDispatcher(network).dispatch("s1 packet listen timeout=0")
-        == "(no packets within 0.0s)"
-    )
+    progress = MagicMock()
+    dispatcher = CommandDispatcher(network, on_progress=progress)
+    assert dispatcher.dispatch("s1 packet listen timeout=0") == "(no packets within 0.0s)"
+    progress.assert_not_called()
     deregister.assert_called_once()
 
 
-def test_packet_listen_interruption_deregisters(network: MagicMock) -> None:
+@pytest.mark.parametrize("interrupt_during_progress", [False, True])
+def test_packet_listen_interruption_deregisters(
+    network: MagicMock, interrupt_during_progress: bool
+) -> None:
     deregister = MagicMock()
     network.switches["s1"].client.on_packet_in.return_value = deregister
+    progress = MagicMock(side_effect=KeyboardInterrupt if interrupt_during_progress else None)
     with (
-        patch("threading.Event.wait", side_effect=KeyboardInterrupt),
+        patch("threading.Event.wait", side_effect=KeyboardInterrupt) as wait,
         pytest.raises(KeyboardInterrupt),
     ):
-        CommandDispatcher(network).dispatch("s1 packet listen timeout=1")
+        CommandDispatcher(network, on_progress=progress).dispatch("s1 packet listen timeout=1")
+    progress.assert_called_once_with("Waiting for 1 packet on s1 (up to 1s)...")
+    if interrupt_during_progress:
+        wait.assert_not_called()
+    else:
+        wait.assert_called_once_with(timeout=1.0)
     deregister.assert_called_once()
 
 

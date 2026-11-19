@@ -1,8 +1,8 @@
-"""Pure command parser/executor for the p4net interactive shell.
+"""Command parser/executor for the p4net interactive shell.
 
 The dispatcher takes a `Network`, accepts a single input line, and returns
-formatted output (strings only). It carries no interactive concerns: the
-shell wraps it, and unit tests target it directly with a mock Network.
+formatted output. An optional callback receives progress messages before a
+command returns. The shell handles terminal rendering.
 """
 
 from __future__ import annotations
@@ -135,9 +135,16 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
 class CommandDispatcher:
     """Parse and execute p4net CLI commands against a running Network."""
 
-    def __init__(self, network: Network, *, color: bool = False) -> None:
+    def __init__(
+        self,
+        network: Network,
+        *,
+        color: bool = False,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> None:
         self._network = network
         self._color = color
+        self._on_progress = on_progress
         self._top_level_handlers = {
             "help": self._cmd_help,
             "exit": self._cmd_exit,
@@ -870,6 +877,11 @@ class CommandDispatcher:
 
         deregister = switch.client.on_packet_in(handler)  # type: ignore[attr-defined]
         try:
+            if timeout > 0 and self._on_progress is not None:
+                packet_label = "packet" if count == 1 else "packets"
+                self._on_progress(
+                    f"Waiting for {count} {packet_label} on {switch_name} (up to {timeout:g}s)..."
+                )
             done.wait(timeout=timeout)
         finally:
             deregister()

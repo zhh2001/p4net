@@ -10,9 +10,9 @@ description: 把每个数据平面包都通过 CPU 端口上送控制器的流�
 
 ## 你将看到什么
 
-主机产生 ARP / IPv6 ND / ICMP 流量时，`s1 packet listen` 会实时
-显示上送上来的数据包。`s1 packet send` 把控制器构造的帧反向
-注入数据平面。
+主机产生 ARP、IPv6 ND 或 ICMP 流量时，`s1 packet listen` 会收集
+上送的数据包，达到目标数量或超时后显示结果。`s1 packet send`
+把控制器构造的帧注入数据平面。
 
 ## 拓扑
 
@@ -52,6 +52,7 @@ Shell 中：
 
 ```
 p4net> s1 packet listen count=3 timeout=5
+Waiting for 3 packets on s1 (up to 5s)...
 [ingress_port=1] 333300000016000000000001...
 [ingress_port=1] 333300000016000000000001...
 [ingress_port=1] ff02000000000000000000010002...
