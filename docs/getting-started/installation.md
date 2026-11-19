@@ -1,18 +1,16 @@
 ---
-description: Prepare the Linux tools, install p4net in a virtual environment, and verify the installation.
+description: Install the Linux tools and the p4net CLI, or set up p4net in a Python project.
 ---
 
 # Installation
 
-Install the Linux tools first, then install p4net in a Python virtual environment. The Python package does not include the P4 compiler or BMv2.
+Install the Linux tools first. For the CLI tutorials, install p4net globally with pipx so that `sudo p4net` works. The Python package does not include the P4 compiler or BMv2.
 
 ## System requirements
 
 - Linux with kernel 5.4 or newer. CI runs on Ubuntu 22.04 and 24.04.
 - Python 3.10 or newer. CI covers Python 3.10–3.13.
-- Root privileges to run a network, including creating network namespaces, configuring links and starting switches. Installing the package, defining a topology and compiling P4 programs do not require root.
-
-The commands below use `sudo` for network operations. Run the installation commands as your regular user.
+- Root privileges to run a network, including creating network namespaces, configuring links and starting switches. Defining a topology and compiling P4 programs can use your regular account.
 
 ## Install the external tools { #required-external-tools }
 
@@ -54,9 +52,41 @@ Two features need additional tools:
 - Rendering topology diagrams as SVG, PNG or PDF requires Graphviz (`sudo apt install graphviz`). Exporting DOT files does not require Graphviz.
 - Reading, writing or resetting registers requires `simple_switch_CLI` and BMv2's Thrift service. Keep Thrift support enabled when building BMv2 if you need these operations.
 
-## Install from PyPI
+## Install the CLI with pipx { #install-cli }
 
-Create and activate a virtual environment, then install p4net:
+On Ubuntu, install pipx from the system packages. For other distributions, follow the [pipx installation guide](https://pipx.pypa.io/stable/how-to/install-pipx.html) and make sure `sudo pipx --version` runs.
+
+```bash
+sudo apt install pipx
+sudo pipx --version
+```
+
+With pipx 1.6.0 or newer, pass `--global` after `install`.
+
+```bash
+sudo pipx install --global p4net
+```
+
+With older pipx versions, such as pipx 1.4.3 in Ubuntu 24.04's default repositories, specify the same [global installation directories](https://pipx.pypa.io/stable/how-to/configure-paths.html#install-for-all-users) explicitly.
+
+```bash
+sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+  PIPX_MAN_DIR=/usr/local/share/man pipx install p4net
+```
+
+## Verify the installation
+
+Check that `sudo` can find and run the CLI.
+
+```bash
+sudo p4net --help
+```
+
+pipx places the command in `/usr/local/bin` by default and keeps p4net and its Python dependencies in an isolated environment under `/opt/pipx`. Once the help appears, continue with [Quick Start](quickstart.md).
+
+## Install in a project environment { #project-environments }
+
+To import p4net in your own Python project or use additional Python dependencies in a topology, install it in the project's virtual environment.
 
 ```bash
 python3 -m venv .venv
@@ -64,7 +94,13 @@ python3 -m venv .venv
 python -m pip install p4net
 ```
 
-pip installs the Python dependencies automatically. Keep this environment active for the remaining commands.
+With this environment active, use its p4net entry point when following a CLI example.
+
+```bash
+sudo "$(command -v p4net)" quickstart.py
+```
+
+`command -v` selects the CLI from the active environment before `sudo` switches users. The same CLI is available through `sudo "$(command -v python)" -m p4net quickstart.py`.
 
 ## Install from source
 
@@ -78,32 +114,12 @@ python3 -m venv .venv
 python -m pip install -e '.[dev]'
 ```
 
+To run a topology from this checkout, use the [entry point for the active project environment](#project-environments).
+
 The documentation uses [CairoSVG](https://cairosvg.org/documentation/) to generate social cards. On Ubuntu, install the system Cairo library with `sudo apt install libcairo2`, then install the documentation tools from the repository root:
 
 ```bash
 python -m pip install -e '.[dev,docs]'
-```
-
-## Verify the installation
-
-Check the installed version, CLI and Python dependencies:
-
-```bash
-python -c "import p4net; print(p4net.__version__)"
-p4net --help
-python -m pip check
-```
-
-The first command prints the version you installed. Continue with [Quick Start](quickstart.md) to create `quickstart.py` and its P4 program, then start the network:
-
-```bash
-sudo "$(command -v p4net)" quickstart.py
-```
-
-`command -v p4net` selects the CLI from the active environment. If you installed the external tools in a custom directory, include that directory in `PATH` when running through `sudo`:
-
-```bash
-sudo env "PATH=$PATH" "$(command -v p4net)" quickstart.py
 ```
 
 ## Run tests and build the documentation

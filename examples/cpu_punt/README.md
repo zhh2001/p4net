@@ -25,19 +25,12 @@ metadata field.
 - Linux, Python ≥ 3.10.
 - Root privileges (network namespaces and veth creation).
 - `p4c` and `simple_switch_grpc` on `PATH`.
-- `pip install -e '.[dev]'` in a venv.
+- [p4net CLI installed with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli).
 
 ## Running
 
-```
-sudo python examples/cpu_punt/topology.py
+```sh
 sudo p4net examples/cpu_punt/topology.py
-```
-
-If `sudo` strips your venv from `PATH`, invoke through `env`:
-
-```
-sudo env "PATH=$PATH" p4net examples/cpu_punt/topology.py
 ```
 
 ## Things to try in the shell

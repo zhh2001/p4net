@@ -6,12 +6,16 @@ description: 通过日志、主机状态和交换机配置，排查启动、P4Ru
 
 下文以 `topology.py`、主机 `h1`、`h2` 和交换机 `s1` 为例，操作时替换为实际名称。
 
+## sudo 找不到 p4net
+
+如果 `sudo p4net` 报告 `command not found`，请检查 [pipx 全局安装](getting-started/installation.md#install-cli)。如果 p4net 安装在虚拟环境中，请使用[该项目环境中的命令入口](getting-started/installation.md#project-environments)。
+
 ## 收集日志和运行状态
 
-激活安装了 p4net 的 Python 环境，然后启用 Python 调试日志、BMv2 日志和抓包：
+启动拓扑并启用 Python 调试日志、BMv2 日志和抓包。
 
 ```bash
-sudo env "PATH=$PATH" "$(command -v p4net)" -vv \
+sudo p4net -vv \
   --log-dir ./logs --pcap-dir ./pcaps topology.py
 ```
 
@@ -33,7 +37,7 @@ tail -n 80 ./logs/s1.log
 
 ## 创建命名空间或链路时权限不足
 
-创建命名空间或链路时出现 `Operation not permitted` 或 `Permission denied`，使用上面的 `sudo` 命令启动拓扑。安装 p4net、编译 P4 程序可以使用普通用户。
+创建命名空间或链路时出现 `Operation not permitted` 或 `Permission denied`，使用上面的 `sudo` 命令启动拓扑。编译 P4 程序可以使用普通账号。
 
 `sysctl` 写入失败会报告为 `NamespaceError`。根据异常中的键名和命令错误，检查权限、接口是否存在，以及 `sysctl` 命令是否可用。
 
@@ -42,10 +46,17 @@ tail -n 80 ./logs/s1.log
 `CompilerNotFoundError` 表示找不到 p4c，或 p4c 无法正常运行。`BMv2NotFoundError` 表示找不到 `simple_switch_grpc`。主机命令和命名空间配置还需要 Linux 网络工具：
 
 ```bash
-command -v p4c simple_switch_grpc ip tc ping sysctl
+sudo sh -c 'command -v p4c simple_switch_grpc ip tc ping sysctl'
 ```
 
-缺少的工具按[安装指南](getting-started/installation.md#required-external-tools)补齐。如果工具安装在自定义目录中，使用 `sudo` 时需像启动命令那样显式传入 `PATH`。寄存器操作还需要 `simple_switch_CLI` 和 BMv2 的 Thrift 服务。
+缺少的工具按[安装指南](getting-started/installation.md#required-external-tools)补齐。寄存器操作还需要 `simple_switch_CLI` 和 BMv2 的 Thrift 服务。
+
+如果工具安装在自定义目录中，可在这次启动时显式加入 `PATH`。将 `/opt/p4-tools/bin` 替换为实际目录。
+
+```bash
+sudo env "PATH=/opt/p4-tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  p4net topology.py
+```
 
 ## BMv2 提前退出或 gRPC 端口未就绪
 

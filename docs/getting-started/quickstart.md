@@ -4,7 +4,7 @@ description: Create one switch and two hosts, then verify bidirectional connecti
 
 # Quick Start
 
-This example creates two Linux hosts and one BMv2 switch, then checks both directions with `pingall`. Complete [Installation](installation.md) first, and run the commands below in the Python environment where p4net is installed.
+This example creates two Linux hosts and one BMv2 switch, then checks both directions with `pingall`. First [install the CLI with pipx](installation.md#install-cli) and check that `sudo p4net --help` works.
 
 ```text
 h1 (10.0.0.1/24) ---- 1 [ s1 ] 2 ---- h2 (10.0.0.2/24)
@@ -103,10 +103,10 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 Run from the directory containing both files:
 
 ```bash
-sudo "$(command -v p4net)" quickstart.py
+sudo p4net quickstart.py
 ```
 
-This uses the `p4net` executable from the current environment, including a virtual environment. The CLI loads the module-level `topology`, compiles the P4 program, creates host namespaces and links, starts BMv2, and installs the pipeline through P4Runtime. It then displays the `p4net>` prompt.
+The CLI loads the module-level `topology`, compiles the P4 program, creates host namespaces and links, starts BMv2, and installs the pipeline through P4Runtime. It then displays the `p4net>` prompt.
 
 If the topology file defines `setup(net)`, the CLI calls it after startup and before opening the shell. This example needs no extra initialization.
 

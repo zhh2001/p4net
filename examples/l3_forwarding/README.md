@@ -23,22 +23,12 @@ Python via P4Runtime, not baked into the data plane.
 - Linux, Python ≥ 3.10.
 - Root privileges (network namespaces and veth creation).
 - `p4c` and `simple_switch_grpc` on `PATH`.
-- `pip install -e '.[dev]'` in a venv.
+- [p4net CLI installed with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli).
 
 ## Running
 
-Either form drops you into the interactive shell after bringing the
-network up and running `setup(net)`:
-
-```
-sudo python examples/l3_forwarding/topology.py
+```sh
 sudo p4net examples/l3_forwarding/topology.py
-```
-
-If `sudo` strips your venv from `PATH`, invoke through `env`:
-
-```
-sudo env "PATH=$PATH" p4net examples/l3_forwarding/topology.py
 ```
 
 ## Things to try in the shell

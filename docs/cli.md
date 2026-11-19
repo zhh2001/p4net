@@ -12,14 +12,13 @@ The topology file must define a module-level `topology` variable containing a `T
 
 Each file is loaded as a separate Python module. It can define helper classes and dataclasses for use when constructing the topology or running `setup(net)`.
 
-Run either entry point with the Python environment where p4net is installed:
+After [installing the CLI with pipx](getting-started/installation.md#install-cli), start the topology with the following command.
 
 ```bash
-sudo env "PATH=$PATH" p4net topology.py
-sudo env "PATH=$PATH" python -m p4net topology.py
+sudo p4net topology.py
 ```
 
-Both accept the same arguments:
+The CLI accepts the following arguments.
 
 ```text
 usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
@@ -41,7 +40,7 @@ With `--pcap-dir` set, `pcap_enabled=False` in `Topology.add_switch()` excludes 
 
 ### Using `sudo` with a virtual environment { #note-on-sudo-and-path }
 
-On systems where `sudo` replaces `PATH` with `secure_path`, it may not find the active environment's `p4net`, Python, or external tools. The commands above pass the current `PATH` through `env`, so both entry points use that environment.
+If you installed p4net in a virtual environment, use the [entry point for that project environment](getting-started/installation.md#project-environments).
 
 The examples below use hosts `h1`, `h2` and switch `s1`. IPv6 commands use hosts configured with IPv6 addresses. Table names, actions, counters, and controller metadata come from the loaded P4 program. Enter each `p4net>` command on one line.
 

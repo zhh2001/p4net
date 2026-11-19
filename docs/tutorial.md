@@ -9,8 +9,7 @@ four hosts, two switches, IPv4 and IPv6 dual-stack, asymmetric link
 delay, and a CPU-port punt path that lets the controller observe
 unmatched packets. It exercises every v0.2.0 feature in one program.
 
-If you have not yet installed p4net and its external dependencies,
-start with [Installation](getting-started/installation.md).
+Set up the external tools and the CLI using the [installation guide](getting-started/installation.md).
 
 ## What we're building
 
@@ -343,7 +342,7 @@ just records the event.
 
 ## Step 6: run and explore
 
-```
+```sh
 sudo p4net tutorial.py
 ```
 

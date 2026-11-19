@@ -26,11 +26,7 @@ The framework is geared at P4 development and education: classroom labs, control
 
 ## Install
 
-```
-pip install p4net
-```
-
-Detailed instructions including the external `p4c` and BMv2 prerequisites are on the [Installation page](getting-started/installation.md).
+Follow the [installation guide](getting-started/installation.md) to set up p4c, BMv2 and the p4net CLI. Then run your first topology in [Quick Start](getting-started/quickstart.md).
 
 ## 30-second example
 

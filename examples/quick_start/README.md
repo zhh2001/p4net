@@ -11,25 +11,11 @@ BMv2 switch running a port-2-port swap, and `pingall` returning
   manage veth pairs).
 - `p4c` and `simple_switch_grpc` on `PATH`. The standard p4lang
   packages on Ubuntu 24.04 install them under `/usr/local/bin`.
-- p4net installed in development mode:
-
-```
-git clone https://github.com/zhh2001/p4net.git
-cd p4net
-pip install -e '.[dev]'
-```
+- [p4net CLI installed with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli).
 
 ## Run
 
-Two equivalent invocations — pick whichever fits your workflow.
-
-### As a self-contained script
-
-```
-sudo python examples/quick_start/quick_start.py
-```
-
-### Via the `p4net` console script
+Run the example from the repository root.
 
 ```
 sudo p4net examples/quick_start/quick_start.py
@@ -41,7 +27,15 @@ module-level `topology: Topology`, brings up the network, runs
 interactive shell. Add `--no-shell` to skip the shell and just hold the
 network up until SIGINT.
 
-Expected output (host names, switch name, then the ping matrix):
+### As a self-contained script
+
+[Install p4net in a project environment](https://zhh2001.github.io/p4net/getting-started/installation/#project-environments) and activate it. Run the script using that environment's Python.
+
+```sh
+sudo "$(command -v python)" examples/quick_start/quick_start.py
+```
+
+The standalone script prints the host names, the switch name, and the ping results.
 
 ```
 hosts: ['h1', 'h2']

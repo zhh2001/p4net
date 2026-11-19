@@ -39,17 +39,7 @@ Status: 1.8.0, stable. Public APIs follow the [API stability rules](https://zhh2
 
 ## Installation
 
-From a fresh checkout:
-
-```sh
-git clone https://github.com/zhh2001/p4net
-cd p4net
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
-```
-
-PyPI distribution may follow a future release.
+Follow the [installation guide](https://zhh2001.github.io/p4net/getting-started/installation/) to set up p4c, BMv2 and the p4net CLI. For an editable checkout and development tools, see [Contributing](CONTRIBUTING.md).
 
 ## Quick Start
 
@@ -69,19 +59,15 @@ with Network(topo) as net:
     print(net.pingall())
 ```
 
-A complete runnable version, including the matching `quick_start.p4` (a port-2-port swap that needs no runtime table programming) and a tiny static-ARP setup, lives in `examples/quick_start/`. Run it with:
+A complete runnable version, including the matching `quick_start.p4` (a port-2-port swap that needs no runtime table programming) and a tiny static-ARP setup, lives in `examples/quick_start/`. After installing the CLI, clone the repository and run the example to open the interactive shell.
 
-```
-sudo python examples/quick_start/quick_start.py
-```
-
-or, equivalently, with the `p4net` console script installed by `pip install -e .`:
-
-```
+```sh
+git clone https://github.com/zhh2001/p4net.git
+cd p4net
 sudo p4net examples/quick_start/quick_start.py
 ```
 
-The console script loads any `.py` file that defines a module-level `topology: Topology` (and optionally `setup(net)`), brings up the network, and drops you into an interactive shell. If `sudo` strips your venv from `PATH`, run the binary explicitly: `sudo env "PATH=$PATH" p4net ...`.
+The console script loads a Python file that defines a module-level `topology: Topology` and optionally `setup(net)`. The [example README](examples/quick_start/README.md#as-a-self-contained-script) also shows how to run the file directly with Python.
 
 ## Examples
 

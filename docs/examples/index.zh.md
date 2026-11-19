@@ -5,14 +5,14 @@ description: p4net 仓库中八个可运行的示例拓扑，每个只展示一�
 # 示例
 
 p4net 仓库中的 `examples/` 目录收录了八个可运行的拓扑，每个示例
-只展示一项特性，源代码因此短小易读、便于复制。任选一个运行：
+只展示一项特性，源代码因此短小易读、便于复制。先[通过 pipx 安装 CLI](../getting-started/installation.md#install-cli)，
+再从仓库根目录运行下面的快速上手示例。
 
-```
-sudo p4net examples/<name>/topology.py
+```sh
+sudo p4net examples/quick_start/quick_start.py
 ```
 
-（如果 `PATH` 中没有控制台脚本，使用 `sudo python
-examples/<name>/topology.py` 也可以。）
+其他示例的运行命令见各自的页面。
 
 ## 包含哪些示例
 

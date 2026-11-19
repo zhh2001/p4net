@@ -1,8 +1,7 @@
 # Examples
 
-Each subdirectory is a self-contained p4net topology that can be run
-either directly (`sudo python <file>.py`) or through the `p4net` console
-script (`sudo p4net <file>.py`).
+Each subdirectory contains a self-contained p4net topology. [Install the CLI with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli),
+then run the command in the example's README from the repository root.
 
 - `quick_start/` — minimal two-host network using a hardcoded port-swap pipeline.
 - `l3_forwarding/` — two hosts with runtime-programmed `ipv4_lpm` forwarding and pre-seeded static ARP.

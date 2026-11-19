@@ -6,12 +6,16 @@ description: Diagnose startup, P4Runtime and connectivity failures using logs, h
 
 The examples below use `topology.py`, hosts `h1` and `h2`, and switch `s1`. Substitute the names from your topology.
 
+## sudo cannot find p4net
+
+If `sudo p4net` reports `command not found`, check the [global pipx installation](getting-started/installation.md#install-cli). For a virtual environment installation, use the [entry point for that project environment](getting-started/installation.md#project-environments).
+
 ## Collect logs and current state
 
-Activate the Python environment where p4net is installed, then start the topology with Python debug logging, BMv2 logs and packet captures:
+Start the topology with Python debug logging, BMv2 logs and packet captures.
 
 ```bash
-sudo env "PATH=$PATH" "$(command -v p4net)" -vv \
+sudo p4net -vv \
   --log-dir ./logs --pcap-dir ./pcaps topology.py
 ```
 
@@ -33,7 +37,7 @@ If startup fails before the shell opens, read the exception and the log path it 
 
 ## Permission denied when creating namespaces or links
 
-If namespace or link creation reports `Operation not permitted` or `Permission denied`, run the topology with the `sudo` command above. Installing p4net and compiling P4 programs can use your regular account.
+If namespace or link creation reports `Operation not permitted` or `Permission denied`, run the topology with the `sudo` command above. Compiling P4 programs can use your regular account.
 
 A failed `sysctl` write is reported as `NamespaceError`. Read the key and command error in its message to check for insufficient permissions, a missing interface or an unavailable `sysctl` command.
 
@@ -42,10 +46,17 @@ A failed `sysctl` write is reported as `NamespaceError`. Read the key and comman
 `CompilerNotFoundError` identifies a missing or unusable p4c. `BMv2NotFoundError` identifies a missing `simple_switch_grpc`. Host commands and namespace configuration also depend on the Linux network tools:
 
 ```bash
-command -v p4c simple_switch_grpc ip tc ping sysctl
+sudo sh -c 'command -v p4c simple_switch_grpc ip tc ping sysctl'
 ```
 
-Install missing tools using [Installation](getting-started/installation.md#required-external-tools). If a tool is installed in a custom directory, include that directory in `PATH` when invoking `sudo`, as in the startup command above. Register operations also need `simple_switch_CLI` and BMv2's Thrift service.
+Install missing tools using [Installation](getting-started/installation.md#required-external-tools). Register operations also need `simple_switch_CLI` and BMv2's Thrift service.
+
+For tools installed in a custom directory, include that directory in the `PATH` for this invocation. Replace `/opt/p4-tools/bin` with the directory containing your tools.
+
+```bash
+sudo env "PATH=/opt/p4-tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  p4net topology.py
+```
 
 ## BMv2 exits or its gRPC port does not become ready
 

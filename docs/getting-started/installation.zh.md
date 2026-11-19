@@ -1,18 +1,16 @@
 ---
-description: 准备 Linux 工具，在虚拟环境中安装 p4net，并验证安装结果。
+description: 安装 Linux 工具和 p4net 命令行，或在 Python 项目中安装 p4net。
 ---
 
 # 安装
 
-先安装 Linux 工具，再将 p4net 安装到 Python 虚拟环境中。p4net 的 Python 包不包含 P4 编译器和 BMv2。
+先安装 Linux 工具。跟随命令行教程时，通过 pipx 全局安装 p4net，即可直接运行 `sudo p4net`。p4net 的 Python 包不包含 P4 编译器和 BMv2。
 
 ## 系统要求
 
 - Linux，内核版本不低于 5.4。CI 在 Ubuntu 22.04 和 24.04 上运行。
 - Python 3.10 或更高版本。CI 覆盖 Python 3.10–3.13。
-- 运行网络需要 root 权限，包括创建网络命名空间、配置链路和启动交换机。安装 Python 包、定义拓扑和编译 P4 程序不需要 root。
-
-下文通过 `sudo` 执行网络操作，安装 Python 包时使用普通用户。
+- 运行网络需要 root 权限，包括创建网络命名空间、配置链路和启动交换机。定义拓扑和编译 P4 程序可以使用普通账号。
 
 ## 安装外部工具 { #required-external-tools }
 
@@ -54,9 +52,41 @@ sysctl --version
 - 将拓扑渲染为 SVG、PNG 或 PDF 需要 Graphviz，可通过 `sudo apt install graphviz` 安装。仅导出 DOT 文件不需要 Graphviz。
 - 读取、写入或重置寄存器需要 `simple_switch_CLI` 和 BMv2 的 Thrift 服务。如需操作寄存器，构建 BMv2 时保留 Thrift 支持。
 
-## 从 PyPI 安装
+## 通过 pipx 安装 CLI { #install-cli }
 
-创建并激活虚拟环境，然后安装 p4net：
+Ubuntu 用户可以通过系统软件包安装 pipx。其他发行版请参照 [pipx 安装指南](https://pipx.pypa.io/stable/how-to/install-pipx.html)，并确认可以运行 `sudo pipx --version`。
+
+```bash
+sudo apt install pipx
+sudo pipx --version
+```
+
+pipx 1.6.0 及以上版本可以把 `--global` 放在 `install` 后面。
+
+```bash
+sudo pipx install --global p4net
+```
+
+Ubuntu 24.04 默认软件源提供的是 pipx 1.4.3。使用这类较早版本时，可以显式指定相同的[全局安装目录](https://pipx.pypa.io/stable/how-to/configure-paths.html#install-for-all-users)。
+
+```bash
+sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+  PIPX_MAN_DIR=/usr/local/share/man pipx install p4net
+```
+
+## 验证安装
+
+运行帮助命令，确认 `sudo` 能找到并启动 p4net。
+
+```bash
+sudo p4net --help
+```
+
+pipx 默认将命令入口放在 `/usr/local/bin`，将 p4net 和它的 Python 依赖安装到 `/opt/pipx` 下的独立环境。看到帮助后，继续阅读[快速上手](quickstart.md)。
+
+## 在项目环境中安装 { #project-environments }
+
+如果要在自己的 Python 项目中导入 p4net，或为拓扑脚本使用额外的 Python 依赖，可以将 p4net 安装到项目的虚拟环境中。
 
 ```bash
 python3 -m venv .venv
@@ -64,7 +94,13 @@ python3 -m venv .venv
 python -m pip install p4net
 ```
 
-pip 会自动安装 Python 依赖。后续命令均在已激活的环境中执行。
+跟随命令行示例时，先激活该环境，再用它的 p4net 入口启动拓扑。
+
+```bash
+sudo "$(command -v p4net)" quickstart.py
+```
+
+`command -v` 在 `sudo` 切换用户前找到当前环境中的命令入口。也可以运行 `sudo "$(command -v python)" -m p4net quickstart.py`。
 
 ## 从源码安装
 
@@ -78,32 +114,12 @@ python3 -m venv .venv
 python -m pip install -e '.[dev]'
 ```
 
+从这个源码环境启动拓扑时，请使用[当前项目环境的命令入口](#project-environments)。
+
 文档通过 [CairoSVG](https://cairosvg.org/documentation/) 生成分享图片。在 Ubuntu 上，先用 `sudo apt install libcairo2` 安装系统 Cairo 库，再在仓库根目录安装文档工具：
 
 ```bash
 python -m pip install -e '.[dev,docs]'
-```
-
-## 验证安装
-
-检查安装版本、命令行入口和 Python 依赖：
-
-```bash
-python -c "import p4net; print(p4net.__version__)"
-p4net --help
-python -m pip check
-```
-
-第一条命令会输出实际安装的版本号。接着按[快速上手](quickstart.md)创建 `quickstart.py` 和 P4 程序，再启动网络：
-
-```bash
-sudo "$(command -v p4net)" quickstart.py
-```
-
-`command -v p4net` 会选取当前环境中的命令行入口。如果外部工具安装在自定义目录中，通过 `sudo` 运行时需将该目录加入 `PATH`：
-
-```bash
-sudo env "PATH=$PATH" "$(command -v p4net)" quickstart.py
 ```
 
 ## 运行测试和构建文档

@@ -7,7 +7,6 @@ ICMP unicast does not have to resolve neighbours at test time.
 
 Run as root:
 
-    sudo python examples/l3_forwarding/topology.py
     sudo p4net examples/l3_forwarding/topology.py
 """
 

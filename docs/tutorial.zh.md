@@ -9,8 +9,7 @@ description: 一个四主机两交换机的 p4net 教程，覆盖 IPv4 与 IPv6 
 让控制器观察未匹配数据包的 CPU 端口 punt 路径。一份程序里覆盖
 v0.2.0 的全部特性。
 
-如果你尚未安装 p4net 及其外部依赖，请先阅读
-[安装](getting-started/installation.md)。
+先按[安装指南](getting-started/installation.md)配置外部工具和 p4net 命令行。
 
 ## 我们要构建什么
 
@@ -337,7 +336,7 @@ def setup(net: Network) -> None:
 
 ## 步骤 6：运行和探索
 
-```
+```sh
 sudo p4net tutorial.py
 ```
 

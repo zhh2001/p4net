@@ -5,13 +5,11 @@ so no runtime table programming is needed for hosts on opposite ports
 to reach each other. Run as root so the orchestrator can create
 namespaces and veth pairs:
 
-    sudo python examples/quick_start/quick_start.py
     sudo p4net examples/quick_start/quick_start.py
 
-The first form is a self-contained script. The second uses the `p4net`
-console script (installed by `pip install -e .`) to load this file as a
-topology module: `topology` and `setup(net)` are the two named hooks
-that the console script looks for.
+The console script loads `topology` and `setup(net)` from this module.
+The file also works as a standalone script with p4net installed in the
+Python environment that runs it.
 """
 
 from __future__ import annotations

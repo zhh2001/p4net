@@ -26,11 +26,7 @@ p4net 在 Linux 网络命名空间中拉起真实的 `simple_switch_grpc`（BMv2
 
 ## 安装
 
-```
-pip install p4net
-```
-
-详细步骤包括外部依赖 `p4c` 与 BMv2，请参见[安装](getting-started/installation.md)。
+按[安装指南](getting-started/installation.md)配置 p4c、BMv2 和 p4net 命令行，再跟随[快速上手](getting-started/quickstart.md)运行第一个拓扑。
 
 ## 30 秒示例
 

@@ -4,7 +4,7 @@ description: 创建一台交换机和两台主机，用端口互换 P4 程序验
 
 # 快速上手
 
-本例创建两台 Linux 主机和一台 BMv2 交换机，最终用 `pingall` 验证双向连通。请先完成[安装](installation.md)，并在已安装 p4net 的 Python 环境中执行下面的命令。
+本例创建两台 Linux 主机和一台 BMv2 交换机，最终用 `pingall` 验证双向连通。先[通过 pipx 安装 CLI](installation.md#install-cli)，并确认 `sudo p4net --help` 可以运行。
 
 ```text
 h1 (10.0.0.1/24) ---- 1 [ s1 ] 2 ---- h2 (10.0.0.2/24)
@@ -103,10 +103,10 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 在两个文件所在的目录执行：
 
 ```bash
-sudo "$(command -v p4net)" quickstart.py
+sudo p4net quickstart.py
 ```
 
-该命令使用当前环境中 `p4net` 的路径，适用于虚拟环境安装。CLI 读取模块级的 `topology` 变量，编译 P4 程序、创建主机命名空间和链路、启动 BMv2，并通过 P4Runtime 下发流水线。完成后显示 `p4net>` 提示符。
+CLI 读取模块级的 `topology` 变量，编译 P4 程序、创建主机命名空间和链路、启动 BMv2，并通过 P4Runtime 下发流水线。完成后显示 `p4net>` 提示符。
 
 若拓扑文件定义了 `setup(net)`，CLI 会在网络启动后、进入 Shell 前调用它。本例不需要额外初始化。
 

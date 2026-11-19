@@ -12,14 +12,13 @@ description: p4net 命令行参考，介绍拓扑启动、连通性测试、主�
 
 每个文件作为独立的 Python 模块加载，可以定义辅助类和 dataclass，用于构建拓扑或执行 `setup(net)`。
 
-使用安装了 p4net 的 Python 环境启动，两种入口等效：
+[通过 pipx 安装 CLI](getting-started/installation.md#install-cli) 后，可以直接启动拓扑。
 
 ```bash
-sudo env "PATH=$PATH" p4net topology.py
-sudo env "PATH=$PATH" python -m p4net topology.py
+sudo p4net topology.py
 ```
 
-两种入口接受相同的参数：
+启动命令接受以下参数。
 
 ```text
 usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
@@ -41,7 +40,7 @@ usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
 
 ### 虚拟环境与 `sudo` { #关于-sudo-与-path }
 
-如果系统的 `sudo` 用 `secure_path` 替换了 `PATH`，它可能找不到当前环境中的 `p4net`、Python 或外部工具。上面的启动命令通过 `env` 传入当前 `PATH`，使两个入口都使用当前环境。
+如果 p4net 安装在虚拟环境中，请使用[该项目环境中的命令入口](getting-started/installation.md#project-environments)。
 
 以下示例使用主机 `h1`、`h2` 和交换机 `s1`。IPv6 命令需要主机配置 IPv6 地址。表名、动作名、计数器和控制器元数据由加载的 P4 程序决定。`p4net>` 后的每条命令均在一行内输入。
 

@@ -6,14 +6,14 @@ description: Eight runnable p4net example topologies, each isolating one capabil
 
 p4net ships eight runnable example topologies under `examples/` in the
 repository. Each one isolates a single capability so the source is
-easy to read and copy. Run any of them with:
+easy to read and copy. [Install the CLI with pipx](../getting-started/installation.md#install-cli)
+before running the quick-start example from the repository root.
 
-```
-sudo p4net examples/<name>/topology.py
+```sh
+sudo p4net examples/quick_start/quick_start.py
 ```
 
-(or `sudo python examples/<name>/topology.py` if you don't have the
-console script on `PATH`).
+Each walkthrough gives the command for its own topology file.
 
 ## What's bundled
 
