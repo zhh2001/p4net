@@ -152,8 +152,8 @@ def test_ipv6_table_dump_human_form(ipv6_network: Network, tmp_path: Path) -> No
     # Raw byte representation must NOT be in the output.
     assert "b'\\xfd" not in out
     # Action params decoded as decimals.
-    assert "'port': '1'" in out
-    assert "'port': '2'" in out
+    assert "  params:   port=1" in out.splitlines()
+    assert "  params:   port=2" in out.splitlines()
 
 
 # ---------------------------------------------------------------------------

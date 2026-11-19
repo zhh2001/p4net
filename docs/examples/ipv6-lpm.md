@@ -57,16 +57,16 @@ h1    -           fd00::1/64   h1-eth0
 h2    -           fd00::2/64   h2-eth0
 
 p4net> s1 table dump MyIngress.ipv6_lpm
+MyIngress.ipv6_lpm (2 entries)
 #0
-  table:    MyIngress.ipv6_lpm
-  match:    {'hdr.ipv6.dstAddr': 'fd00::1/128'}
+  match:    hdr.ipv6.dstAddr=fd00::1/128
   action:   MyIngress.set_egress_port
-  params:   {'port': '1'}
+  params:   port=1
+
 #1
-  table:    MyIngress.ipv6_lpm
-  match:    {'hdr.ipv6.dstAddr': 'fd00::2/128'}
+  match:    hdr.ipv6.dstAddr=fd00::2/128
   action:   MyIngress.set_egress_port
-  params:   {'port': '2'}
+  params:   port=2
 
 p4net> pingall6
 H \ H  h1   h2
@@ -77,9 +77,6 @@ h2     1    -
 p4net> s1 counter MyIngress.ipv6_pkts 2
 pkts=1 bytes=118
 ```
-
-(That table dump output is captured verbatim from the phase-13
-integration test.)
 
 ## What's interesting
 

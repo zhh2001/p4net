@@ -196,12 +196,14 @@ def test_switch_table_add_then_dump(network: Network) -> None:
     )
     assert out_add == "ok"
     out_dump = d.dispatch(f"{s1} table dump MyIngress.ipv4_lpm")
+    assert out_dump.splitlines()[0] == "MyIngress.ipv4_lpm (3 entries)"
+    assert out_dump.count("MyIngress.ipv4_lpm") == 1
     # decode_match renders match values in human-readable form: dotted-quad / CIDR.
     assert "10.0.0.5/32" in out_dump
     assert "10.0.0.2/32" in out_dump
     assert "set_egress_port" in out_dump
     # Action params decoded width-aware: port is 9-bit -> decimal.
-    assert "'port': '2'" in out_dump
+    assert "  params:   port=2" in out_dump.splitlines()
 
 
 # ---------------------------------------------------------------------------
@@ -269,11 +271,11 @@ def test_ternary_and_range_entry_forwards_and_deletes(tmp_path: Path, range_valu
             assert len(ranges) == (0 if range_value == "0..65535" else 1)
         assert result == "ok"
         dump = d.dispatch(f"{s1} table dump MyIngress.l2_match")
-        assert "00:00:00:00:00:00&ff:ff:ff:ff:ff:00" in dump
+        assert "hdr.ethernet.srcAddr=00:00:00:00:00:00&ff:ff:ff:ff:ff:00" in dump
         if range_value == "0..65535":
             assert "hdr.ethernet.etherType" not in dump
         else:
-            assert "[34992,35007]" in dump
+            assert "hdr.ethernet.etherType=[34992,35007]" in dump
         assert "priority: 17" in dump
 
         marker = uuid.uuid4().bytes

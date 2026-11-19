@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import math
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from textwrap import fill
 from typing import TYPE_CHECKING
 
@@ -598,22 +598,26 @@ class CommandDispatcher:
         if not entries:
             return f"(table {table!r} is empty)"
         index = switch.client.index  # type: ignore[attr-defined]
-        lines: list[str] = []
+        count = len(entries)
+        entry_label = "entry" if count == 1 else "entries"
+        lines = [bold(f"{table} ({count} {entry_label})", color=self._color)]
         for i, entry in enumerate(entries):
+            if i:
+                lines.append("")
             lines.append(f"#{i}")
-            lines.append(f"  table:    {entry['table']}")
             raw_match = entry.get("match", {})
             try:
-                rendered_match: object = index.decode_match(table, raw_match)
+                rendered_match: dict[str, str] = index.decode_match(table, raw_match)
             except Exception as exc:
                 _log.debug("decode_match failed for %s: %s; falling back to raw bytes", table, exc)
-                rendered_match = dict(raw_match)
-            lines.append(f"  match:    {rendered_match}")
+                rendered_match = {name: repr(value) for name, value in raw_match.items()}
+            lines.extend(_format_table_fields("match", rendered_match))
             action_name = entry.get("action")
             lines.append(f"  action:   {action_name}")
             params = entry.get("params") or {}
             if params:
-                lines.append(f"  params:   {_render_action_params(index, action_name, params)}")
+                rendered_params = _render_action_params(index, action_name, params)
+                lines.extend(_format_table_fields("params", rendered_params))
             if entry.get("priority") is not None:
                 lines.append(f"  priority: {entry['priority']}")
         return "\n".join(lines)
@@ -936,8 +940,17 @@ class CommandDispatcher:
 
 
 # ---------------------------------------------------------------------------
-# Action-param rendering (used by `<switch> table dump`)
+# Table dump rendering
 # ---------------------------------------------------------------------------
+
+
+def _format_table_fields(label: str, fields: Mapping[str, str]) -> list[str]:
+    prefix = f"  {label + ':':<9} "
+    if not fields:
+        return [prefix + "(no fields)"]
+    first, *remaining = (f"{name}={value}" for name, value in fields.items())
+    continuation = " " * len(prefix)
+    return [prefix + first, *(continuation + field for field in remaining)]
 
 
 def _render_action_params(

@@ -201,17 +201,17 @@ MyIngress.ipv4_lpm  (lpm: hdr.ipv4.dstAddr)
 
 ### `<switch> table dump <table>`
 
-显示指定表中的表项。值按字段位宽格式化：32 位显示为 IPv4 地址，128 位显示为 IPv6 地址，48 位显示为 MAC 地址，其他位宽显示为十进制数。匹配类型决定是否附带前缀长度、掩码或范围，动作参数也按位宽格式化。
+表头显示表名和表项数。匹配字段和动作参数按 `名称=值` 逐行显示。值按字段位宽格式化：32 位显示为 IPv4 地址，128 位显示为 IPv6 地址，48 位显示为 MAC 地址，其他位宽显示为十进制数。匹配类型决定是否附带前缀长度、掩码或范围。
 
 表中只有一条 IPv4 转发表项时，输出如下：
 
 ```text
 p4net> s1 table dump MyIngress.ipv4_lpm
+MyIngress.ipv4_lpm (1 entry)
 #0
-  table:    MyIngress.ipv4_lpm
-  match:    {'hdr.ipv4.dstAddr': '10.0.0.1/32'}
+  match:    hdr.ipv4.dstAddr=10.0.0.1/32
   action:   MyIngress.set_egress_port
-  params:   {'port': '1'}
+  params:   port=1
 ```
 
 空表返回 `(table 'MyIngress.ipv4_lpm' is empty)`。

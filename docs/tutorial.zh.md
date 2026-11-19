@@ -365,20 +365,21 @@ h1     -    1    1    1
 12/12 succeeded
 
 p4net> s1 table dump MyIngress.ipv4_lpm
+MyIngress.ipv4_lpm (4 entries)
 #0
-  table:    MyIngress.ipv4_lpm
-  match:    {'hdr.ipv4.dstAddr': '10.0.0.1/32'}
+  match:    hdr.ipv4.dstAddr=10.0.0.1/32
   action:   MyIngress.set_egress_port
-  params:   {'port': '1'}
+  params:   port=1
+
 #1
   ...
 
 p4net> s1 table dump MyIngress.ipv6_lpm
+MyIngress.ipv6_lpm (4 entries)
 #0
-  table:    MyIngress.ipv6_lpm
-  match:    {'hdr.ipv6.dstAddr': 'fd00::1/128'}
+  match:    hdr.ipv6.dstAddr=fd00::1/128
   action:   MyIngress.set_egress_port
-  params:   {'port': '1'}
+  params:   port=1
   ...
 ```
 

@@ -100,7 +100,7 @@ def test_switch_table_dump_empty(network: MagicMock) -> None:
     network.switches["s1"].client.list_table_entries = MagicMock(return_value=[])
     d = CommandDispatcher(network)
     out = d.dispatch("s1 table dump MyIngress.ipv4_lpm")
-    assert "empty" in out
+    assert out == "(table 'MyIngress.ipv4_lpm' is empty)"
 
 
 def test_switch_table_dump_renders_entry(network: MagicMock) -> None:
@@ -117,13 +117,56 @@ def test_switch_table_dump_renders_entry(network: MagicMock) -> None:
     )
     d = CommandDispatcher(network)
     out = d.dispatch("s1 table dump MyIngress.ipv4_lpm")
-    assert "MyIngress.ipv4_lpm" in out
-    assert "MyIngress.set_egress_port" in out
-    # Match value rendered as human IPv4/CIDR, not raw bytes.
-    assert "10.0.0.0/24" in out
-    assert "b'\\n" not in out
-    # Action params decoded as decimals (port is a 9-bit field).
-    assert "'port': '2'" in out
+    assert out.splitlines() == [
+        "MyIngress.ipv4_lpm (1 entry)",
+        "#0",
+        "  match:    hdr.ipv4.dstAddr=10.0.0.0/24",
+        "  action:   MyIngress.set_egress_port",
+        "  params:   port=2",
+    ]
+
+
+def test_table_dump_aligns_multiple_fields_and_separates_entries(network: MagicMock) -> None:
+    p4info = _build_p4info()
+    field = p4info.tables[0].match_fields.add()
+    field.id = 2
+    field.name = "hdr.ipv4.protocol"
+    field.bitwidth = 8
+    field.match_type = p4info_pb2.MatchField.TERNARY
+    param = p4info.actions[1].params.add()
+    param.id = 2
+    param.name = "queue"
+    param.bitwidth = 8
+    client = network.switches["s1"].client
+    client.index = P4InfoIndex(p4info)
+    client.list_table_entries.return_value = [
+        {
+            "table": "MyIngress.ipv4_lpm",
+            "match": {
+                "hdr.ipv4.dstAddr": (b"\x0a\x00\x00\x00", 24),
+                "hdr.ipv4.protocol": (b"\x06", b"\xff"),
+            },
+            "action": "MyIngress.set_egress_port",
+            "params": {"port": b"\x02", "queue": b"\x03"},
+            "priority": 17,
+        },
+        {"table": "MyIngress.ipv4_lpm", "match": {}, "action": "NoAction"},
+    ]
+    out = CommandDispatcher(network).dispatch("s1 table dump MyIngress.ipv4_lpm")
+    assert out.splitlines() == [
+        "MyIngress.ipv4_lpm (2 entries)",
+        "#0",
+        "  match:    hdr.ipv4.dstAddr=10.0.0.0/24",
+        "            hdr.ipv4.protocol=6&255",
+        "  action:   MyIngress.set_egress_port",
+        "  params:   port=2",
+        "            queue=3",
+        "  priority: 17",
+        "",
+        "#1",
+        "  match:    (no fields)",
+        "  action:   NoAction",
+    ]
 
 
 def _build_p4info_with_port_width(port_bitwidth: int) -> p4info_pb2.P4Info:
@@ -176,13 +219,7 @@ def test_table_dump_uses_per_switch_action_param_widths() -> None:
     )
     sw_b = MagicMock(name="RunningSwitch-sb")
     sw_b.client = MagicMock()
-    # 16-bit port — the same value 5 still encodes to b"\x05" canonical, but
-    # decode_int's bitwidth check uses 16, so this proves we picked the
-    # right index. Use a value that round-trips differently per width:
-    # the high byte 0x01 below is invalid as a 9-bit value (0x01ff max
-    # for 9 bits, so 0x0105 = 261 fits both — pick a value distinguishable
-    # only by formatting, not by range overflow).
-    sw_b.client.index = P4InfoIndex(_build_p4info_with_port_width(16))
+    sw_b.client.index = P4InfoIndex(_build_p4info_with_port_width(32))
     sw_b.client.list_table_entries = MagicMock(
         return_value=[
             {
@@ -205,22 +242,13 @@ def test_table_dump_uses_per_switch_action_param_widths() -> None:
     d = CommandDispatcher(n)
     out_a = d.dispatch("sa table dump MyIngress.ipv4_lpm")
     out_b = d.dispatch("sb table dump MyIngress.ipv4_lpm")
-    # Both decode to the integer 5, but each used its own switch's index
-    # to do the lookup. Verify neither switch's call_args reached into
-    # the other's index — every action-param decode must come from the
-    # switch named in the dispatch line.
-    assert "'port': '5'" in out_a
-    assert "'port': '5'" in out_b
-    # Also exercise the cross-switch path doesn't poison: dump twice on
-    # alternate switches, confirm both still render correctly.
-    out_a2 = d.dispatch("sa table dump MyIngress.ipv4_lpm")
-    out_b2 = d.dispatch("sb table dump MyIngress.ipv4_lpm")
-    assert "'port': '5'" in out_a2
-    assert "'port': '5'" in out_b2
+    assert "  params:   port=5" in out_a.splitlines()
+    assert "  params:   port=0.0.0.5" in out_b.splitlines()
+    assert d.dispatch("sa table dump MyIngress.ipv4_lpm") == out_a
 
 
 def test_switch_table_dump_decode_failure_falls_back(network: MagicMock) -> None:
-    """If decode_match raises (e.g. corrupt entry), render the raw dict."""
+    """If decoding fails, include the original value on its field's line."""
     network.switches["s1"].client.list_table_entries = MagicMock(
         return_value=[
             {
@@ -228,16 +256,15 @@ def test_switch_table_dump_decode_failure_falls_back(network: MagicMock) -> None
                 # Wrong shape for LPM (bytes instead of (bytes, plen)) -> raises.
                 "match": {"hdr.ipv4.dstAddr": b"\x0a\x00\x00\x00"},
                 "action": "NoAction",
-                "params": {},
+                "params": {"opaque": b"\x01"},
                 "priority": None,
             }
         ]
     )
     d = CommandDispatcher(network)
     out = d.dispatch("s1 table dump MyIngress.ipv4_lpm")
-    # Raw fallback path keeps the dump from failing.
-    assert "MyIngress.ipv4_lpm" in out
-    assert "NoAction" in out
+    assert f"  match:    hdr.ipv4.dstAddr={bytes([10, 0, 0, 0])!r}" in out.splitlines()
+    assert "  params:   opaque=b'\\x01'" in out.splitlines()
 
 
 # ---------------------------------------------------------------------------

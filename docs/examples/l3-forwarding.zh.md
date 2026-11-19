@@ -45,16 +45,16 @@ Shell 中：
 
 ```
 p4net> s1 table dump MyIngress.ipv4_lpm
+MyIngress.ipv4_lpm (2 entries)
 #0
-  table:    MyIngress.ipv4_lpm
-  match:    {'hdr.ipv4.dstAddr': '10.0.0.1/32'}
+  match:    hdr.ipv4.dstAddr=10.0.0.1/32
   action:   MyIngress.set_egress_port
-  params:   {'port': '1'}
+  params:   port=1
+
 #1
-  table:    MyIngress.ipv4_lpm
-  match:    {'hdr.ipv4.dstAddr': '10.0.0.2/32'}
+  match:    hdr.ipv4.dstAddr=10.0.0.2/32
   action:   MyIngress.set_egress_port
-  params:   {'port': '2'}
+  params:   port=2
 
 p4net> pingall
 H \ H  h1   h2

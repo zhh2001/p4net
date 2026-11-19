@@ -201,17 +201,17 @@ MyIngress.ipv4_lpm  (lpm: hdr.ipv4.dstAddr)
 
 ### `<switch> table dump <table>`
 
-Show entries in the named table. Values are formatted by field width: 32-bit values as IPv4 addresses, 128-bit values as IPv6 addresses, 48-bit values as MAC addresses, and other widths as decimal numbers. Match types add the prefix length, mask, or range. Action parameters use the same width-based formatting.
+The heading shows the table name and entry count. Each match field and action parameter appears on its own line as `name=value`. Values are formatted by field width: 32-bit values as IPv4 addresses, 128-bit values as IPv6 addresses, 48-bit values as MAC addresses, and other widths as decimal numbers. Match types add the prefix length, mask, or range.
 
 For a table containing one IPv4 forwarding entry:
 
 ```text
 p4net> s1 table dump MyIngress.ipv4_lpm
+MyIngress.ipv4_lpm (1 entry)
 #0
-  table:    MyIngress.ipv4_lpm
-  match:    {'hdr.ipv4.dstAddr': '10.0.0.1/32'}
+  match:    hdr.ipv4.dstAddr=10.0.0.1/32
   action:   MyIngress.set_egress_port
-  params:   {'port': '1'}
+  params:   port=1
 ```
 
 An empty table returns `(table 'MyIngress.ipv4_lpm' is empty)`.
