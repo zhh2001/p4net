@@ -117,8 +117,8 @@ sudo "$(command -v p4net)" quickstart.py
 ```text
 p4net> hosts
 name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  -           h1-eth0
-h2    10.0.0.2/24  -           h2-eth0
+h1    10.0.0.1/24  -            h1-eth0
+h2    10.0.0.2/24  -            h2-eth0
 
 p4net> pingall
 H \ H h1  h2

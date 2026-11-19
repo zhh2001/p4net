@@ -249,7 +249,7 @@ class CommandDispatcher:
         hosts = self._network.hosts
         if not hosts:
             return "(no hosts)"
-        rows: list[tuple[str, str, str, str]] = []
+        rows = [("name", "primary_ip", "primary_ip6", "interfaces")]
         for name, host in hosts.items():
             cidr4 = next((c for c in host.interfaces.values() if c), None) or "-"
             cidr6 = (
@@ -261,17 +261,14 @@ class CommandDispatcher:
             )
             ifaces = ", ".join(host.interfaces) if host.interfaces else "-"
             rows.append((name, cidr4, cidr6, ifaces))
-        name_w = max(4, max(len(r[0]) for r in rows))
-        ip_w = max(10, max(len(r[1]) for r in rows))
-        ip6_w = max(10, max(len(r[2]) for r in rows))
-        header = bold(
-            f"{'name'.ljust(name_w)}  {'primary_ip'.ljust(ip_w)}  "
-            f"{'primary_ip6'.ljust(ip6_w)}  interfaces",
-            color=self._color,
-        )
-        lines = [header]
-        for name, ip, ip6, ifaces in rows:
-            lines.append(f"{name.ljust(name_w)}  {ip.ljust(ip_w)}  {ip6.ljust(ip6_w)}  {ifaces}")
+        name_w = max(len(row[0]) for row in rows)
+        ip_w = max(len(row[1]) for row in rows)
+        ip6_w = max(len(row[2]) for row in rows)
+        lines = [
+            f"{name:<{name_w}}  {ip:<{ip_w}}  {ip6:<{ip6_w}}  {ifaces}"
+            for name, ip, ip6, ifaces in rows
+        ]
+        lines[0] = bold(lines[0], color=self._color)
         return "\n".join(lines)
 
     def _cmd_switches(self, tokens: list[str]) -> str:

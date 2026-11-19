@@ -75,8 +75,8 @@ List each host's first configured IPv4 and IPv6 addresses, followed by its inter
 ```text
 p4net> hosts
 name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  fd00::1/64  h1-eth0
-h2    10.0.0.2/24  fd00::2/64  h2-eth0
+h1    10.0.0.1/24  fd00::1/64   h1-eth0
+h2    10.0.0.2/24  fd00::2/64   h2-eth0
 ```
 
 ### `switches`

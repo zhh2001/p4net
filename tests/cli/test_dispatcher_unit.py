@@ -162,15 +162,11 @@ def test_status_shows_running_state_and_counts(two_host_network: MagicMock) -> N
 
 def test_hosts_lists_each_host(two_host_network: MagicMock) -> None:
     d = CommandDispatcher(two_host_network)
-    out = d.dispatch("hosts")
-    assert "h1" in out
-    assert "h2" in out
-    assert "10.0.0.1" in out
-    assert "10.0.0.2" in out
-    assert "h1-eth0" in out
-    assert "h2-eth0" in out
-    # IPv6 column rendered with '-' for v4-only hosts.
-    assert "primary_ip6" in out
+    assert d.dispatch("hosts").splitlines() == [
+        "name  primary_ip   primary_ip6  interfaces",
+        "h1    10.0.0.1/24  -            h1-eth0",
+        "h2    10.0.0.2/24  -            h2-eth0",
+    ]
 
 
 def test_hosts_handles_no_hosts() -> None:
@@ -179,7 +175,8 @@ def test_hosts_handles_no_hosts() -> None:
     assert "no hosts" in out
 
 
-def test_hosts_renders_dual_stack_and_v6_only() -> None:
+@pytest.mark.parametrize("cidr6", ["fd00::2/64", "2001:db8:1234:5678:9abc:def0:1234:1001/64"])
+def test_hosts_renders_dual_stack_and_v6_only(cidr6: str) -> None:
     h1 = _make_host(
         "h1",
         "10.0.0.1",
@@ -191,20 +188,19 @@ def test_hosts_renders_dual_stack_and_v6_only() -> None:
         "h2",
         None,
         {"h2-eth0": None},
-        primary_ip6="fd00::2",
-        ifaces6={"h2-eth0": "fd00::2/64"},
+        primary_ip6=cidr6.split("/")[0],
+        ifaces6={"h2-eth0": cidr6},
     )
     h3 = _make_host("h3", "10.0.0.3", {"h3-eth0": "10.0.0.3/24"})
     d = CommandDispatcher(_make_network(hosts={"h1": h1, "h2": h2, "h3": h3}))
-    out = d.dispatch("hosts")
-    assert "fd00::1/64" in out
-    assert "fd00::2/64" in out
-    # h2 is v6-only; its v4 column shows '-'.
-    h2_line = next(line for line in out.splitlines() if line.startswith("h2 "))
-    assert " - " in h2_line
-    # h3 has no v6; its v6 column shows '-'.
-    h3_line = next(line for line in out.splitlines() if line.startswith("h3 "))
-    assert " - " in h3_line
+    header, *rows = d.dispatch("hosts").splitlines()
+    ip6_width = max(len("primary_ip6"), len(cidr6))
+    assert header == f"name  primary_ip   {'primary_ip6':<{ip6_width}}  interfaces"
+    assert rows == [
+        f"h1    10.0.0.1/24  {'fd00::1/64':<{ip6_width}}  h1-eth0",
+        f"h2    -            {cidr6:<{ip6_width}}  h2-eth0",
+        f"h3    10.0.0.3/24  {'-':<{ip6_width}}  h3-eth0",
+    ]
 
 
 def test_switches_lists_each_switch(two_host_network: MagicMock) -> None:
