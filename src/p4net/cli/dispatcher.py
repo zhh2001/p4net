@@ -30,9 +30,7 @@ _MAX_PING_WAIT = ((1 << 31) - 1) // 1000
 SwitchHandler = Callable[[str, list[str]], str]
 
 
-# Top-level help registry. The first column is the topic key (also the
-# completer entry); the second is a short description; the third is the
-# detailed usage line.
+# Help topics map to a short description and a usage line.
 _TOPIC_HELP: dict[str, tuple[str, str]] = {
     "help": ("List commands or show details for one.", "help [command]"),
     "exit": ("Exit the shell.", "exit"),
@@ -224,10 +222,25 @@ class CommandDispatcher:
             return "\n".join(lines)
         topic = " ".join(tokens)
         info = self._help_topics.get(topic)
+        node = tokens[0]
+        prefix = self._node_help_prefix(node) if info is None else None
+        if prefix is not None:
+            info = self._help_topics.get(" ".join([prefix, *tokens[1:]]))
         if info is None:
             raise CLIUsageError(f"no help for {topic!r}")
         desc, usage = info
+        if prefix is not None:
+            usage = usage.replace(prefix, node, 1)
         return f"{usage}\n\n{desc}"
+
+    def _node_help_prefix(self, name: str) -> str | None:
+        if name in self._top_level_handlers:
+            return None
+        if name in self._network.hosts:
+            return "<host>"
+        if name in self._network.switches:
+            return "<switch>"
+        return None
 
     def _cmd_exit(self, tokens: list[str]) -> str:
         raise CLIExit

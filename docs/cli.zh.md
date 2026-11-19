@@ -58,7 +58,7 @@ pingall [count] [timeout]
 Ping every pair of hosts; print a result matrix.
 ```
 
-查询节点命令的帮助时，使用字面占位名，例如 `help <host> ping` 或 `help <switch> table add`。
+可以用当前拓扑中的节点名查询用法，例如 `help h1 ping` 或 `help s1 table add`。用 `help <host> ping` 或 `help <switch> table add` 可查看通用语法。在 `help` 后按 `Tab` 可补全帮助主题。
 
 ### `exit`、`quit`
 

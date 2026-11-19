@@ -125,10 +125,37 @@ def test_help_for_compound_topic(two_host_network: MagicMock) -> None:
     assert "<host> ping" in out
 
 
-def test_help_for_unknown_topic_raises(two_host_network: MagicMock) -> None:
+@pytest.mark.parametrize(
+    ("topic", "canonical"),
+    [
+        ("h1 ping", "<host> ping"),
+        ("h2 ifconfig", "<host> ifconfig"),
+        ("s1 table add", "<switch> table add"),
+        ("s1 counter reset", "<switch> counter reset"),
+    ],
+)
+def test_help_for_named_node(two_host_network: MagicMock, topic: str, canonical: str) -> None:
     d = CommandDispatcher(two_host_network)
-    with pytest.raises(CLIUsageError, match="no help"):
-        d.dispatch("help nope")
+    node = topic.split()[0]
+    placeholder = canonical.split()[0]
+    expected = d.dispatch(f"help {canonical}").replace(placeholder, node, 1)
+    assert d.dispatch(f"help {topic}") == expected
+
+
+@pytest.mark.parametrize("topic", ["nope", "nope ping", "h1 table add", "s1 table unknown"])
+def test_help_for_unknown_topic_raises(two_host_network: MagicMock, topic: str) -> None:
+    d = CommandDispatcher(two_host_network)
+    with pytest.raises(CLIUsageError) as exc_info:
+        d.dispatch(f"help {topic}")
+    assert str(exc_info.value) == f"no help for {topic!r}"
+
+
+def test_help_uses_top_level_command_when_a_node_has_the_same_name() -> None:
+    network = _make_network(hosts={"topology": _make_host("topology", None, {})})
+    d = CommandDispatcher(network)
+    assert d.dispatch("help topology graph").startswith("topology graph ")
+    with pytest.raises(CLIUsageError, match="no help for 'topology ping'"):
+        d.dispatch("help topology ping")
 
 
 def test_exit_raises_cliexit(two_host_network: MagicMock) -> None:

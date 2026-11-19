@@ -58,7 +58,7 @@ pingall [count] [timeout]
 Ping every pair of hosts; print a result matrix.
 ```
 
-Help topics for node commands use the literal placeholders, for example `help <host> ping` or `help <switch> table add`.
+Use a host or switch name from the topology to see usage for that node, for example `help h1 ping` or `help s1 table add`. Use `help <host> ping` or `help <switch> table add` for the generic syntax. Press `Tab` after `help` to complete a topic.
 
 ### `exit`, `quit`
 

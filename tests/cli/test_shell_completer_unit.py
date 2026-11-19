@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from prompt_toolkit.completion import CompleteEvent
+from prompt_toolkit.document import Document
 
 from p4net.cli import CommandDispatcher, P4NetShell
 from p4net.cli.completers import build_network_completer
@@ -55,6 +57,24 @@ def test_completer_switch_subverbs() -> None:
     sub_keys = set(s1.options.keys())
     # commit-3 verbs surface here; phase-11 added "packet".
     assert sub_keys == {"log", "table", "counter", "mcast", "packet"}
+
+
+def test_completer_suggests_help_topics() -> None:
+    network = _network_with(["h1", "topology"], ["s1"])
+    completer = build_network_completer(CommandDispatcher(network))
+    event = CompleteEvent(completion_requested=True)
+
+    assert {"h1", "s1", "<host>", "<switch>", "pingall"} <= {
+        item.text for item in completer.get_completions(Document("help "), event)
+    }
+    for query, expected in (
+        ("help h1 pi", {"ping", "ping6"}),
+        ("help s1 table a", {"add"}),
+        ("help <switch> counter ", {"reset"}),
+        ("help topology ", {"graph"}),
+        ("help unknown ", set()),
+    ):
+        assert {item.text for item in completer.get_completions(Document(query), event)} == expected
 
 
 def test_shell_constructor_resolves_history_path(tmp_path: Path) -> None:
