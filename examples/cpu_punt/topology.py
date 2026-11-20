@@ -4,15 +4,7 @@ Run with:
 
     sudo p4net examples/cpu_punt/topology.py
 
-Then in the shell:
-
-    h1 cmd ping -c 3 -W 1 10.0.0.99    # generates ARP traffic
-    s1 packet listen count=3 timeout=5  # observe punted packets
-
-Or send a packet from controller to host 1:
-
-    s1 packet send ffffffffffff000000000001880b48656c6c6f \\
-        metadata: egress_port=1
+See the example README for the PacketIn and PacketOut walkthrough.
 """
 
 from __future__ import annotations

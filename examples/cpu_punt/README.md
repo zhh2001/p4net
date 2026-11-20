@@ -1,24 +1,17 @@
 # cpu_punt
 
-A single host attached to a BMv2 switch whose pipeline punts every
-dataplane packet to the controller via the CPU port (port 510), and
-forwards controller-injected packets according to the `egress_port`
-metadata field.
+A single host attached to a BMv2 switch whose pipeline punts every dataplane packet to the controller via the CPU port (port 510), and forwards controller-injected packets according to the `egress_port` metadata field.
 
 ## What it shows
 
-- A minimal P4 pipeline using `@controller_header("packet_in")` and
-  `@controller_header("packet_out")` (`cpu_punt.p4`).
-- The CLI surface for controller packet I/O: `<switch> packet listen`
-  and `<switch> packet send`.
-- The Python API behind the CLI: `RunningSwitch.client.send_packet_out`
-  and `client.on_packet_in` / `client.expect_packet_in`.
+- A minimal P4 pipeline using `@controller_header("packet_in")` and `@controller_header("packet_out")` (`cpu_punt.p4`).
+- The CLI surface for controller packet I/O: `<switch> packet listen` and `<switch> packet send`.
+- The Python API behind the CLI: `RunningSwitch.client.send_packet_out` and `client.on_packet_in` / `client.expect_packet_in`.
 
 ## Files
 
 - `cpu_punt.p4` — pipeline.
-- `topology.py` — one host (`h1` on `10.0.0.1/24`) plus one switch
-  (`s1` with `cpu_port=510`).
+- `topology.py` — one host (`h1` on `10.0.0.1/24`) plus one switch (`s1` with `cpu_port=510`).
 
 ## Prerequisites
 
@@ -29,39 +22,48 @@ metadata field.
 
 ## Running
 
+From the repository root, start the topology in the first terminal.
+
 ```sh
 sudo p4net examples/cpu_punt/topology.py
 ```
 
-## Things to try in the shell
+### Receive a PacketIn
 
-Observe punted packets while the host generates traffic:
+Start listening in the `p4net>` shell.
 
-```
-p4net> h1 cmd ping -c 3 -W 1 10.0.0.99 &
-p4net> s1 packet listen count=3 timeout=5
-Waiting for 3 packets on s1 (up to 5s)...
-[ingress_port=1] ffffffffffff000000000001...
-[ingress_port=1] ffffffffffff000000000001...
-[ingress_port=1] ffffffffffff000000000001...
+```text
+s1 packet listen count=10 timeout=15
 ```
 
-Inject a packet from the controller out port 1 (toward `h1`):
+When `Waiting for 10 packets on s1` appears, run this in a second terminal.
 
-```
-p4net> s1 packet send ffffffffffff000000000001880b48656c6c6f \
-         metadata: egress_port=1
-ok
+```sh
+sudo ip netns exec h1 ping -c 1 -W 1 10.0.0.99
 ```
 
-The hex blob is a complete Ethernet frame; the `egress_port` metadata
-selects the egress port via the pipeline's `packet_out` header.
+The ping times out because `10.0.0.99` has no host. The switch punts the ARP request from `h1`, so the listener shows a line like this when it reaches the packet count or timeout. IPv6 frames may also appear.
+
+```text
+[ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
+```
+
+### Send a PacketOut
+
+To verify delivery at `h1`, start `tcpdump` in the second terminal if it is installed. The filter matches the EtherType of the example frame.
+
+```sh
+sudo ip netns exec h1 tcpdump -i h1-eth0 -n -e -X -Q in -c 1 'ether proto 0x88b5'
+```
+
+Run this as one line in the `p4net>` shell. If you started a capture, wait until it shows `listening on h1-eth0` before sending the frame.
+
+```text
+s1 packet send 00000000000102000000009988b548656c6c6f metadata: egress_port=1
+```
+
+The `egress_port=1` metadata selects the switch port connected to `h1`. The shell prints `ok`, and the capture shows a frame with EtherType `0x88b5` and the `Hello` payload.
 
 ## Where to read the punt logic
 
-Open `cpu_punt.p4`. The `MyIngress` control discriminates on
-`std.ingress_port`: from the CPU port, it copies `packet_out.egress_port`
-into `std.egress_spec` and invalidates the controller header so it does
-not appear on the wire; from any other port, it sets
-`std.egress_spec = CPU_PORT` and validates the `packet_in` header with
-the correct `ingress_port` so the controller can attribute the punt.
+Open `cpu_punt.p4`. The `MyIngress` control discriminates on `std.ingress_port`: from the CPU port, it copies `packet_out.egress_port` into `std.egress_spec` and invalidates the controller header so it does not appear on the wire; from any other port, it sets `std.egress_spec = CPU_PORT` and validates the `packet_in` header with the correct `ingress_port` so the controller can attribute the punt.

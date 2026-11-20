@@ -58,7 +58,9 @@ parser MyParser(packet_in pkt, out headers hdr, inout metadata meta,
     }
 }
 
-control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply {} }
+control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
+    apply {}
+}
 
 control MyIngress(inout headers hdr, inout metadata meta,
                   inout standard_metadata_t std) {
@@ -79,9 +81,13 @@ control MyIngress(inout headers hdr, inout metadata meta,
 }
 
 control MyEgress(inout headers hdr, inout metadata meta,
-                 inout standard_metadata_t std) { apply {} }
+                 inout standard_metadata_t std) {
+    apply {}
+}
 
-control MyComputeChecksum(inout headers hdr, inout metadata meta) { apply {} }
+control MyComputeChecksum(inout headers hdr, inout metadata meta) {
+    apply {}
+}
 
 control MyDeparser(packet_out pkt, in headers hdr) {
     apply {
@@ -90,5 +96,9 @@ control MyDeparser(packet_out pkt, in headers hdr) {
     }
 }
 
-V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
-         MyComputeChecksum(), MyDeparser()) main;
+V1Switch(MyParser(),
+         MyVerifyChecksum(),
+         MyIngress(),
+         MyEgress(),
+         MyComputeChecksum(),
+         MyDeparser()) main;
