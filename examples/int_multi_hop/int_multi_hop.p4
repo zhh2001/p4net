@@ -4,10 +4,10 @@
  * Ethernet and IPv4 on every forwarded packet. Shim chaining uses each
  * shim's ``next_proto`` field rather than a P4 header stack:
  *
- *     [ Ethernet (etherType = 0x88B6 if any shim is present) ]
- *     [ INT shim 1 (14 B; next_proto = 0x88B6 or 0x0800)     ]   <- inserted by hop 1
- *     [ INT shim 2 (14 B; next_proto = 0x0800)               ]   <- inserted by hop 2
- *     [ IPv4 + payload                                       ]
+ *   [ Ethernet (etherType = 0x88B6 if any shim is present) ]
+ *   [ INT shim 1 (14 B; next_proto = 0x88B6 or 0x0800)     ]  <- inserted by hop 1
+ *   [ INT shim 2 (14 B; next_proto = 0x0800)               ]  <- inserted by hop 2
+ *   [ IPv4 + payload                                       ]
  *
  * Shim format (identical to ``examples/int/int.p4`` in v1.1.0/v1.2.0):
  *     switch_id            uint8
@@ -109,7 +109,9 @@ parser MyParser(packet_in pkt, out headers hdr, inout metadata meta,
     }
 }
 
-control MyVerifyChecksum(inout headers hdr, inout metadata meta) { apply {} }
+control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
+    apply {}
+}
 
 control MyIngress(inout headers hdr, inout metadata meta,
                   inout standard_metadata_t std) {
@@ -177,9 +179,13 @@ control MyIngress(inout headers hdr, inout metadata meta,
 }
 
 control MyEgress(inout headers hdr, inout metadata meta,
-                 inout standard_metadata_t std) { apply {} }
+                 inout standard_metadata_t std) {
+    apply {}
+}
 
-control MyComputeChecksum(inout headers hdr, inout metadata meta) { apply {} }
+control MyComputeChecksum(inout headers hdr, inout metadata meta) {
+    apply {}
+}
 
 control MyDeparser(packet_out pkt, in headers hdr) {
     apply {
@@ -190,5 +196,6 @@ control MyDeparser(packet_out pkt, in headers hdr) {
     }
 }
 
-V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
+V1Switch(MyParser(), MyVerifyChecksum(),
+         MyIngress(), MyEgress(),
          MyComputeChecksum(), MyDeparser()) main;
