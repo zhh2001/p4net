@@ -17,7 +17,9 @@ import asyncio
 import socket
 import threading
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
+from runpy import run_path
 from typing import Any
 
 import grpc
@@ -61,6 +63,27 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return int(s.getsockname()[1])
+
+
+def test_async_concurrent_example_connects_all_hosts(tmp_path: Path) -> None:
+    example_file = Path(__file__).resolve().parents[2] / "examples/async_concurrent/topology.py"
+    example = run_path(str(example_file))
+    data = example["topology"].to_dict()
+    with ExitStack() as ports:
+        for switch in data["switches"].values():
+            for field in ("grpc_port", "thrift_port"):
+                listener = ports.enter_context(socket.socket())
+                listener.bind(("127.0.0.1", 0))
+                switch[field] = listener.getsockname()[1]
+
+    with Network(
+        Topology.from_dict(data),
+        compiler=P4Compiler(cache_dir=tmp_path / "compiler"),
+        log_dir=tmp_path / "logs",
+    ) as net:
+        example["setup"](net)
+        results = net.pingall(timeout=1)
+        assert len(results) == 6 and all(results.values()), results
 
 
 # ---------------------------------------------------------------------------

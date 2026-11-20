@@ -14,6 +14,8 @@ Three-switch full-mesh topology where every switch's IPv4 LPM table is populated
 --8<-- "examples/async_concurrent/topology.py"
 ```
 
+Each host is on its own IPv4 subnet. `setup(net)` adds a `/32` on-link route and a static neighbor entry for each of the other two hosts. The switches forward the frames across the mesh using their IPv4 destination addresses.
+
 ## P4 program
 
 `examples/async_concurrent/concurrent.p4`:
@@ -36,7 +38,7 @@ sudo p4net examples/async_concurrent/topology.py
 pingall
 ```
 
-All three hosts can ping each other across the mesh.
+The matrix reports `6/6 succeeded`, covering both directions between each pair of hosts.
 
 ## See also
 

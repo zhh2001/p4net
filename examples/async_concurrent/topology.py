@@ -42,9 +42,9 @@ HERE = Path(__file__).resolve().parent
 
 topology = Topology()
 
-h1 = topology.add_host("h1", ip="10.0.1.1/24", mac="00:00:00:00:00:01", default_route="10.0.1.254")
-h2 = topology.add_host("h2", ip="10.0.2.1/24", mac="00:00:00:00:00:02", default_route="10.0.2.254")
-h3 = topology.add_host("h3", ip="10.0.3.1/24", mac="00:00:00:00:00:03", default_route="10.0.3.254")
+h1 = topology.add_host("h1", ip="10.0.1.1/24", mac="00:00:00:00:00:01")
+h2 = topology.add_host("h2", ip="10.0.2.1/24", mac="00:00:00:00:00:02")
+h3 = topology.add_host("h3", ip="10.0.3.1/24", mac="00:00:00:00:00:03")
 
 s1 = topology.add_switch("s1", p4_src=HERE / "concurrent.p4")
 s2 = topology.add_switch("s2", p4_src=HERE / "concurrent.p4")
@@ -106,12 +106,10 @@ async def _async_setup(net: Network) -> dict[str, Any]:
 
 
 def setup(net: Network) -> None:
-    """Static ARP across subnets + concurrent table programming."""
-    # Each host learns the cross-subnet gateway MACs. We use a single
-    # virtual gateway MAC per subnet (one MAC == one switch's port-1).
-    # On the wire the switches forward by destination IP/24, so the
-    # source MAC isn't relevant to the LPM table.
-    arp_entries = [
+    """Configure reachability between hosts and program the switches concurrently."""
+    # On-link host routes let Linux use the peers' static neighbor entries
+    # across subnets. The switches forward using the IPv4 destination.
+    peers = [
         ("h1", "10.0.2.1", "00:00:00:00:00:02"),
         ("h1", "10.0.3.1", "00:00:00:00:00:03"),
         ("h2", "10.0.1.1", "00:00:00:00:00:01"),
@@ -119,8 +117,11 @@ def setup(net: Network) -> None:
         ("h3", "10.0.1.1", "00:00:00:00:00:01"),
         ("h3", "10.0.2.1", "00:00:00:00:00:02"),
     ]
-    for host, ip, mac in arp_entries:
-        net.host(host).exec(
+    for name, ip, mac in peers:
+        host = net.host(name)
+        iface = f"{name}-eth0"
+        host.exec(["ip", "-4", "route", "replace", f"{ip}/32", "dev", iface, "scope", "link"])
+        host.exec(
             [
                 "ip",
                 "neigh",
@@ -129,7 +130,7 @@ def setup(net: Network) -> None:
                 "lladdr",
                 mac,
                 "dev",
-                f"{host}-eth0",
+                iface,
                 "nud",
                 "permanent",
             ]

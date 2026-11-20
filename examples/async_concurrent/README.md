@@ -32,6 +32,10 @@ Three hosts on three /24s, fully meshed switches. Each switch loads
 the same P4 binary; per-switch forwarding state is written from
 Python at start-up.
 
+`setup(net)` adds a `/32` on-link route and a static neighbor entry for
+each peer so the hosts can send packets across subnets. The switches
+forward those packets using the IPv4 destination address.
+
 ## The async setup function
 
 ```python
@@ -78,8 +82,8 @@ Then in the `p4net>` shell:
 pingall
 ```
 
-Hosts can ping each other across the mesh. The pipeline forwards IPv4
-based on the LPM tables programmed by the async setup.
+The matrix reports `6/6 succeeded`, covering both directions between
+each pair of hosts.
 
 ## Sample timing
 

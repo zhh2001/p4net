@@ -14,6 +14,8 @@ description: 三交换机网格示例，借助 v1.6 异步客户端并发下发�
 --8<-- "examples/async_concurrent/topology.py"
 ```
 
+三台主机各在一个 IPv4 子网中。`setup(net)` 为每台主机配置到另外两台主机的 `/32` 直连路由和静态邻居项。交换机按 IPv4 目的地址在网格中转发。
+
 ## P4 程序
 
 `examples/async_concurrent/concurrent.p4`：
@@ -36,7 +38,7 @@ sudo p4net examples/async_concurrent/topology.py
 pingall
 ```
 
-三台主机可以跨网格互 ping。
+矩阵显示 `6/6 succeeded`，表示每对主机的两个方向都连通。
 
 ## 相关阅读
 
