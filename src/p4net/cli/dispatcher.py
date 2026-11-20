@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import shlex
 from collections.abc import Callable, Mapping
 from textwrap import fill
@@ -19,12 +20,16 @@ from p4net.cli.formatting import bold, render_pingall_matrix
 
 if TYPE_CHECKING:
     from p4net.control import P4InfoIndex
-    from p4net.network import Network
+    from p4net.network import Network, RunningHost
 
 _log = logging.getLogger(__name__)
 
 # poll(2) accepts signed 32-bit millisecond timeouts.
 _MAX_PING_WAIT = ((1 << 31) - 1) // 1000
+_PING_REPLY = re.compile(r"^\d+ bytes from .*?\bicmp_seq=(\d+)\b.*? (time[=<][\d.]+ ms)")
+_PING_STATS = re.compile(
+    r"^(\d+) packets transmitted, (\d+) (?:packets )?received.*?, (\S+)% packet loss\b"
+)
 
 # A switch verb handler takes (switch_name, remaining tokens) and returns
 # the formatted output string.
@@ -56,11 +61,11 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "topology graph [path] [layout=LR|TB|BT|RL]\n    [format=png|svg|pdf|dot]",
     ),
     "<host> ping": (
-        "Ping a target from a host.",
+        "Ping a target from a host. Multiple probes show live replies and totals.",
         "<host> ping <target> [count] [timeout]",
     ),
     "<host> ping6": (
-        "Ping a target from a host using IPv6 explicitly.",
+        "Ping a target using IPv6. Multiple probes show live replies and totals.",
         "<host> ping6 <target> [count] [timeout]",
     ),
     "<host> cmd": (
@@ -427,40 +432,73 @@ class CommandDispatcher:
             )
         return handler(host_name, rest)
 
-    def _cmd_host_ping(self, host_name: str, tokens: list[str]) -> str:
+    def _cmd_host_ping(self, host_name: str, tokens: list[str], *, force_ipv6: bool = False) -> str:
+        verb = "ping6" if force_ipv6 else "ping"
         if not tokens:
-            raise CLIUsageError(f"{host_name} ping: missing target")
+            raise CLIUsageError(f"{host_name} {verb}: missing target")
         target = tokens[0]
-        count, timeout = self._parse_count_timeout(tokens[1:], label=f"{host_name} ping")
+        count, timeout = self._parse_count_timeout(tokens[1:], label=f"{host_name} {verb}")
         host = self._network.host(host_name)
-        # If the target is a known host name, look up its primary_ip.
-        # Otherwise, pass the string through to ping (treated as a literal IP).
+        address = target
         target_host = self._network.hosts.get(target)
         if target_host is not None:
-            if target_host.primary_ip is None:
-                raise CLIUsageError(f"target {target!r}: no primary IP configured")
-            ok = host.ping(target_host, count=count, timeout=timeout)
+            primary = target_host.primary_ip6 if force_ipv6 else target_host.primary_ip
+            if primary is None:
+                family = "IPv6" if force_ipv6 else "IP"
+                raise CLIUsageError(f"target {target!r}: no primary {family} configured")
+            address = primary
+        if count > 1 and self._on_progress is not None:
+            heading = f"{target} ({address})" if target_host is not None else target
+            return self._interactive_ping(host, heading, address, count, timeout, force_ipv6)
+        if force_ipv6:
+            ok = host.ping(address, count=count, timeout=timeout, force_ipv6=True)
         else:
-            ok = host.ping(target, count=count, timeout=timeout)
+            ok = host.ping(target_host or address, count=count, timeout=timeout)
         return "OK" if ok else "FAIL"
 
     def _cmd_host_ping6(self, host_name: str, tokens: list[str]) -> str:
-        if not tokens:
-            raise CLIUsageError(f"{host_name} ping6: missing target")
-        target = tokens[0]
-        count, timeout = self._parse_count_timeout(tokens[1:], label=f"{host_name} ping6")
-        host = self._network.host(host_name)
-        # Same lookup rule as ping, but force the IPv6 path. If the target is
-        # a host name we resolve its primary_ip6.
-        target_host = self._network.hosts.get(target)
-        if target_host is not None:
-            ip6 = getattr(target_host, "primary_ip6", None)
-            if ip6 is None:
-                raise CLIUsageError(f"target {target!r}: no primary IPv6 configured")
-            ok = host.ping(ip6, count=count, timeout=timeout, force_ipv6=True)
-        else:
-            ok = host.ping(target, count=count, timeout=timeout, force_ipv6=True)
-        return "OK" if ok else "FAIL"
+        return self._cmd_host_ping(host_name, tokens, force_ipv6=True)
+
+    def _interactive_ping(
+        self,
+        host: RunningHost,
+        heading: str,
+        address: str,
+        count: int,
+        timeout: float,
+        force_ipv6: bool,
+    ) -> str:
+        progress = self._on_progress
+        assert progress is not None
+        summary = ""
+        error = ""
+
+        def report(line: str) -> None:
+            nonlocal summary, error
+            if reply := _PING_REPLY.match(line):
+                seq, elapsed = reply.groups()
+                duplicate = " (DUP!)" if "(DUP!)" in line else ""
+                progress(f"seq={seq}  {elapsed}{duplicate}")
+            elif stats := _PING_STATS.match(line):
+                sent, received, loss = stats.groups()
+                summary = f"{sent} sent, {received} received, {loss}% loss"
+            elif line.startswith(("ping:", "Cannot open network namespace", "exec of")):
+                error = line
+
+        progress(f"PING {heading}")
+        try:
+            result = host._ping_with_output(
+                address, count=count, timeout=timeout, force_ipv6=force_ipv6, on_line=report
+            )
+        except KeyboardInterrupt:
+            if summary:
+                progress(summary)
+            raise
+        if summary:
+            return summary
+        if error:
+            return _CommandErrorOutput(f"error: {error}")
+        return "OK" if result == 0 else "FAIL"
 
     def _cmd_host_cmd(self, host_name: str, tokens: list[str]) -> str:
         if not tokens:

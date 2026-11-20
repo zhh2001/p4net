@@ -135,7 +135,7 @@ listener 显示 `boot times loaded` 后，在对应的 `p4net>` 中发送流量�
 h1 ping h2 3 1
 ```
 
-listener 会显示三个包，每个包都有两跳对齐后的时间戳。带 INT 头的帧会到达 listener，`ping` 因为收不到 ICMP 回复会显示 `FAIL`。完成后，先在 `p4net>` 输入 `exit`，再退出隔离的 Bash shell。Bash 退出时会删除本次的协调文件。
+listener 会显示三个包，每个包都有两跳对齐后的时间戳。带 INT 头的帧会到达 listener，`ping` 因为收不到 ICMP 回复会显示 `3 sent, 0 received, 100% loss`。完成后，先在 `p4net>` 输入 `exit`，再退出隔离的 Bash shell。Bash 退出时会删除本次的协调文件。
 
 ## 值得注意的点
 

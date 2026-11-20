@@ -4,10 +4,7 @@ description: 一个四主机两交换机的 p4net 教程，覆盖 IPv4 与 IPv6 
 
 # 教程
 
-本教程构建的拓扑比[快速上手](getting-started/quickstart.md)更复杂：
-四台主机、两台交换机，IPv4 与 IPv6 双栈，单向链路延迟，以及一条
-让控制器观察未匹配数据包的 CPU 端口 punt 路径。一份程序里覆盖
-v0.2.0 的全部特性。
+本教程构建的拓扑比[快速上手](getting-started/quickstart.md)更复杂：四台主机、两台交换机，IPv4 与 IPv6 双栈，单向链路延迟，以及一条让控制器观察未匹配数据包的 CPU 端口 punt 路径。
 
 先按[安装指南](getting-started/installation.md)配置外部工具和 p4net 命令行。
 
@@ -29,14 +26,11 @@ v0.2.0 的全部特性。
 
 具体来说：
 
-- `h1` 与 `h2` 接到 `s1`；`h1` 的链路上设置了 50ms 单向延迟
-  （h1 → s1）。
+- `h1` 与 `h2` 接到 `s1`；`h1` 的链路上设置了 50ms 单向延迟（h1 → s1）。
 - `h3` 与 `h4` 接到 `s2`。
 - `s1` ↔ `s2` 是骨干链路，单向延迟 100ms（s1 → s2）。
 - 每台主机都拥有同一个 `/24` 与 `/64` 上的 IPv4 与 IPv6 地址。
-- 流水线通过 `ipv4_lpm` 表转发 IPv4，通过 `ipv6_lpm` 表转发
-  IPv6——两张表都在运行时编程。未匹配的包通过 CPU 端口上送
-  控制器。
+- 流水线通过 `ipv4_lpm` 表转发 IPv4，通过 `ipv6_lpm` 表转发 IPv6——两张表都在运行时编程。未匹配的包通过 CPU 端口上送控制器。
 
 ## 步骤 1：搭建拓扑骨架
 
@@ -67,9 +61,7 @@ s1 = topology.add_switch("s1", p4_src=P4_SRC, cpu_port=510)
 s2 = topology.add_switch("s2", p4_src=P4_SRC, cpu_port=510)
 ```
 
-两台交换机加载同一份 `tutorial.p4`——编译缓存确保它只被编译一次。
-`cpu_port=510` 是 BMv2 的 punt 约定：发往端口 510 的数据包以
-`PacketIn` 形式上送控制器。
+两台交换机加载同一份 `tutorial.p4`——编译缓存确保它只被编译一次。`cpu_port=510` 是 BMv2 的 punt 约定：发往端口 510 的数据包以 `PacketIn` 形式上送控制器。
 
 ## 步骤 2：带非对称延迟的链路
 
@@ -84,13 +76,7 @@ topology.add_link(h4, s2, port_b=2)
 topology.add_link(s1, s2, port_a=3, port_b=3, delay_a_to_b="100ms")
 ```
 
-h1↔s1 链路上的 `delay_a_to_b="50ms"` 把 `tc netem delay 50ms` 应用
-到 a 侧 veth——也就是位于 `h1` 命名空间里的那一端。从 `h1` 出向
-`s1` 的方向上累加 50ms；反向不整形。同理，s1↔s2 链路上的
-`delay_a_to_b="100ms"` 只对 s1 → s2 方向生效。所以单向 `h1 → h3`
-累计 50ms（h1→s1）+ 100ms（s1→s2）+ 0ms（s2→h3）= 150ms；反向
-`h3 → h1` 不整形，因此 h1 到 h3 的 ping RTT 大约为 150ms，抖动
-在亚毫秒级别。
+h1↔s1 链路上的 `delay_a_to_b="50ms"` 把 `tc netem delay 50ms` 应用到 a 侧 veth——也就是位于 `h1` 命名空间里的那一端。从 `h1` 出向 `s1` 的方向上累加 50ms；反向不整形。同理，s1↔s2 链路上的 `delay_a_to_b="100ms"` 只对 s1 → s2 方向生效。所以单向 `h1 → h3` 累计 50ms（h1→s1）+ 100ms（s1→s2）+ 0ms（s2→h3）= 150ms；反向 `h3 → h1` 不整形，因此 h1 到 h3 的 ping RTT 大约为 150ms，抖动在亚毫秒级别。
 
 ## 步骤 3：P4 程序
 
@@ -206,13 +192,9 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 
 值得注意的几个点：
 
-- 两张 LPM 表共用 `default_action = punt()`。两张表都未命中的包
-  会以填好 `packet_in` 控制器报头的形式上送 CPU 端口。
-- `set_egress_port(port)` 带参数，控制器为任意主机安装路由时
-  无需为每台主机定义不同动作。
-- 控制器注入的包（解析时走 `packet_out` 报头分支）会按
-  `hdr.packet_out.egress_port` 转发，并在 deparse 之前把控制器
-  报头标记无效，从而让线上包看起来正常。
+- 两张 LPM 表共用 `default_action = punt()`。两张表都未命中的包会以填好 `packet_in` 控制器报头的形式上送 CPU 端口。
+- `set_egress_port(port)` 带参数，控制器为任意主机安装路由时无需为每台主机定义不同动作。
+- 控制器注入的包（解析时走 `packet_out` 报头分支）会按 `hdr.packet_out.egress_port` 转发，并在 deparse 之前把控制器报头标记无效，从而让线上包看起来正常。
 
 ## 步骤 4：编程表项与注入邻居
 
@@ -315,8 +297,7 @@ if __name__ == "__main__":
 
 ## 步骤 5：注册 packet-in 处理器（可选）
 
-要观察 punt 路径，可以在进入 Shell 之前注册一个处理器。处理器跑
-在 StreamChannel 消费者线程上，逻辑要短、要快。
+要观察 punt 路径，可以在进入 Shell 之前注册一个处理器。处理器跑在 StreamChannel 消费者线程上，逻辑要短、要快。
 
 ```python
 def setup(net: Network) -> None:
@@ -331,8 +312,7 @@ def setup(net: Network) -> None:
     net.switch("s2").client.on_packet_in(log_punt)
 ```
 
-生产环境的控制器会解析 punt 上来的以太网帧、做出决策，并通过
-`send_packet_out` 注入回去。本例只是把事件记下来。
+生产环境的控制器会解析 punt 上来的以太网帧、做出决策，并通过 `send_packet_out` 注入回去。本例只是把事件记下来。
 
 ## 步骤 6：运行和探索
 
@@ -383,26 +363,22 @@ MyIngress.ipv6_lpm (4 entries)
   ...
 ```
 
-注意 IPv6 LPM 的 match 渲染为 `fd00::1/128`，而不是裸字节。这是
-`P4InfoIndex.decode_match` 通过 `decode_ipv6` 完成的字节-字符串
-往返。
+注意 IPv6 LPM 的 match 渲染为 `fd00::1/128`，而不是裸字节。这是 `P4InfoIndex.decode_match` 通过 `decode_ipv6` 完成的字节-字符串往返。
 
 ## 步骤 7：测量非对称链路
 
-`h1 → h3` 经过两段被整形的链路：50ms（h1 → s1）加 100ms
-（s1 → s2）。反向无整形。所以 ping RTT 约 150ms。
+`h1 → h3` 经过两段被整形的链路：50ms（h1 → s1）加 100ms（s1 → s2）。反向无整形。所以 ping RTT 约 150ms。
 
 ```
 p4net> h1 ping h3 5 3
-PING 10.0.0.3 (10.0.0.3) 56(84) bytes of data.
-64 bytes from 10.0.0.3: icmp_seq=1 ttl=64 time=151 ms
-64 bytes from 10.0.0.3: icmp_seq=2 ttl=64 time=151 ms
+PING h3 (10.0.0.3)
+seq=1  time=151 ms
+seq=2  time=151 ms
 ...
-rtt min/avg/max/mdev = 151.012/151.187/151.412/0.392 ms
+5 sent, 5 received, 0% loss
 ```
 
-`h2 → h3` 在 h2 一侧无整形，只穿过 100ms 的骨干，因此 RTT
-约 100ms；`h1 → h2` 仅在 h1 出口被整形 50ms，RTT 约 50ms。
+`h2 → h3` 在 h2 一侧无整形，只穿过 100ms 的骨干，因此 RTT 约 100ms；`h1 → h2` 仅在 h1 出口被整形 50ms，RTT 约 50ms。
 
 ## 步骤 8：可视化
 
@@ -411,9 +387,7 @@ p4net> topology graph /tmp/topo.png
 /tmp/topo.png
 ```
 
-编排器先调用 `Topology.validate()`，然后把 DOT 源码喂给
-`dot -Tpng`。在图片查看器中打开 `/tmp/topo.png` 即可看到渲染
-结果。
+编排器先调用 `Topology.validate()`，然后把 DOT 源码喂给 `dot -Tpng`。在图片查看器中打开 `/tmp/topo.png` 即可看到渲染结果。
 
 如果未安装 `dot`，可以直接输出 DOT 源码：
 
@@ -424,10 +398,7 @@ p4net> topology graph /tmp/topo.dot format=dot
 
 ## 接下来读什么
 
-- [示例目录](examples/index.md)收录七个可运行的拓扑——
-  每个示例只展示一项特性，比这个「大杂烩」教程更易读。
+- [示例目录](examples/index.md)收录七个可运行的拓扑——每个示例只展示一项特性，比这个「大杂烩」教程更易读。
 - [API 参考](api/network.md)记录了上文用到的每个类与函数。
-- [路线图](roadmap.md)列出 1.x 与 2.0 候选项，
-  包括 PSA 架构支持与异步 P4Runtime 客户端。
-- 想系统地学 P4 语言本身？可以参考同作者的中文 P4
-  教程仓库：[p4-language-guide-zh](https://github.com/zhh2001/p4-language-guide-zh)。
+- [路线图](roadmap.md)列出 1.x 与 2.0 候选项，包括 PSA 架构支持与异步 P4Runtime 客户端。
+- 想系统地学 P4 语言本身？可以参考同作者的中文 P4 教程仓库：[p4-language-guide-zh](https://github.com/zhh2001/p4-language-guide-zh)。

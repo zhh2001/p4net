@@ -4,10 +4,7 @@ description: A four-host, two-switch p4net walk-through covering IPv4 and IPv6 L
 
 # Tutorial
 
-This tutorial builds a richer topology than [Quick Start](getting-started/quickstart.md):
-four hosts, two switches, IPv4 and IPv6 dual-stack, asymmetric link
-delay, and a CPU-port punt path that lets the controller observe
-unmatched packets. It exercises every v0.2.0 feature in one program.
+This tutorial builds a richer topology than [Quick Start](getting-started/quickstart.md): four hosts, two switches, IPv4 and IPv6 dual-stack, asymmetric link delay, and a CPU-port punt path that lets the controller observe unmatched packets.
 
 Set up the external tools and the CLI using the [installation guide](getting-started/installation.md).
 
@@ -29,14 +26,11 @@ Set up the external tools and the CLI using the [installation guide](getting-sta
 
 Concretely:
 
-- `h1` and `h2` attach to `s1`. `h1`'s link has 50 ms delay one-way
-  (h1 → s1).
+- `h1` and `h2` attach to `s1`. `h1`'s link has 50 ms delay one-way (h1 → s1).
 - `h3` and `h4` attach to `s2`.
 - `s1` ↔ `s2` is a backbone link with 100 ms delay one-way (s1 → s2).
 - Every host has IPv4 and IPv6 addresses on the same `/24` / `/64`.
-- The pipeline forwards IPv4 via an `ipv4_lpm` table and IPv6 via an
-  `ipv6_lpm` table, both programmed at runtime. Unmatched packets get
-  punted to the controller via the CPU port.
+- The pipeline forwards IPv4 via an `ipv4_lpm` table and IPv6 via an `ipv6_lpm` table, both programmed at runtime. Unmatched packets get punted to the controller via the CPU port.
 
 ## Step 1: scaffold the topology
 
@@ -67,10 +61,7 @@ s1 = topology.add_switch("s1", p4_src=P4_SRC, cpu_port=510)
 s2 = topology.add_switch("s2", p4_src=P4_SRC, cpu_port=510)
 ```
 
-Both switches load the same `tutorial.p4` source — the compiler cache
-ensures it's compiled once. `cpu_port=510` is BMv2's convention for
-punt: packets directed at port 510 surface as `PacketIn` to the
-controller.
+Both switches load the same `tutorial.p4` source — the compiler cache ensures it's compiled once. `cpu_port=510` is BMv2's convention for punt: packets directed at port 510 surface as `PacketIn` to the controller.
 
 ## Step 2: links with asymmetric delay
 
@@ -85,14 +76,7 @@ topology.add_link(h4, s2, port_b=2)
 topology.add_link(s1, s2, port_a=3, port_b=3, delay_a_to_b="100ms")
 ```
 
-`delay_a_to_b="50ms"` on the h1↔s1 link applies `tc netem delay 50ms`
-to the `a`-side veth — the one in `h1`'s namespace. Egress from `h1`
-toward `s1` picks up 50 ms; the reverse direction is unshaped.
-Similarly `delay_a_to_b="100ms"` on the s1↔s2 link delays only the
-s1 → s2 direction. So one-way `h1 → h3` accumulates 50 ms (h1→s1) +
-100 ms (s1→s2) + 0 ms (s2→h3) = 150 ms. The reverse h3 → h1 is
-unshaped, so the ping RTT from h1 to h3 is ~150 ms with sub-ms
-jitter.
+`delay_a_to_b="50ms"` on the h1↔s1 link applies `tc netem delay 50ms` to the `a`-side veth — the one in `h1`'s namespace. Egress from `h1` toward `s1` picks up 50 ms; the reverse direction is unshaped. Similarly `delay_a_to_b="100ms"` on the s1↔s2 link delays only the s1 → s2 direction. So one-way `h1 → h3` accumulates 50 ms (h1→s1) + 100 ms (s1→s2) + 0 ms (s2→h3) = 150 ms. The reverse h3 → h1 is unshaped, so the ping RTT from h1 to h3 is ~150 ms with sub-ms jitter.
 
 ## Step 3: the P4 program
 
@@ -208,14 +192,9 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 
 The interesting bits:
 
-- The two LPM tables share a `default_action = punt()`. Anything
-  that misses both tables flows to the CPU port with the `packet_in`
-  controller header populated.
-- `set_egress_port(port)` is parameterised, so the controller can
-  install routes for any host without a per-host action.
-- A controller-injected packet (parsed via the `packet_out` header) is
-  forwarded to `hdr.packet_out.egress_port` and the controller header
-  is invalidated before deparse so the wire packet looks normal.
+- The two LPM tables share a `default_action = punt()`. Anything that misses both tables flows to the CPU port with the `packet_in` controller header populated.
+- `set_egress_port(port)` is parameterised, so the controller can install routes for any host without a per-host action.
+- A controller-injected packet (parsed via the `packet_out` header) is forwarded to `hdr.packet_out.egress_port` and the controller header is invalidated before deparse so the wire packet looks normal.
 
 ## Step 4: program tables and seed neighbours
 
@@ -319,9 +298,7 @@ if __name__ == "__main__":
 
 ## Step 5: install a packet-in handler (optional)
 
-For an interactive look at the punt path, register a handler before
-running the shell. The handler runs on the StreamChannel consumer
-thread; keep it short and fast.
+For an interactive look at the punt path, register a handler before running the shell. The handler runs on the StreamChannel consumer thread; keep it short and fast.
 
 ```python
 def setup(net: Network) -> None:
@@ -336,9 +313,7 @@ def setup(net: Network) -> None:
     net.switch("s2").client.on_packet_in(log_punt)
 ```
 
-In production a controller would parse the punted Ethernet frame,
-make a decision, and reinject via `send_packet_out`. This handler
-just records the event.
+In production a controller would parse the punted Ethernet frame, make a decision, and reinject via `send_packet_out`. This handler just records the event.
 
 ## Step 6: run and explore
 
@@ -389,27 +364,22 @@ MyIngress.ipv6_lpm (4 entries)
   ...
 ```
 
-Note the table dump renders IPv6 LPM matches as `fd00::1/128` — not as
-raw bytes. That's `P4InfoIndex.decode_match` doing the round-trip
-through `decode_ipv6`.
+Note the table dump renders IPv6 LPM matches as `fd00::1/128` — not as raw bytes. That's `P4InfoIndex.decode_match` doing the round-trip through `decode_ipv6`.
 
 ## Step 7: measure the asymmetric link
 
-`h1 → h3` traverses two shaped links: 50 ms (h1 → s1) plus 100 ms
-(s1 → s2). The reverse direction is unshaped. So ping RTT ≈ 150 ms.
+`h1 → h3` traverses two shaped links: 50 ms (h1 → s1) plus 100 ms (s1 → s2). The reverse direction is unshaped. So ping RTT ≈ 150 ms.
 
 ```
 p4net> h1 ping h3 5 3
-PING 10.0.0.3 (10.0.0.3) 56(84) bytes of data.
-64 bytes from 10.0.0.3: icmp_seq=1 ttl=64 time=151 ms
-64 bytes from 10.0.0.3: icmp_seq=2 ttl=64 time=151 ms
+PING h3 (10.0.0.3)
+seq=1  time=151 ms
+seq=2  time=151 ms
 ...
-rtt min/avg/max/mdev = 151.012/151.187/151.412/0.392 ms
+5 sent, 5 received, 0% loss
 ```
 
-`h2 → h3` is unshaped on h2's side and only crosses the 100 ms
-backbone link, so RTT ≈ 100 ms. `h1 → h2` is shaped only on h1's
-egress, so RTT ≈ 50 ms.
+`h2 → h3` is unshaped on h2's side and only crosses the 100 ms backbone link, so RTT ≈ 100 ms. `h1 → h2` is shaped only on h1's egress, so RTT ≈ 50 ms.
 
 ## Step 8: visualize
 
@@ -418,12 +388,9 @@ p4net> topology graph /tmp/topo.png
 /tmp/topo.png
 ```
 
-The orchestrator runs `Topology.validate()`, then pipes the DOT
-source through `dot -Tpng`. Open `/tmp/topo.png` in an image viewer
-to see the rendered graph.
+The orchestrator runs `Topology.validate()`, then pipes the DOT source through `dot -Tpng`. Open `/tmp/topo.png` in an image viewer to see the rendered graph.
 
-If `dot` isn't installed, use `format=dot` to emit the source
-verbatim:
+If `dot` isn't installed, use `format=dot` to emit the source verbatim:
 
 ```
 p4net> topology graph /tmp/topo.dot format=dot
@@ -432,10 +399,6 @@ p4net> topology graph /tmp/topo.dot format=dot
 
 ## Where to go next
 
-- The [Examples directory](examples/index.md) ships six runnable
-  topologies — each one isolates a single feature, which is sometimes
-  easier to read than this kitchen-sink tutorial.
-- The [API reference](api/network.md) documents every class and
-  function used above.
-- The [Roadmap](roadmap.md) lists v0.3.0 candidates including PSA
-  architecture support and an async P4Runtime client.
+- The [Examples directory](examples/index.md) ships six runnable topologies — each one isolates a single feature, which is sometimes easier to read than this kitchen-sink tutorial.
+- The [API reference](api/network.md) documents every class and function used above.
+- The [Roadmap](roadmap.md) lists v0.3.0 candidates including PSA architecture support and an async P4Runtime client.

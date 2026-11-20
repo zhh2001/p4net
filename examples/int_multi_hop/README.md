@@ -162,7 +162,7 @@ When the listener prints `boot times loaded`, send traffic from the correspondin
 h1 ping h2 3 1
 ```
 
-The listener prints three packets with two aligned hops each. Expect `FAIL` in the shell because the INT-tagged frames reach the listener without producing ICMP replies. When done, type `exit` in `p4net>` and then in the isolated Bash shell. Bash removes that copy's coordination file when it exits.
+The listener prints three packets with two aligned hops each. The shell reports `3 sent, 0 received, 100% loss` because the INT-tagged frames reach the listener without producing ICMP replies. When done, type `exit` in `p4net>` and then in the isolated Bash shell. Bash removes that copy's coordination file when it exits.
 
 ## What's interesting
 

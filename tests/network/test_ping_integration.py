@@ -84,7 +84,10 @@ def test_ping_loss_respects_count_and_any_reply(tmp_path: Path, ipv6: bool, part
         with patch.object(host.namespace, "popen", side_effect=capture_popen):
             api_result = net.ping(name, target, count=3, timeout=0.25)
             verb = "ping6" if ipv6 else "ping"
-            cli_result = CommandDispatcher(net).dispatch(f"{name} {verb} {target} 3 0.25")
+            command = f"{name} {verb} {target} 3 0.25"
+            cli_result = CommandDispatcher(net).dispatch(command)
+            progress: list[str] = []
+            summary = CommandDispatcher(net, on_progress=progress.append).dispatch(command)
         assert len(outputs) == 2
         for output in outputs:
             assert re.search(
@@ -95,8 +98,16 @@ def test_ping_loss_respects_count_and_any_reply(tmp_path: Path, ipv6: bool, part
             ), output
         assert api_result is partial
         assert cli_result == ("OK" if partial else "FAIL")
+        assert progress[0] == f"PING {target}"
+        if partial:
+            assert len(progress) == 2
+            assert progress[1].startswith("seq=1  time=")
+            assert re.fullmatch(r"3 sent, 1 received, 66(?:\.\d+)?% loss", summary)
+        else:
+            assert len(progress) == 1
+            assert summary == "3 sent, 0 received, 100% loss"
         assert all(process.poll() is not None for process in processes)
-        assert signals == ([signal.SIGINT, signal.SIGINT] if partial else [])
+        assert signals == ([signal.SIGINT] * 3 if partial else [])
 
 
 @pytest.mark.parametrize("ipv6", [False, True])

@@ -185,6 +185,12 @@ class NSProcess:
         """OS process ID of the wrapped child."""
         return int(self._popen.pid)
 
+    @property
+    def stdout(self) -> IO[bytes] | None:
+        """The captured stdout pipe when created with ``stdout=PIPE``."""
+        stream: IO[bytes] | None = self._popen.stdout
+        return stream
+
     def poll(self) -> int | None:
         """Non-blocking liveness check; returns the exit code or ``None``."""
         rc = self._popen.poll()

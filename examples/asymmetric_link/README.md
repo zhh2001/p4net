@@ -1,9 +1,6 @@
 # asymmetric_link
 
-Two hosts on a single switch with per-direction link delay applied via
-``Link``'s ``*_a_to_b`` / ``*_b_to_a`` fields. The h1↔s1 leg adds 200 ms
-to the h1→s1 direction; the h2↔s1 leg adds 20 ms to the s1→h2 direction;
-the reverse directions are unshaped.
+Two hosts on a single switch with per-direction link delay applied via ``Link``'s ``*_a_to_b`` / ``*_b_to_a`` fields. The h1↔s1 leg adds 200 ms to the h1→s1 direction; the h2↔s1 leg adds 20 ms to the s1→h2 direction; the reverse directions are unshaped.
 
 Resulting one-way delays:
 
@@ -13,10 +10,8 @@ Resulting one-way delays:
 
 ## What it shows
 
-- Per-direction `delay_a_to_b` / `delay_b_to_a` overriding the symmetric
-  default.
-- That direction semantics are anchored to the link's `a` and `b`
-  endpoints (a = first arg to `add_link`, b = second).
+- Per-direction `delay_a_to_b` / `delay_b_to_a` overriding the symmetric default.
+- That direction semantics are anchored to the link's `a` and `b` endpoints (a = first arg to `add_link`, b = second).
 
 ## Files
 
@@ -38,9 +33,10 @@ sudo p4net examples/asymmetric_link/topology.py
 ## Things to try in the shell
 
 ```
-h1 ping h2 5 3        # five pings with a 3-second per-reply timeout;
-                      # min/avg/max RTT around 220 ms is expected
+h1 ping h2 5 3
 h1 cmd tc qdisc show
 ```
+
+The five ping replies have round-trip times of about 220 ms.
 
 The `tc qdisc show` output confirms which side carries the netem queue.

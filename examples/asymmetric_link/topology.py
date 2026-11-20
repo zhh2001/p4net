@@ -11,7 +11,7 @@ Run with:
 
 Then in the shell:
 
-    h1 ping h2 count=10 timeout=2
+    h1 ping h2 5 3
 """
 
 from __future__ import annotations

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import select
 import signal
 import socket
@@ -92,9 +93,12 @@ def test_cli_dataclass_topology_starts_and_runs_setup(
                 sys.modules.pop(name, None)
 
 
-@pytest.mark.parametrize("shutdown", ["exit", "hangup"])
-def test_ctrl_c_cancels_packet_listen_without_stopping_topology(
-    tmp_path: Path, cli_topology: tuple[Path, Path, str, str, str], shutdown: str
+@pytest.mark.parametrize(
+    ("verb", "shutdown"),
+    [("listen", "exit"), ("listen", "hangup"), ("ping", "exit"), ("ping6", "exit")],
+)
+def test_ctrl_c_cancels_command_without_stopping_topology(
+    tmp_path: Path, cli_topology: tuple[Path, Path, str, str, str], verb: str, shutdown: str
 ) -> None:
     topology, _, h1, h2, switch = cli_topology
     namespaces = [Path("/var/run/netns") / name for name in (h1, h2)]
@@ -155,10 +159,20 @@ raise SystemExit(main())
             try:
                 read_through(b"p4net>", timeout=30)
                 assert all(path.exists() for path in namespaces)
-                os.write(master, f"{switch} packet listen timeout=30\n".encode())
-                read_through(f"Waiting for 1 packet on {switch}".encode())
+                if verb == "listen":
+                    os.write(master, f"{switch} packet listen timeout=30\n".encode())
+                    read_through(f"Waiting for 1 packet on {switch}".encode())
+                else:
+                    target = "::1" if verb == "ping6" else h2
+                    os.write(master, f"{h1} {verb} {target} 30\n".encode())
+                    read_through(b"seq=1  time")
                 os.write(master, b"\x03")
-                read_through(b"^C cancelled")
+                output = read_through(b"^C cancelled")
+                if verb != "listen":
+                    stats = re.search(rb"(\d+) sent, (\d+) received, [\d.]+% loss", output)
+                    assert stats is not None, output
+                    sent, received = map(int, stats.groups())
+                    assert 1 <= received <= sent < 30
                 read_through(b"p4net>")
 
                 os.write(master, b"status\n")

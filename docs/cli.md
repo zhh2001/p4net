@@ -136,19 +136,24 @@ Ping from the named host. A target host name resolves to that host's primary IPv
 
 The defaults are `count=1` and `timeout=2.0` seconds. `count` must be a positive integer and limits the number of echo requests. `timeout` must be finite and non-negative. It accepts fractional seconds, such as `0.25`, and is passed to `ping -W`. A timeout of `0` relies on the overall process wait limit.
 
-p4net calculates the overall wait from the count, timeout, and default one-second send interval. This wait must not exceed 2,147,483 seconds. The result is `OK` if at least one reply arrives, including under partial packet loss. No replies or an execution failure produces `FAIL`.
+p4net calculates the overall wait from the count, timeout, and default one-second send interval. This wait must not exceed 2,147,483 seconds. A single probe displays `OK` if it receives a reply and `FAIL` otherwise.
+
+For multiple probes, the shell displays each reply's sequence number and round-trip time as it arrives, then reports how many probes were sent and received and the loss percentage. Press `Ctrl-C` to end a run early and show any available statistics for the probes already sent.
 
 ```text
 p4net> h1 ping h2
 OK
 
-p4net> h1 ping 10.0.0.2 2 2
-OK
+p4net> h1 ping h2 2 2
+PING h2 (10.0.0.2)
+seq=1  time=0.34 ms
+seq=2  time=0.28 ms
+2 sent, 2 received, 0% loss
 ```
 
 ### `<host> ping6 <target> [count] [timeout]`
 
-Run IPv6 ping with the same defaults as `ping`. A host name resolves to its primary IPv6 address; a host without one produces an error. You can also give an IPv6 address directly.
+Run IPv6 ping with the same defaults and output as `ping`. A named target requires a primary IPv6 address. You can also give an IPv6 address directly.
 
 ```text
 p4net> h1 ping6 h2

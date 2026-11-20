@@ -10,9 +10,12 @@ orchestrator's internals.
 from __future__ import annotations
 
 import math
+import os
+import selectors
 import signal
 import subprocess
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import IO
 
@@ -25,6 +28,49 @@ from p4net.topo import Host, P4Switch
 
 def _strip_mask(cidr: str) -> str:
     return cidr.split("/", 1)[0] if "/" in cidr else cidr
+
+
+def _stream_ping(process: NSProcess, timeout: int, on_line: Callable[[str], None]) -> int:
+    stream = process.stdout
+    assert stream is not None
+    pending = bytearray()
+    with stream, selectors.DefaultSelector() as selector:
+        selector.register(stream, selectors.EVENT_READ)
+
+        def drain(seconds: int) -> int:
+            deadline = time.monotonic() + seconds
+            while True:
+                newline = pending.find(b"\n")
+                if newline != -1:
+                    line = pending[:newline].decode("utf-8", errors="replace")
+                    del pending[: newline + 1]
+                    on_line(line)
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise subprocess.TimeoutExpired("ping", seconds)
+                data = os.read(stream.fileno(), 4096)
+                if not data:
+                    if pending:
+                        line = pending.decode("utf-8", errors="replace")
+                        pending.clear()
+                        on_line(line)
+                    return process.wait(timeout=max(0, deadline - time.monotonic()))
+                pending.extend(data)
+
+        try:
+            return drain(timeout)
+        except (KeyboardInterrupt, subprocess.TimeoutExpired) as exc:
+            # iputils prints its final statistics when interrupted.
+            process.send_signal(signal.SIGINT)
+            try:
+                result = drain(1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                result = process.wait()
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            return result
 
 
 class RunningHost:
@@ -147,30 +193,8 @@ class RunningHost:
         for existing callers); pass ``force_ipv6=True`` plus a string target
         if you need IPv6 explicitly.
         """
-        if isinstance(dst, RunningHost):
-            target = dst.primary_ip if not force_ipv6 else dst.primary_ip6
-            if target is None and not force_ipv6:
-                target = dst.primary_ip6  # v4-less host falls through to v6
-            if target is None:
-                raise NetworkError(f"cannot ping host {dst.name!r}: no primary IP configured")
-        else:
-            target = dst
-        is_v6 = force_ipv6 or ":" in target
-        probes = int(count)
-        deadline = math.ceil(max(probes * timeout, probes - 1 + timeout)) + 1
-        with self._namespace.popen(
-            [
-                "ping",
-                "-6" if is_v6 else "-4",
-                "-c",
-                str(probes),
-                "-W",
-                str(timeout).removesuffix(".0"),
-                target,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        ) as process:
+        argv, deadline = self._ping_arguments(dst, count, timeout, force_ipv6)
+        with self._namespace.popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
             try:
                 process.communicate(timeout=deadline)
             except subprocess.TimeoutExpired:
@@ -181,6 +205,49 @@ class RunningHost:
                     process.kill()
                     process.communicate()
             return process.wait() == 0
+
+    def _ping_with_output(
+        self,
+        dst: str,
+        *,
+        count: int,
+        timeout: float,
+        force_ipv6: bool,
+        on_line: Callable[[str], None],
+    ) -> int:
+        argv, deadline = self._ping_arguments(dst, count, timeout, force_ipv6)
+        argv[-1:-1] = ["-n", "--"]
+        with self._namespace.popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=dict(os.environ, LC_ALL="C.UTF-8"),
+        ) as process:
+            return _stream_ping(process, deadline, on_line)
+
+    @staticmethod
+    def _ping_arguments(
+        dst: str | RunningHost, count: int, timeout: float, force_ipv6: bool
+    ) -> tuple[list[str], int]:
+        if isinstance(dst, RunningHost):
+            target = dst.primary_ip6 if force_ipv6 else dst.primary_ip
+            if target is None and not force_ipv6:
+                target = dst.primary_ip6
+            if target is None:
+                raise NetworkError(f"cannot ping host {dst.name!r}: no primary IP configured")
+        else:
+            target = dst
+        probes = int(count)
+        deadline = math.ceil(max(probes * timeout, probes - 1 + timeout)) + 1
+        return [
+            "ping",
+            "-6" if force_ipv6 or ":" in target else "-4",
+            "-c",
+            str(probes),
+            "-W",
+            str(timeout).removesuffix(".0"),
+            target,
+        ], deadline
 
     def __repr__(self) -> str:
         return f"RunningHost(name={self.name!r}, primary_ip={self.primary_ip!r})"

@@ -136,19 +136,24 @@ p4net> topology graph /tmp/topo.svg layout=TB format=svg
 
 默认 `count=1`、`timeout=2.0` 秒。`count` 必须为正整数，表示回显请求的次数上限。`timeout` 必须有限且非负，可以使用小数秒，例如 `0.25`，并传给 `ping -W`。超时值为 `0` 时，由进程的整体等待时限控制退出。
 
-p4net 根据次数、超时和默认一秒的发送间隔计算整体等待时限，上限为 2,147,483 秒。收到至少一次应答就显示 `OK`，部分丢包也算成功。没有应答或执行失败时显示 `FAIL`。
+p4net 根据次数、超时和默认一秒的发送间隔计算整体等待时限，上限为 2,147,483 秒。单次探测收到应答时显示 `OK`，否则显示 `FAIL`。
+
+多次探测时，每收到一次应答就显示序号和往返时延，结束时汇总发送数、收到数和丢包率。按 `Ctrl-C` 可提前结束，并显示已发送探测的可用统计。
 
 ```text
 p4net> h1 ping h2
 OK
 
-p4net> h1 ping 10.0.0.2 2 2
-OK
+p4net> h1 ping h2 2 2
+PING h2 (10.0.0.2)
+seq=1  time=0.34 ms
+seq=2  time=0.28 ms
+2 sent, 2 received, 0% loss
 ```
 
 ### `<host> ping6 <target> [count] [timeout]`
 
-执行 IPv6 ping，默认参数与 `ping` 相同。主机名解析为该主机的主 IPv6 地址，未配置时会报错，也可以直接指定 IPv6 地址。
+执行 IPv6 ping，默认参数和输出格式与 `ping` 相同。使用主机名时，目标主机须有主 IPv6 地址，也可以直接指定 IPv6 地址。
 
 ```text
 p4net> h1 ping6 h2
