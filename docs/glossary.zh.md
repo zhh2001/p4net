@@ -13,7 +13,7 @@ description: p4net 文档中使用到的 P4、SDN、Linux 网络与工具相关�
 :   BMv2 `simple_switch` / `simple_switch_grpc` 使用的 P4 参考架构。规定了 p4net 假设的 parser → ingress → traffic-manager → egress → deparser 形态。
 
 `PSA`
-:   Portable Switch Architecture。比 v1model 更强的后继架构。p4net 在 v0.x 不针对 PSA；见[路线图](roadmap.md)。
+:   可移植交换机架构（Portable Switch Architecture）。它定义了可编程交换机的报文处理模块和常用 extern。p4net 目前只支持 `v1model`。参见 [P4 架构支持](known-limitations.md#3-不支持-psa-架构)。
 
 `p4c`
 :   官方 P4 编译器。p4net 调用 `p4c -b bmv2 --p4runtime-files=p4info.txtpb` 同时产出 BMv2 JSON 与 P4Info。

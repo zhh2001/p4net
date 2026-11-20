@@ -424,4 +424,4 @@ p4net> topology graph /tmp/topo.dot format=dot
 
 - The [Examples directory](examples/index.md) ships six runnable topologies — each one isolates a single feature, which is sometimes easier to read than this kitchen-sink tutorial.
 - The [API reference](api/network.md) documents every class and function used above.
-- The [Roadmap](roadmap.md) lists v0.3.0 candidates including PSA architecture support and an async P4Runtime client.
+- To program switches concurrently from an event loop, see the [async client guide](async-client.md).

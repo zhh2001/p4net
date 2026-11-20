@@ -13,7 +13,7 @@ description: Glossary of P4, SDN, Linux networking, and tooling terms used in th
 :   The reference P4 architecture used by BMv2's `simple_switch` / `simple_switch_grpc`. Defines the parser → ingress → traffic-manager → egress → deparser shape p4net assumes.
 
 `PSA`
-:   Portable Switch Architecture. A more capable v1model successor. p4net does not target PSA in v0.x; see [Roadmap](roadmap.md).
+:   Portable Switch Architecture. A P4 architecture that defines packet processing blocks and common externs for programmable switches. p4net currently supports only the `v1model` switch architecture. See [P4 architecture support](known-limitations.md#3-psa-architecture-not-supported).
 
 `p4c`
 :   The reference P4 compiler. p4net invokes `p4c -b bmv2 --p4runtime-files=p4info.txtpb` to produce both the BMv2 JSON and the P4Info description.
