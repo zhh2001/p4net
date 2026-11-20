@@ -144,23 +144,50 @@ works but doesn't adapt as switches are added.
 
 ## Running concurrent topologies
 
-The coordination file path defaults to
-`/tmp/p4net-int-multi-hop-boot-times.json`. To run multiple multi-hop
-INT topologies on one host without trampling each other's
-coordination state, set ``P4NET_INT_BOOT_TIMES_PATH`` to a unique
-path before starting each:
+Each copy uses the same node names and default BMv2 gRPC and Thrift ports.
+Give each copy its own Linux network namespace for the links and ports,
+its own mount namespace with a private `/run/netns` for `h1` and `h2`,
+and its own timestamp coordination file.
 
-```
-P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
-  sudo -E p4net examples/int_multi_hop/topology.py
-P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
-  sudo -E ip netns exec h2 python3 \
-    examples/int_multi_hop/listener.py --iface h2-eth0
+From the repository root, open one shell per copy.
+
+```bash
+sudo unshare --mount --net --propagation private bash
 ```
 
-``sudo -E`` is required — without it ``sudo`` strips most env vars
-and both processes silently fall back to the default path, causing
-collisions. Topology and listener must agree on the path.
+In each new shell, run the following commands.
+
+```bash
+mkdir -p /run/netns
+mount -t tmpfs tmpfs /run/netns
+ip link set lo up
+int_boot_times=$(mktemp /tmp/p4net-int-boot-times.XXXXXXXX)
+trap 'rm -f -- "$int_boot_times"' EXIT
+printf 'int_shell_pid=%s int_boot_times=%s\n' "$$" "$int_boot_times"
+P4NET_INT_BOOT_TIMES_PATH="$int_boot_times" p4net examples/int_multi_hop/topology.py
+```
+
+Once that copy reaches `p4net>`, copy its `int_shell_pid=... int_boot_times=...`
+line into a second terminal at the repository root. Run the listener in
+that copy's `h2` namespace.
+
+```bash
+sudo nsenter --target "$int_shell_pid" --mount --net -- \
+  ip netns exec h2 python3 "$PWD/examples/int_multi_hop/listener.py" \
+  --iface h2-eth0 --boot-times "$int_boot_times" --count 3
+```
+
+When the listener prints `boot times loaded`, send traffic from the
+corresponding `p4net>` shell.
+
+```text
+h1 ping h2 3 1
+```
+
+The listener prints three packets with two aligned hops each. Expect `FAIL`
+in the shell because the INT-tagged frames reach the listener without
+producing ICMP replies. When done, type `exit` in `p4net>` and then in the
+isolated Bash shell. Bash removes that copy's coordination file when it exits.
 
 ## What's interesting
 
@@ -186,10 +213,6 @@ collisions. Topology and listener must agree on the path.
   clock zero is slightly later. Good enough for μs/ms regime checks,
   not good enough for nanosecond-scale latency research; use PTP for
   that.
-- **Listener relies on a `/tmp/` coordination file.** Path defaults
-  to `/tmp/p4net-int-multi-hop-boot-times.json`; set
-  `P4NET_INT_BOOT_TIMES_PATH` (with `sudo -E`) to run concurrent
-  multi-hop INT topologies on the same host.
 - **`queue_depth` is almost always 0.** Same as the single-switch
   example.
 - **No checksum recomputation for the inserted shims.** The IPv4

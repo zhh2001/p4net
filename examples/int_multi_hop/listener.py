@@ -35,9 +35,8 @@ ETH_P_ALL = 0x0003
 ETHERTYPE_INT = 0x88B6
 ETHERTYPE_IPV4 = 0x0800
 SHIM_LEN = 14
-# ``P4NET_INT_BOOT_TIMES_PATH`` overrides the coordination file path; pass
-# it with ``sudo -E`` to preserve the variable across privilege escalation.
-# Both this listener and ``topology.py`` read the same env var.
+# ``P4NET_INT_BOOT_TIMES_PATH`` sets the default path for both this
+# listener and ``topology.py``. ``--boot-times`` selects a file explicitly.
 DEFAULT_BOOT_TIMES_PATH = Path(
     os.environ.get(
         "P4NET_INT_BOOT_TIMES_PATH",

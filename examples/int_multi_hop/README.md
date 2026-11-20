@@ -183,6 +183,9 @@ name, and prints `aligned=...us` next to each raw `ts`. With both
 aligned values in hand, the trailing `latency_s1_to_s2 = ...us` line is
 just subtraction.
 
+`topology.py` builds the mapping with `Network.boot_timestamps` (v1.5+),
+which includes all running switches.
+
 The alignment is good enough for "is per-hop latency in the 1 ms
 range or the 100 ms range" — not good enough for nanosecond-precision
 research. For real per-link latency in production INT you'd still want
@@ -192,30 +195,50 @@ syscall (sub-millisecond) plus any kernel-scheduling delay between the
 
 ## Running concurrent topologies
 
-The coordination file path defaults to
-`/tmp/p4net-int-multi-hop-boot-times.json`. To run multiple multi-hop
-INT topologies on the same host without trampling each other's
-coordination state, set `P4NET_INT_BOOT_TIMES_PATH` to a unique path
-before starting each:
+Each copy uses the same node names and default BMv2 gRPC and Thrift ports.
+Give each copy its own Linux network namespace for the links and ports,
+its own mount namespace with a private `/run/netns` for `h1` and `h2`,
+and its own timestamp coordination file.
+
+From the repository root, open one shell per copy.
 
 ```bash
-P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
-  sudo -E p4net examples/int_multi_hop/topology.py
-# in another terminal:
-P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
-  sudo -E ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0
+sudo unshare --mount --net --propagation private bash
 ```
 
-`sudo -E` is required — without it, `sudo` strips most env vars from
-the child environment, the topology and listener fall back to the
-default `/tmp/p4net-int-multi-hop-boot-times.json` path, and the two
-runs collide. The topology and listener must agree on the path; both
-read the same `P4NET_INT_BOOT_TIMES_PATH` variable.
+In each new shell, run the following commands.
 
-The same v1.5 helper also informs how `topology.py` builds the
-coordination dict: instead of a hand-written comprehension over each
-switch, it calls `net.boot_timestamps`, which adapts automatically as
-switches are added.
+```bash
+mkdir -p /run/netns
+mount -t tmpfs tmpfs /run/netns
+ip link set lo up
+int_boot_times=$(mktemp /tmp/p4net-int-boot-times.XXXXXXXX)
+trap 'rm -f -- "$int_boot_times"' EXIT
+printf 'int_shell_pid=%s int_boot_times=%s\n' "$$" "$int_boot_times"
+P4NET_INT_BOOT_TIMES_PATH="$int_boot_times" p4net examples/int_multi_hop/topology.py
+```
+
+Once that copy reaches `p4net>`, copy its `int_shell_pid=... int_boot_times=...`
+line into a second terminal at the repository root. Run the listener in
+that copy's `h2` namespace.
+
+```bash
+sudo nsenter --target "$int_shell_pid" --mount --net -- \
+  ip netns exec h2 python3 "$PWD/examples/int_multi_hop/listener.py" \
+  --iface h2-eth0 --boot-times "$int_boot_times" --count 3
+```
+
+When the listener prints `boot times loaded`, send traffic from the
+corresponding `p4net>` shell.
+
+```text
+h1 ping h2 3 1
+```
+
+The listener prints three packets with two aligned hops each. Expect `FAIL`
+in the shell because the INT-tagged frames reach the listener without
+producing ICMP replies. When done, type `exit` in `p4net>` and then in the
+isolated Bash shell. Bash removes that copy's coordination file when it exits.
 
 ## What's interesting
 
@@ -283,12 +306,6 @@ preceded.
   well under 1 ms on a typical Linux host, occasionally a couple of
   ms under load. Good enough for "is this in the μs or ms regime",
   not good enough for serious latency research; use PTP for that.
-- **Listener relies on a `/tmp/` coordination file.** The path
-  defaults to `/tmp/p4net-int-multi-hop-boot-times.json`. Run
-  concurrent multi-hop INT topologies on the same host by setting
-  `P4NET_INT_BOOT_TIMES_PATH` (with `sudo -E`); see the
-  "Running concurrent topologies" section above. A single default
-  path with one topology at a time is fine.
 - **`queue_depth` is almost always 0.** Same as the single-switch
   example — BMv2's default queueing doesn't surface meaningful values.
 - **No checksum recomputation for the inserted shims.** The IPv4

@@ -12,16 +12,7 @@ Run as root:
 
     sudo p4net examples/int_multi_hop/topology.py
 
-Then in another terminal:
-
-    sudo python3 examples/int_multi_hop/listener.py
-
-And from the p4net shell (or a third terminal):
-
-    sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
-
-The listener prints one block per packet, with one line per traversed
-switch (two lines per packet in this topology).
+See the example README for the listener and concurrent topology walkthroughs.
 """
 
 from __future__ import annotations
@@ -41,10 +32,8 @@ HERE = Path(__file__).resolve().parent
 #     wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
 #
 # Written at the end of ``setup(net)`` once both switches are running.
-# The path is overridable via the ``P4NET_INT_BOOT_TIMES_PATH`` environment
-# variable so multiple multi-hop INT topologies can coexist on one host.
-# Pass it with ``sudo -E`` to preserve the variable across privilege
-# escalation; both topology.py and listener.py read the same env var.
+# ``P4NET_INT_BOOT_TIMES_PATH`` selects the output file. Use the same
+# path for the listener's ``--boot-times`` option.
 BOOT_TIMES_PATH = Path(
     os.environ.get(
         "P4NET_INT_BOOT_TIMES_PATH",

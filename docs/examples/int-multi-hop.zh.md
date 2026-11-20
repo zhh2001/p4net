@@ -133,21 +133,46 @@ wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
 
 ## 同主机并行运行多份拓扑
 
-协调文件默认路径是 `/tmp/p4net-int-multi-hop-boot-times.json`。
-要在同一主机上并行跑多份多跳 INT 拓扑而不互相覆盖，设置环境变量
-``P4NET_INT_BOOT_TIMES_PATH`` 指向各自独立的路径：
+每份拓扑使用相同的节点名和默认 BMv2 gRPC、Thrift 端口。为每份拓扑
+创建独立的网络命名空间来隔离链路和端口，再用独立的挂载命名空间和
+私有 `/run/netns` 隔离 `h1`、`h2` 的名字。每份拓扑也使用各自的时间戳协调文件。
 
-```
-P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
-  sudo -E p4net examples/int_multi_hop/topology.py
-P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
-  sudo -E ip netns exec h2 python3 \
-    examples/int_multi_hop/listener.py --iface h2-eth0
+在仓库根目录为每份拓扑打开一个独立的 shell。
+
+```bash
+sudo unshare --mount --net --propagation private bash
 ```
 
-必须用 ``sudo -E``——否则 ``sudo`` 会清掉大多数环境变量，两个进程
-都会悄悄退回默认路径并互相打架。topology 与 listener 必须读到同一
-路径。
+在每个新 shell 中执行以下命令。
+
+```bash
+mkdir -p /run/netns
+mount -t tmpfs tmpfs /run/netns
+ip link set lo up
+int_boot_times=$(mktemp /tmp/p4net-int-boot-times.XXXXXXXX)
+trap 'rm -f -- "$int_boot_times"' EXIT
+printf 'int_shell_pid=%s int_boot_times=%s\n' "$$" "$int_boot_times"
+P4NET_INT_BOOT_TIMES_PATH="$int_boot_times" p4net examples/int_multi_hop/topology.py
+```
+
+看到 `p4net>` 后，把本次启动输出的 `int_shell_pid=... int_boot_times=...`
+整行复制到位于仓库根目录的第二个终端，再进入对应的 `h2` 命名空间启动 listener。
+
+```bash
+sudo nsenter --target "$int_shell_pid" --mount --net -- \
+  ip netns exec h2 python3 "$PWD/examples/int_multi_hop/listener.py" \
+  --iface h2-eth0 --boot-times "$int_boot_times" --count 3
+```
+
+listener 显示 `boot times loaded` 后，在对应的 `p4net>` 中发送流量。
+
+```text
+h1 ping h2 3 1
+```
+
+listener 会显示三个包，每个包都有两跳对齐后的时间戳。带 INT 头的帧会到达
+listener，`ping` 因为收不到 ICMP 回复会显示 `FAIL`。完成后，先在 `p4net>`
+输入 `exit`，再退出隔离的 Bash shell。Bash 退出时会删除本次的协调文件。
 
 ## 值得注意的点
 
@@ -167,10 +192,6 @@ P4NET_INT_BOOT_TIMES_PATH=/tmp/topo-a.json \
 - **对齐有亚毫秒漂移**。`boot_timestamp_us` 是在 `Popen` 之前一刻
   抓的，BMv2 实际内部时钟零点要更晚一点。够用来粗看，不够用来做
   纳秒级精度研究。
-- **listener 依赖 `/tmp/` 协调文件**。默认路径
-  `/tmp/p4net-int-multi-hop-boot-times.json`；要并行跑多份拓扑，请
-  通过 ``P4NET_INT_BOOT_TIMES_PATH``（配合 ``sudo -E``）指向独立
-  路径。
 - **`queue_depth` 几乎总是 0**，与单交换机示例一致。
 - **不重算插入 shim 的校验和**。IPv4 校验和只覆盖 IPv4 头本身；
   位于以太网与 IPv4 之间的 shim 层是无保护的，这与 INT 规范的
