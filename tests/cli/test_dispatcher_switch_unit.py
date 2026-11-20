@@ -1037,7 +1037,7 @@ def test_packet_listen_zero_timeout_without_packets_deregisters(network: MagicMo
     network.switches["s1"].client.on_packet_in.return_value = deregister
     progress = MagicMock()
     dispatcher = CommandDispatcher(network, on_progress=progress)
-    assert dispatcher.dispatch("s1 packet listen timeout=0") == "(no packets within 0.0s)"
+    assert dispatcher.dispatch("s1 packet listen timeout=0") == "0/1 packets received (timeout)"
     progress.assert_not_called()
     deregister.assert_called_once()
 
@@ -1048,17 +1048,26 @@ def test_packet_listen_interruption_deregisters(
 ) -> None:
     deregister = MagicMock()
     network.switches["s1"].client.on_packet_in.return_value = deregister
-    progress = MagicMock(side_effect=KeyboardInterrupt if interrupt_during_progress else None)
+    header = "Waiting for 1 packet on s1 (up to 1s)..."
+
+    def show(message: str) -> None:
+        if interrupt_during_progress and message == header:
+            raise KeyboardInterrupt
+        if message != header:
+            deregister.assert_called_once()
+
+    progress = MagicMock(side_effect=show)
     with (
-        patch("threading.Event.wait", side_effect=KeyboardInterrupt) as wait,
+        patch("threading.Condition.wait_for", side_effect=KeyboardInterrupt) as wait,
         pytest.raises(KeyboardInterrupt),
     ):
         CommandDispatcher(network, on_progress=progress).dispatch("s1 packet listen timeout=1")
-    progress.assert_called_once_with("Waiting for 1 packet on s1 (up to 1s)...")
+    assert progress.call_args_list == [call(header), call("0/1 packets received")]
     if interrupt_during_progress:
         wait.assert_not_called()
     else:
-        wait.assert_called_once_with(timeout=1.0)
+        wait.assert_called_once()
+        assert wait.call_args.kwargs["timeout"] == pytest.approx(1.0, abs=0.01)
     deregister.assert_called_once()
 
 
@@ -1066,11 +1075,39 @@ def test_packet_listen_without_options_uses_default_timeout(network: MagicMock) 
     deregister = MagicMock()
     client = network.switches["s1"].client
     client.on_packet_in.return_value = deregister
-    with patch("threading.Event.wait", return_value=False) as wait:
+    with patch("threading.Condition.wait_for", return_value=False) as wait:
         output = CommandDispatcher(network).dispatch("s1 packet listen")
     assert output == "(no packets within 10.0s)"
-    assert wait.call_args.kwargs == {"timeout": 10.0}
+    assert wait.call_args.kwargs["timeout"] == pytest.approx(10.0, abs=0.01)
     client.on_packet_in.assert_called_once()
+    deregister.assert_called_once()
+
+
+def test_packet_listen_timeout_includes_time_spent_showing_packets(network: MagicMock) -> None:
+    client = network.switches["s1"].client
+    deregister = MagicMock()
+    client.on_packet_in.return_value = deregister
+    start = 1.0
+    first_packet = "[ingress_port=1] deadbeef"
+
+    def show(message: str) -> None:
+        handler = client.on_packet_in.call_args.args[0]
+        if message.startswith("Waiting"):
+            handler(bytes.fromhex("deadbeef"), {"ingress_port": 1})
+        elif message == first_packet:
+            clock.return_value = start + 4.0
+            handler(bytes.fromhex("aabbcc"), {"ingress_port": 1})
+
+    progress = MagicMock(side_effect=show)
+    with patch("p4net.cli.dispatcher.monotonic", return_value=start) as clock:
+        result = CommandDispatcher(network, on_progress=progress).dispatch(
+            "s1 packet listen count=2 timeout=3"
+        )
+    assert result == "1/2 packets received (timeout)"
+    assert progress.call_args_list == [
+        call("Waiting for 2 packets on s1 (up to 3s)..."),
+        call(first_packet),
+    ]
     deregister.assert_called_once()
 
 

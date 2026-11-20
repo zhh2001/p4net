@@ -42,10 +42,10 @@ When `Waiting for 10 packets on s1` appears, run this in a second terminal.
 sudo ip netns exec h1 ping -c 1 -W 1 10.0.0.99
 ```
 
-The ping times out because `10.0.0.99` has no host. The switch punts the ARP request from `h1`, so the listener shows a line like this when it reaches the packet count or timeout. IPv6 frames may also appear.
+The ping times out because `10.0.0.99` has no host. The switch punts the ARP request from `h1`, so the listener shows a line like this as soon as the request arrives. IPv6 frames may also appear. The shell prints the received count when listening ends.
 
 ```text
-[ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
+[_pad0=0] [ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
 ```
 
 ### Send a PacketOut

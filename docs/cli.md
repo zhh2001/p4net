@@ -329,12 +329,13 @@ ok
 
 ### `<switch> packet listen [count=N] [timeout=T]`
 
-Collect new `PacketIn` messages while the command runs. Return when `count` packets arrive or the total `timeout` elapses. Defaults are `count=1` and `timeout=10.0` seconds. `count` must be a positive integer. `timeout` must be finite, non-negative, and within the system wait limit. With a positive timeout, the shell shows the switch, packet count, and time limit before waiting. Use `timeout=0` to return immediately. At timeout, the shell displays any packets already collected.
+Display new `PacketIn` messages as they arrive. The shell prints the received count when the target is reached or the total timeout elapses. Press `Ctrl-C` to stop listening and see how many packets were displayed. Defaults are `count=1` and `timeout=10.0` seconds. `count` must be a positive integer. `timeout` must be finite, non-negative, and within the system wait limit. With a positive timeout, the shell shows the switch, target count, and time limit before waiting. Use `timeout=0` to return immediately.
 
 ```text
 p4net> s1 packet listen count=2 timeout=3
 Waiting for 2 packets on s1 (up to 3s)...
-(no packets within 3.0s)
+[_pad0=0] [ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
+1/2 packets received (timeout)
 ```
 
 Each packet is shown on one line with `[name=value]` metadata fields sorted by name, followed by the hex payload. Hex payloads longer than 64 characters are truncated with `...`.

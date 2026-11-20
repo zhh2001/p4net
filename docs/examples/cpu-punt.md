@@ -8,7 +8,7 @@ One host, one switch, every dataplane packet punted to the controller via the CP
 
 ## What you'll see
 
-`s1 packet listen` collects packets punted while the host emits ARP, IPv6 ND, or ICMP traffic. It shows the collected packets when the count is reached or the timeout expires. `s1 packet send` injects a controller-built frame back into the dataplane.
+`s1 packet listen` displays punted packets as they arrive, including ARP, IPv6 ND, and ICMP traffic. `s1 packet send` injects a controller-built frame back into the dataplane.
 
 ## Topology
 
@@ -55,13 +55,13 @@ When `Waiting for 10 packets on s1` appears, run this in a second terminal.
 sudo ip netns exec h1 ping -c 1 -W 1 10.0.0.99
 ```
 
-The ping times out because `10.0.0.99` has no host. The switch punts the ARP request from `h1`, so the listener shows a line like this when it reaches the packet count or timeout. IPv6 frames may also appear.
+The ping times out because `10.0.0.99` has no host. The switch punts the ARP request from `h1`, so the listener shows a line like this as soon as the request arrives. IPv6 frames may also appear. The shell prints the received count when listening ends.
 
 ```text
-[ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
+[_pad0=0] [ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
 ```
 
-The `[ingress_port=1]` prefix comes from the `packet_in` controller header. The CLI truncates long frames to 64 hex characters. Use `client.expect_packet_in()` from Python to read the full frame.
+The metadata fields come from the `packet_in` controller header. The CLI truncates long frames to 64 hex characters. Use `client.expect_packet_in()` from Python to read the full frame.
 
 ### Send a PacketOut
 

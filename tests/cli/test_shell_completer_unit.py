@@ -148,21 +148,22 @@ def test_shell_prints_packet_listen_progress_before_waiting(tmp_path: Path) -> N
     stream = StringIO()
     message = "Waiting for 2 packets on s1 (up to 3s)..."
 
-    def wait(*, timeout: float) -> bool:
-        assert timeout == 3.0
+    def wait(predicate, *, timeout: float) -> bool:
+        assert timeout == pytest.approx(3.0, abs=0.01)
         client.on_packet_in.assert_called_once()
         assert stream.getvalue().splitlines() == [message]
+        assert not predicate()
         return False
 
     shell = P4NetShell(network, history_file=tmp_path / "history")
     with (
         patch("p4net.cli.shell.PromptSession", return_value=session),
-        patch("threading.Event.wait", side_effect=wait),
+        patch("threading.Condition.wait_for", side_effect=wait),
         create_app_session(output=PlainTextOutput(stream)),
     ):
         shell.run()
 
-    assert stream.getvalue().splitlines() == [message, "(no packets within 3.0s)", ""]
+    assert stream.getvalue().splitlines() == [message, "0/2 packets received (timeout)", ""]
     deregister.assert_called_once()
 
 

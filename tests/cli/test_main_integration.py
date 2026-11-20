@@ -265,7 +265,9 @@ raise SystemExit(main())
                         assert re.search(rb"\b" + h1.encode() + rb" +- +1", output), output
                         assert re.search(rb"\b" + h2.encode() + rb" +\? +-", output), output
                         assert b"1/1 succeeded" in output, output
-                    elif verb != "listen":
+                    elif verb == "listen":
+                        assert b"0/1 packets received" in output, output
+                    else:
                         stats = re.search(rb"(\d+) sent, (\d+) received, [\d.]+% loss", output)
                         assert stats is not None, output
                         sent, received = map(int, stats.groups())

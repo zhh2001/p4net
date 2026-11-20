@@ -370,10 +370,8 @@ def test_cli_packet_send_then_listen(network: Network) -> None:
     assert rc == 0
     assert marker in pcap_path.read_bytes()
 
-    # Listen: while the host emits a frame, the dispatcher's listen output
-    # mentions ingress_port=1 and contains our marker. count=20 lets noisy
-    # IPv6 ND chatter through alongside the test frame; the marker is the
-    # discriminator. Timeout is well above the host's ND chatter window.
+    # Wait for the CLI to display the first frame before sending the second.
+    # The marker distinguishes these frames from any IPv6 ND traffic.
     listen_marker = uuid.uuid4().bytes
     listen_frame = _build_eth_frame(
         dst_mac=b"\xff\xff\xff\xff\xff\xff",
@@ -382,16 +380,33 @@ def test_cli_packet_send_then_listen(network: Network) -> None:
         payload=b"LS" + listen_marker + b"\x00" * 32,
     )
 
+    ready = threading.Event()
+    first_displayed = threading.Event()
+    command_thread = threading.get_ident()
+    displayed: list[str] = []
+
+    def show(line: str) -> None:
+        assert threading.get_ident() == command_thread
+        if line.startswith("Waiting"):
+            ready.set()
+        elif listen_marker.hex() in line:
+            displayed.append(line)
+            first_displayed.set()
+
     def deliver() -> None:
-        time.sleep(0.3)
+        assert ready.wait(timeout=2)
+        _send_raw_in_host(h1, network, listen_frame)
+        assert first_displayed.wait(timeout=2)
         _send_raw_in_host(h1, network, listen_frame)
 
-    threading.Thread(target=deliver, daemon=True).start()
-    out_listen = d.dispatch(f"{s1} packet listen count=20 timeout=3.0")
-    assert "[ingress_port=1]" in out_listen
-    # Marker hex (32 chars) lives at offset 32 of the payload hex, which is
-    # still within the dispatcher's 64-char truncation window.
-    assert listen_marker.hex() in out_listen
+    dispatcher = CommandDispatcher(network, on_progress=show)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        sender = executor.submit(deliver)
+        summary = dispatcher.dispatch(f"{s1} packet listen count=20 timeout=3")
+        sender.result(timeout=5)
+    assert displayed == [f"[_pad0=0] [ingress_port=1] {listen_frame.hex()[:64]}..."] * 2
+    assert summary.endswith("/20 packets received (timeout)")
+    assert network.switch(s1).client._packet_in_handlers == []
 
 
 @pytest.mark.parametrize(

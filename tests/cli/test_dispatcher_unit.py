@@ -117,7 +117,7 @@ def test_help_lists_every_command(two_host_network: MagicMock) -> None:
     assert "<switch> table add" in switches
     assert max(map(len, out.splitlines())) <= 60
     listen, continuation = switches.splitlines()[-2:]
-    assert listen.index("Block until") == len(continuation) - len(continuation.lstrip())
+    assert listen.index("Show PacketIns") == len(continuation) - len(continuation.lstrip())
 
 
 def test_help_for_specific_topic(two_host_network: MagicMock) -> None:

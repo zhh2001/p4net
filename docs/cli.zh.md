@@ -329,12 +329,13 @@ ok
 
 ### `<switch> packet listen [count=N] [timeout=T]`
 
-收集命令运行期间新到达的 `PacketIn`。收到 `count` 个包或达到总超时后返回，默认 `count=1`、`timeout=10.0` 秒。`count` 必须为正整数，`timeout` 必须有限、非负且不超过系统等待上限。超时大于零时，终端在等待前显示交换机、目标包数和等待上限。设置 `timeout=0` 可立即返回。超时时会显示已经收集到的包。
+实时显示新到达的 `PacketIn`。收满目标包数或达到总超时后，终端汇总收到的包数。按 `Ctrl-C` 可停止监听，终端会汇总已显示的包数。默认 `count=1`、`timeout=10.0` 秒。`count` 必须为正整数，`timeout` 必须有限、非负且不超过系统等待上限。超时大于零时，终端在等待前显示交换机、目标包数和等待上限。设置 `timeout=0` 可立即返回。
 
 ```text
 p4net> s1 packet listen count=2 timeout=3
 Waiting for 2 packets on s1 (up to 3s)...
-(no packets within 3.0s)
+[_pad0=0] [ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
+1/2 packets received (timeout)
 ```
 
 每个包输出一行，先按名称排序显示 `[name=value]` 元数据字段，再显示十六进制内容。十六进制内容超过 64 个字符时截断并追加 `...`。

@@ -12,18 +12,24 @@ import math
 import re
 import shlex
 import subprocess
+import threading
+from collections import deque
 from collections.abc import Callable, Mapping
+from contextlib import ExitStack
 from textwrap import fill
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from p4net.cli._command_output import stream_command_output
 from p4net.cli.exceptions import CLIExit, CLIUsageError, _CommandErrorOutput
 from p4net.cli.formatting import bold, render_pingall_matrix
+from p4net.network._cleanup import defer_cleanup_signals
 from p4net.network.orchestrator import _hosts_with_ip, _ping_host_pairs
 
 if TYPE_CHECKING:
     from p4net.control import P4InfoIndex
     from p4net.network import Network, RunningHost
+    from p4net.network.nodes import RunningSwitch
 
 _log = logging.getLogger(__name__)
 
@@ -135,7 +141,7 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
         "<switch> packet send <hex_payload>\n    [metadata: <k>=<v>[,<k>=<v>...]]",
     ),
     "<switch> packet listen": (
-        "Block until count PacketIns arrive (or timeout).",
+        "Show PacketIns as they arrive until the count or timeout.",
         "<switch> packet listen [count=<int>] [timeout=<float>]",
     ),
 }
@@ -933,7 +939,9 @@ class CommandDispatcher:
             return _CommandErrorOutput.from_exception(exc)
         return "ok"
 
-    def _cmd_switch_packet_listen(self, switch_name: str, switch: object, tokens: list[str]) -> str:
+    def _cmd_switch_packet_listen(
+        self, switch_name: str, switch: RunningSwitch, tokens: list[str]
+    ) -> str:
         kv = _parse_kv_pairs(tokens) if tokens else {}
         for k in kv:
             if k not in ("count", "timeout"):
@@ -952,52 +960,66 @@ class CommandDispatcher:
         if count <= 0:
             raise CLIUsageError(f"{switch_name} packet listen: count must be positive")
 
-        import threading
-
         if not math.isfinite(timeout) or not 0 <= timeout <= threading.TIMEOUT_MAX:
             raise CLIUsageError(
                 f"{switch_name} packet listen: timeout must be finite and between "
                 f"0 and {threading.TIMEOUT_MAX} seconds"
             )
 
-        captured: list[tuple[bytes, dict[str, int]]] = []
-        done = threading.Event()
-        lock = threading.Lock()
+        progress = self._on_progress
+        ready = threading.Condition()
+        pending: deque[tuple[bytes, dict[str, int]]] = deque()
+        deadline: float | None = None
+        accepted = 0
 
+        # The P4Runtime reader only queues packets. The command thread renders them.
         def handler(payload: bytes, metadata: dict[str, int]) -> None:
-            with lock:
-                if len(captured) < count:
-                    captured.append((payload, metadata))
-                    if len(captured) >= count:
-                        done.set()
+            nonlocal accepted
+            with ready:
+                if accepted < count and (deadline is None or monotonic() <= deadline):
+                    pending.append((payload, metadata))
+                    accepted += 1
+                    ready.notify()
 
-        deregister = switch.client.on_packet_in(handler)  # type: ignore[attr-defined]
-        try:
-            if timeout > 0 and self._on_progress is not None:
-                packet_label = "packet" if count == 1 else "packets"
-                self._on_progress(
-                    f"Waiting for {count} {packet_label} on {switch_name} (up to {timeout:g}s)..."
-                )
-            done.wait(timeout=timeout)
-        finally:
-            deregister()
-
-        with lock:
-            packets = list(captured)
-
-        if not packets:
-            return f"(no packets within {timeout}s)"
+        displayed = 0
         lines: list[str] = []
-        for payload, metadata in packets:
-            hex_str = payload.hex()
-            if len(hex_str) > 64:
-                hex_str = hex_str[:64] + "..."
-            meta_str = " ".join(f"[{k}={v}]" for k, v in sorted(metadata.items()))
-            if meta_str:
-                lines.append(f"{meta_str} {hex_str}")
-            else:
-                lines.append(hex_str)
-        return "\n".join(lines)
+        try:
+            with ExitStack() as subscription:
+                with defer_cleanup_signals():
+                    subscription.callback(switch.client.on_packet_in(handler))
+                if timeout > 0 and progress is not None:
+                    packet_label = "packet" if count == 1 else "packets"
+                    progress(
+                        f"Waiting for {count} {packet_label} on {switch_name}"
+                        f" (up to {timeout:g}s)..."
+                    )
+                with ready:
+                    deadline = monotonic() + timeout
+                while displayed < count:
+                    with ready:
+                        remaining = max(0.0, min(deadline - monotonic(), threading.TIMEOUT_MAX))
+                        if not ready.wait_for(lambda: bool(pending), timeout=remaining):
+                            break
+                        payload, metadata = pending.popleft()
+                    hex_str = payload.hex()
+                    if len(hex_str) > 64:
+                        hex_str = hex_str[:64] + "..."
+                    meta_str = " ".join(f"[{k}={v}]" for k, v in sorted(metadata.items()))
+                    line = f"{meta_str} {hex_str}" if meta_str else hex_str
+                    if progress is None:
+                        lines.append(line)
+                    else:
+                        progress(line)
+                    displayed += 1
+        except KeyboardInterrupt:
+            if progress is not None:
+                progress(f"{displayed}/{count} packets received")
+            raise
+
+        if progress is not None:
+            suffix = " (timeout)" if displayed < count else ""
+            return f"{displayed}/{count} packets received{suffix}"
+        return "\n".join(lines) if displayed else f"(no packets within {timeout}s)"
 
     # ------------------------------------------------------------------
     # Public helpers used by the completer

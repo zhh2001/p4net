@@ -8,7 +8,7 @@ description: 把每个数据平面包都通过 CPU 端口上送控制器的流�
 
 ## 你将看到什么
 
-主机产生 ARP、IPv6 ND 或 ICMP 流量时，`s1 packet listen` 会收集上送的数据包，达到目标数量或超时后显示结果。`s1 packet send` 把控制器构造的帧注入数据平面。
+主机产生 ARP、IPv6 ND 或 ICMP 流量时，`s1 packet listen` 会实时显示上送的数据包。`s1 packet send` 把控制器构造的帧注入数据平面。
 
 ## 拓扑
 
@@ -55,13 +55,13 @@ s1 packet listen count=10 timeout=15
 sudo ip netns exec h1 ping -c 1 -W 1 10.0.0.99
 ```
 
-`10.0.0.99` 上没有主机，因此 `ping` 会超时。交换机会把 `h1` 发出的 ARP 请求上送控制器。监听达到包数或超时后，会显示类似下面的内容，也可能同时显示 IPv6 帧。
+`10.0.0.99` 上没有主机，因此 `ping` 会超时。交换机会把 `h1` 发出的 ARP 请求上送控制器，终端收到后会立即显示类似下面的一行，也可能显示 IPv6 帧。监听结束时，终端会汇总收到的包数。
 
 ```text
-[ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
+[_pad0=0] [ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
 ```
 
-`[ingress_port=1]` 来自 `packet_in` 控制器报头。CLI 将较长的帧截断到 64 个十六进制字符，可在 Python 中用 `client.expect_packet_in()` 读取完整帧。
+元数据字段来自 `packet_in` 控制器报头。CLI 将较长的帧截断到 64 个十六进制字符，可在 Python 中用 `client.expect_packet_in()` 读取完整帧。
 
 ### 发送 PacketOut
 
