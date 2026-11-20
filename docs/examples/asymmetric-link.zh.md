@@ -6,9 +6,35 @@ description: 两台主机之间的单向时延不同。演示 `delay_a_to_b` 和
 
 两台主机通过一台交换机连接，每段链路只在一个方向上增加时延。
 
-## 你将看到什么
+## 运行
+
+在仓库根目录启动拓扑。
+
+```sh
+sudo p4net examples/asymmetric_link/topology.py
+```
 
 `h1 ping h2 5 3` 和 `h2 ping h1 5 3` 显示的往返时延（RTT）都约为 220 ms。
+
+```
+p4net> h1 ping h2 5 3
+PING h2 (10.0.0.2)
+seq=1  time=222 ms
+seq=2  time=221 ms
+seq=3  time=221 ms
+seq=4  time=221 ms
+seq=5  time=221 ms
+5 sent, 5 received, 0% loss
+```
+
+在 h1 命名空间执行 `tc qdisc show` 可以确认 netem 队列在哪一侧：
+
+```
+p4net> h1 cmd tc qdisc show dev h1-eth0
+qdisc netem 8001: root ... delay 200ms
+```
+
+完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
 
 ## 拓扑
 
@@ -38,30 +64,6 @@ description: 两台主机之间的单向时延不同。演示 `delay_a_to_b` 和
 ```
 
 与[快速上手](quick-start.md)相同的端口翻转流水线。非对称完全依赖链路损伤实现，与数据平面无关。
-
-## 运行
-
-```sh
-sudo p4net examples/asymmetric_link/topology.py
-```
-
-```
-p4net> h1 ping h2 5 3
-PING h2 (10.0.0.2)
-seq=1  time=222 ms
-seq=2  time=221 ms
-seq=3  time=221 ms
-seq=4  time=221 ms
-seq=5  time=221 ms
-5 sent, 5 received, 0% loss
-```
-
-在 h1 命名空间执行 `tc qdisc show` 可以确认 netem 队列在哪一侧：
-
-```
-p4net> h1 cmd tc qdisc show dev h1-eth0
-qdisc netem 8001: root ... delay 200ms
-```
 
 ## 关键设计点
 

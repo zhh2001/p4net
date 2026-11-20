@@ -6,38 +6,15 @@ description: Two IPv6-only hosts with a 128-bit LPM table programmed at runtime.
 
 Two IPv6-only hosts on a single switch with an `ipv6_lpm` table that matches a 128-bit destination address. Programmed at runtime over P4Runtime. The interesting thing is that `<switch> table dump` renders the IPv6 entries in human form (`fd00::1/128`) instead of as raw canonical bytes.
 
-## What you'll see
-
-`pingall6` succeeds, `s1 table dump MyIngress.ipv6_lpm` shows `fd00::1/128` and `fd00::2/128`, and the per-port counter increments with each ping.
-
-## Topology
-
-`examples/ipv6_lpm/topology.py`:
-
-```python
---8<-- "examples/ipv6_lpm/topology.py"
-```
-
-`Host.ip6` is the only L3 address — both hosts are IPv6-only. The orchestrator runs `enable_ipv6(ns, iface)` and assigns `fd00::1/64` / `fd00::2/64` before bringing the interfaces up.
-
-## P4 program
-
-`examples/ipv6_lpm/ipv6_lpm.p4`:
-
-```p4
---8<-- "examples/ipv6_lpm/ipv6_lpm.p4"
-```
-
-Two notable bits:
-
-- The match key is `bit<128> dstAddr` with `lpm` — the runtime layer stores the canonical bytes plus a prefix length, and `decode_match` knows to format 128-bit fields as IPv6.
-- `set_egress_port` bumps an indirect counter so we can verify forwarded traffic from the controller.
-
 ## Run it
+
+From the repository root, start the topology.
 
 ```sh
 sudo p4net examples/ipv6_lpm/topology.py
 ```
+
+<span id="what-youll-see"></span>Check the two `/128` routes, verify IPv6 connectivity with `pingall6`, and read the packet counter for egress port 2.
 
 ```
 p4net> hosts
@@ -64,8 +41,33 @@ h2     1    -
 2/2 succeeded
 
 p4net> s1 counter MyIngress.ipv6_pkts 2
-pkts=1 bytes=118
+pkts=2 bytes=236
 ```
+
+When finished, enter `exit` at the `p4net>` prompt to stop the topology.
+
+## Topology
+
+`examples/ipv6_lpm/topology.py`:
+
+```python
+--8<-- "examples/ipv6_lpm/topology.py"
+```
+
+`Host.ip6` is the only L3 address — both hosts are IPv6-only. The orchestrator runs `enable_ipv6(ns, iface)` and assigns `fd00::1/64` / `fd00::2/64` before bringing the interfaces up.
+
+## P4 program
+
+`examples/ipv6_lpm/ipv6_lpm.p4`:
+
+```p4
+--8<-- "examples/ipv6_lpm/ipv6_lpm.p4"
+```
+
+Two notable bits:
+
+- The match key is `bit<128> dstAddr` with `lpm` — the runtime layer stores the canonical bytes plus a prefix length, and `decode_match` knows to format 128-bit fields as IPv6.
+- `set_egress_port` bumps an indirect counter so we can verify forwarded traffic from the controller.
 
 ## What's interesting
 

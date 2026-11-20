@@ -6,38 +6,15 @@ description: 两台仅 IPv6 的主机，128 位 LPM 表在运行时编程。展�
 
 一台交换机上的两台仅 IPv6 主机，使用 `ipv6_lpm` 表按 128 位目的地址匹配。表项在运行时通过 P4Runtime 编程下发。本例的看点是 `<switch> table dump` 把 IPv6 表项渲染为人类可读形式（`fd00::1/128`）而非裸字节。
 
-## 你将看到什么
-
-`pingall6` 成功；`s1 table dump MyIngress.ipv6_lpm` 显示 `fd00::1/128` 与 `fd00::2/128`；每次 ping 后按端口的计数器都会增加。
-
-## 拓扑
-
-`examples/ipv6_lpm/topology.py`：
-
-```python
---8<-- "examples/ipv6_lpm/topology.py"
-```
-
-`Host.ip6` 是唯一的 L3 地址——两台主机都仅 IPv6。编排器在拉起接口之前调用 `enable_ipv6(ns, iface)` 并赋上 `fd00::1/64` / `fd00::2/64`。
-
-## P4 程序
-
-`examples/ipv6_lpm/ipv6_lpm.p4`：
-
-```p4
---8<-- "examples/ipv6_lpm/ipv6_lpm.p4"
-```
-
-两个值得注意的点：
-
-- 匹配键是 `bit<128> dstAddr`，类型 `lpm`——运行时层存储的是规范字节加上前缀长度，`decode_match` 知道把 128 位字段渲染为 IPv6。
-- `set_egress_port` 累加一个间接计数器，方便我们从控制器端验证转发是否生效。
-
 ## 运行
+
+在仓库根目录启动拓扑。
 
 ```sh
 sudo p4net examples/ipv6_lpm/topology.py
 ```
+
+先查看两条 `/128` 路由，再用 `pingall6` 检查 IPv6 连通性，并读取出端口 2 的包计数器。
 
 ```
 p4net> hosts
@@ -64,8 +41,33 @@ h2     1    -
 2/2 succeeded
 
 p4net> s1 counter MyIngress.ipv6_pkts 2
-pkts=1 bytes=118
+pkts=2 bytes=236
 ```
+
+完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
+
+## 拓扑
+
+`examples/ipv6_lpm/topology.py`：
+
+```python
+--8<-- "examples/ipv6_lpm/topology.py"
+```
+
+`Host.ip6` 是唯一的 L3 地址——两台主机都仅 IPv6。编排器在拉起接口之前调用 `enable_ipv6(ns, iface)` 并赋上 `fd00::1/64` / `fd00::2/64`。
+
+## P4 程序
+
+`examples/ipv6_lpm/ipv6_lpm.p4`：
+
+```p4
+--8<-- "examples/ipv6_lpm/ipv6_lpm.p4"
+```
+
+两个值得注意的点：
+
+- 匹配键是 `bit<128> dstAddr`，类型 `lpm`——运行时层存储的是规范字节加上前缀长度，`decode_match` 知道把 128 位字段渲染为 IPv6。
+- `set_egress_port` 累加一个间接计数器，方便我们从控制器端验证转发是否生效。
 
 ## 关键设计点
 

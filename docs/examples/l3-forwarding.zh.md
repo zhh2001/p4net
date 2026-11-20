@@ -6,37 +6,15 @@ description: 两台主机由 ipv4_lpm 表转发，表项在启动时由 Python �
 
 一台交换机上的两台主机，数据平面通过启动时由 Python 编程下发的 `ipv4_lpm` 表来转发。
 
-## 你将看到什么
-
-`pingall` 成功，因为控制器在 Shell 进入之前为两台主机各装了一条 `/32` 路由。
-
-## 拓扑
-
-`examples/l3_forwarding/topology.py`：
-
-```python
---8<-- "examples/l3_forwarding/topology.py"
-```
-
-`setup(net)` 调用了两次 `client.insert_table_entry(...)`——每台主机一次——表名使用 P4Info 中的全限定名。
-
-## P4 程序
-
-`examples/l3_forwarding/ipv4_lpm.p4`：
-
-```p4
---8<-- "examples/l3_forwarding/ipv4_lpm.p4"
-```
-
-入口控制只在存在 IPv4 报头时应用 `ipv4_lpm`——非 IPv4 流量（例如 ARP）走默认 `NoAction`，无处可去。ARP 之所以能工作，是因为 `setup(net)` 注入了静态条目。
-
 ## 运行
+
+在仓库根目录启动拓扑。
 
 ```sh
 sudo p4net examples/l3_forwarding/topology.py
 ```
 
-Shell 中：
+在 `p4net>` 提示符下，先查看启动时下发的两条 `/32` 路由，再检查连通性并读取出端口 1 的包计数器。
 
 ```
 p4net> s1 table dump MyIngress.ipv4_lpm
@@ -58,10 +36,32 @@ h2     1    -
 2/2 succeeded
 
 p4net> s1 counter MyIngress.ingress_pkts 1
-pkts=1 bytes=98
+pkts=2 bytes=196
 ```
 
 match 值渲染为 `10.0.0.1/32`——这是 `decode_match` 把 P4Runtime 规范字节还原为人类可读的 IPv4 字符串。
+
+完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
+
+## 拓扑
+
+`examples/l3_forwarding/topology.py`：
+
+```python
+--8<-- "examples/l3_forwarding/topology.py"
+```
+
+`setup(net)` 调用了两次 `client.insert_table_entry(...)`——每台主机一次——表名使用 P4Info 中的全限定名。
+
+## P4 程序
+
+`examples/l3_forwarding/ipv4_lpm.p4`：
+
+```p4
+--8<-- "examples/l3_forwarding/ipv4_lpm.p4"
+```
+
+入口控制只在存在 IPv4 报头时应用 `ipv4_lpm`——非 IPv4 流量（例如 ARP）走默认 `NoAction`，无处可去。ARP 之所以能工作，是因为 `setup(net)` 注入了静态条目。
 
 ## 关键设计点
 

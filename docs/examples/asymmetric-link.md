@@ -6,9 +6,35 @@ description: Two hosts with different one-way delays. See how `delay_a_to_b` and
 
 Two hosts share one switch. Each link adds delay in only one direction.
 
-## What you'll see
+## Run it
 
-`h1 ping h2 5 3` and `h2 ping h1 5 3` both report round-trip times (RTT) around 220 ms.
+From the repository root, start the topology.
+
+```sh
+sudo p4net examples/asymmetric_link/topology.py
+```
+
+<span id="what-youll-see"></span>`h1 ping h2 5 3` and `h2 ping h1 5 3` both report round-trip times (RTT) around 220 ms.
+
+```
+p4net> h1 ping h2 5 3
+PING h2 (10.0.0.2)
+seq=1  time=222 ms
+seq=2  time=221 ms
+seq=3  time=221 ms
+seq=4  time=221 ms
+seq=5  time=221 ms
+5 sent, 5 received, 0% loss
+```
+
+`tc qdisc show` inside h1's namespace confirms which side carries the netem queue:
+
+```
+p4net> h1 cmd tc qdisc show dev h1-eth0
+qdisc netem 8001: root ... delay 200ms
+```
+
+When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Topology
 
@@ -38,30 +64,6 @@ Traffic from `h1` to `h2` gets 220 ms of added delay. The reverse path has no co
 ```
 
 Identical port-swap pipeline as [Quick start](quick-start.md). The asymmetry lives entirely in the link impairment, not the dataplane.
-
-## Run it
-
-```sh
-sudo p4net examples/asymmetric_link/topology.py
-```
-
-```
-p4net> h1 ping h2 5 3
-PING h2 (10.0.0.2)
-seq=1  time=222 ms
-seq=2  time=221 ms
-seq=3  time=221 ms
-seq=4  time=221 ms
-seq=5  time=221 ms
-5 sent, 5 received, 0% loss
-```
-
-`tc qdisc show` inside h1's namespace confirms which side carries the netem queue:
-
-```
-p4net> h1 cmd tc qdisc show dev h1-eth0
-qdisc netem 8001: root ... delay 200ms
-```
 
 ## What's interesting
 

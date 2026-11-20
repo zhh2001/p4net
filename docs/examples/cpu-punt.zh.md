@@ -6,33 +6,6 @@ description: 把每个数据平面包都通过 CPU 端口上送控制器的流�
 
 一台主机、一台交换机，每个数据平面包都被通过 CPU 端口（510）上送控制器。控制器也可以通过带有显式出口端口元数据的 `PacketOut` 把数据包注入回数据平面。
 
-## 你将看到什么
-
-主机产生 ARP、IPv6 ND 或 ICMP 流量时，`s1 packet listen` 会实时显示上送的数据包。`s1 packet send` 把控制器构造的帧注入数据平面。
-
-## 拓扑
-
-`examples/cpu_punt/topology.py`：
-
-```python
---8<-- "examples/cpu_punt/topology.py"
-```
-
-交换机上的 `cpu_port=510` 是把 CPU 端口接入 BMv2 的关键参数。
-
-## P4 程序
-
-`examples/cpu_punt/cpu_punt.p4`：
-
-```p4
---8<-- "examples/cpu_punt/cpu_punt.p4"
-```
-
-两个 `@controller_header` 声明分别定义 PacketIn（上送控制器）与 PacketOut（控制器注入）的元数据布局。parser 根据 `std.ingress_port == CPU_PORT` 判断是否需要在 ethernet 之前先解析 `packet_out` 报头。入口控制：
-
-- 控制器注入的包：把 `egress_port` 复制进 `std.egress_spec`，并使控制器报头无效。
-- 数据平面包：把 `std.egress_spec = CPU_PORT`，使 `packet_in` 报头有效，并写入 `ingress_port`。
-
 ## 运行
 
 在第一个终端中，从仓库根目录启动拓扑。
@@ -65,6 +38,8 @@ sudo ip netns exec h1 ping -c 1 -W 1 10.0.0.99
 
 ### 发送 PacketOut
 
+等到监听结束、`p4net>` 提示符重新出现后，再发送 PacketOut。
+
 如果已安装 `tcpdump`，可以在第二个终端抓包，确认帧到达 `h1`。过滤器只匹配示例帧使用的 EtherType。
 
 ```sh
@@ -80,6 +55,31 @@ s1 packet send 00000000000102000000009988b548656c6c6f metadata: egress_port=1
 `egress_port=1` 选择交换机上连接 `h1` 的端口。CLI 返回 `ok`，抓包结果中可以看到 EtherType `0x88b5` 和负载 `Hello`。
 
 `encode_packet_out_metadata` 会将 P4Info 中未提供的元数据字段默认置零，包括本例的 `_pad0` 字段。
+
+完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
+
+## 拓扑
+
+`examples/cpu_punt/topology.py`：
+
+```python
+--8<-- "examples/cpu_punt/topology.py"
+```
+
+交换机上的 `cpu_port=510` 是把 CPU 端口接入 BMv2 的关键参数。
+
+## P4 程序
+
+`examples/cpu_punt/cpu_punt.p4`：
+
+```p4
+--8<-- "examples/cpu_punt/cpu_punt.p4"
+```
+
+两个 `@controller_header` 声明分别定义 PacketIn（上送控制器）与 PacketOut（控制器注入）的元数据布局。parser 根据 `std.ingress_port == CPU_PORT` 判断是否需要在 ethernet 之前先解析 `packet_out` 报头。入口控制：
+
+- 控制器注入的包：把 `egress_port` 复制进 `std.egress_spec`，并使控制器报头无效。
+- 数据平面包：把 `std.egress_spec = CPU_PORT`，使 `packet_in` 报头有效，并写入 `ingress_port`。
 
 ## 可尝试的变体
 

@@ -6,37 +6,15 @@ description: Two hosts forwarded by an ipv4_lpm table programmed from Python at 
 
 Two hosts on one switch, with the dataplane forwarding via an `ipv4_lpm` table that's programmed from Python at startup time.
 
-## What you'll see
-
-`pingall` succeeds because the controller installs `/32` routes for both hosts before the shell opens.
-
-## Topology
-
-`examples/l3_forwarding/topology.py`:
-
-```python
---8<-- "examples/l3_forwarding/topology.py"
-```
-
-`setup(net)` issues two `client.insert_table_entry(...)` calls — one per host — naming the table by its fully qualified P4Info name.
-
-## P4 program
-
-`examples/l3_forwarding/ipv4_lpm.p4`:
-
-```p4
---8<-- "examples/l3_forwarding/ipv4_lpm.p4"
-```
-
-The ingress control applies `ipv4_lpm` only when an IPv4 header is present — non-IPv4 traffic (e.g. ARP) hits the default `NoAction` and goes nowhere. ARP works because `setup(net)` seeds it statically.
-
 ## Run it
+
+From the repository root, start the topology.
 
 ```sh
 sudo p4net examples/l3_forwarding/topology.py
 ```
 
-Then in the shell:
+<span id="what-youll-see"></span>At the `p4net>` prompt, check the two `/32` routes installed at startup, then verify connectivity and read the packet counter for egress port 1.
 
 ```
 p4net> s1 table dump MyIngress.ipv4_lpm
@@ -58,10 +36,32 @@ h2     1    -
 2/2 succeeded
 
 p4net> s1 counter MyIngress.ingress_pkts 1
-pkts=1 bytes=98
+pkts=2 bytes=196
 ```
 
 The match value renders as `10.0.0.1/32` — that's `decode_match` turning P4Runtime canonical bytes back into a human IPv4 string.
+
+When finished, enter `exit` at the `p4net>` prompt to stop the topology.
+
+## Topology
+
+`examples/l3_forwarding/topology.py`:
+
+```python
+--8<-- "examples/l3_forwarding/topology.py"
+```
+
+`setup(net)` issues two `client.insert_table_entry(...)` calls — one per host — naming the table by its fully qualified P4Info name.
+
+## P4 program
+
+`examples/l3_forwarding/ipv4_lpm.p4`:
+
+```p4
+--8<-- "examples/l3_forwarding/ipv4_lpm.p4"
+```
+
+The ingress control applies `ipv4_lpm` only when an IPv4 header is present — non-IPv4 traffic (e.g. ARP) hits the default `NoAction` and goes nowhere. ARP works because `setup(net)` seeds it statically.
 
 ## What's interesting
 

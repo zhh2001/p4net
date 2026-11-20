@@ -6,9 +6,30 @@ description: 最简单的 p4net 拓扑——一台交换机上的两台主机，
 
 一台交换机上的两台主机，使用静态端口翻转流水线。无需运行时表项编程。p4net 的 "Hello World"。
 
-## 你将看到什么
+## 运行
 
-两台主机间的 `pingall` 全部成功，数据平面是一个 30 行左右的 P4 程序，在端口 1 ↔ 2 之间无条件互换。
+在仓库根目录启动拓扑。
+
+```sh
+sudo p4net examples/quick_start/quick_start.py
+```
+
+在 `p4net>` 提示符下，用 `hosts` 查看主机接口，再用 `pingall` 检查两个方向是否连通。
+
+```
+p4net> hosts
+name  primary_ip   primary_ip6  interfaces
+h1    10.0.0.1/24  -           h1-eth0
+h2    10.0.0.2/24  -           h2-eth0
+
+p4net> pingall
+H \ H  h1   h2
+h1     -    1
+h2     1    -
+2/2 succeeded
+```
+
+完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
 
 ## 拓扑
 
@@ -32,27 +53,6 @@ description: 最简单的 p4net 拓扑——一台交换机上的两台主机，
 ```
 
 入口控制根据 `ingress_port` 设置 `std.egress_spec`——没有表，也不需要运行时控制平面。
-
-## 运行
-
-```sh
-sudo p4net examples/quick_start/quick_start.py
-```
-
-Shell 中：
-
-```
-p4net> hosts
-name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  -            h1-eth0
-h2    10.0.0.2/24  -            h2-eth0
-
-p4net> pingall
-H \ H  h1   h2
-h1     -    1
-h2     1    -
-2/2 succeeded
-```
 
 ## 关键设计点
 

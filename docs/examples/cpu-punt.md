@@ -6,9 +6,57 @@ description: A pipeline that punts every dataplane packet to the controller via 
 
 One host, one switch, every dataplane packet punted to the controller via the CPU port (510). The controller can also inject packets via `PacketOut` with explicit egress port metadata.
 
-## What you'll see
+## Run it
 
-`s1 packet listen` displays punted packets as they arrive, including ARP, IPv6 ND, and ICMP traffic. `s1 packet send` injects a controller-built frame back into the dataplane.
+From the repository root, start the topology in the first terminal.
+
+```sh
+sudo p4net examples/cpu_punt/topology.py
+```
+
+### Receive a PacketIn
+
+<span id="what-youll-see"></span>Start listening in the `p4net>` shell.
+
+```text
+s1 packet listen count=10 timeout=15
+```
+
+When `Waiting for 10 packets on s1` appears, run this in a second terminal.
+
+```sh
+sudo ip netns exec h1 ping -c 1 -W 1 10.0.0.99
+```
+
+The ping times out because `10.0.0.99` has no host. The switch punts the ARP request from `h1`, so the listener shows a line like this as soon as the request arrives. IPv6 frames may also appear. The shell prints the received count when listening ends.
+
+```text
+[_pad0=0] [ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
+```
+
+The metadata fields come from the `packet_in` controller header. The CLI truncates long frames to 64 hex characters. Use `client.expect_packet_in()` from Python to read the full frame.
+
+### Send a PacketOut
+
+Wait until the listener finishes and the `p4net>` prompt returns.
+
+To verify delivery at `h1`, start `tcpdump` in the second terminal if it is installed. The filter matches the EtherType of the example frame.
+
+```sh
+sudo ip netns exec h1 tcpdump -i h1-eth0 -n -e -X -Q in -c 1 'ether proto 0x88b5'
+```
+
+Run this as one line in the `p4net>` shell. If you started a capture, wait until it shows `listening on h1-eth0` before sending the frame.
+
+```text
+s1 packet send 00000000000102000000009988b548656c6c6f metadata: egress_port=1
+```
+
+The `egress_port=1` metadata selects the switch port connected to `h1`. The shell prints `ok`, and the capture shows a frame with EtherType `0x88b5` and the `Hello` payload.
+
+`encode_packet_out_metadata` defaults missing P4Info metadata fields to zero, including the `_pad0` field in this example.
+
+When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Topology
 
@@ -32,54 +80,6 @@ Two `@controller_header` declarations define the metadata layout for PacketIn (c
 
 - For controller-injected packets: copies `egress_port` into `std.egress_spec`, invalidates the controller header.
 - For dataplane packets: sets `std.egress_spec = CPU_PORT`, validates the `packet_in` header, stamps `ingress_port`.
-
-## Run it
-
-From the repository root, start the topology in the first terminal.
-
-```sh
-sudo p4net examples/cpu_punt/topology.py
-```
-
-### Receive a PacketIn
-
-Start listening in the `p4net>` shell.
-
-```text
-s1 packet listen count=10 timeout=15
-```
-
-When `Waiting for 10 packets on s1` appears, run this in a second terminal.
-
-```sh
-sudo ip netns exec h1 ping -c 1 -W 1 10.0.0.99
-```
-
-The ping times out because `10.0.0.99` has no host. The switch punts the ARP request from `h1`, so the listener shows a line like this as soon as the request arrives. IPv6 frames may also appear. The shell prints the received count when listening ends.
-
-```text
-[_pad0=0] [ingress_port=1] ffffffffffff000000000001080600010800060400010000000000010a000001...
-```
-
-The metadata fields come from the `packet_in` controller header. The CLI truncates long frames to 64 hex characters. Use `client.expect_packet_in()` from Python to read the full frame.
-
-### Send a PacketOut
-
-To verify delivery at `h1`, start `tcpdump` in the second terminal if it is installed. The filter matches the EtherType of the example frame.
-
-```sh
-sudo ip netns exec h1 tcpdump -i h1-eth0 -n -e -X -Q in -c 1 'ether proto 0x88b5'
-```
-
-Run this as one line in the `p4net>` shell. If you started a capture, wait until it shows `listening on h1-eth0` before sending the frame.
-
-```text
-s1 packet send 00000000000102000000009988b548656c6c6f metadata: egress_port=1
-```
-
-The `egress_port=1` metadata selects the switch port connected to `h1`. The shell prints `ok`, and the capture shows a frame with EtherType `0x88b5` and the `Hello` payload.
-
-`encode_packet_out_metadata` defaults missing P4Info metadata fields to zero, including the `_pad0` field in this example.
 
 ## Variations to try
 

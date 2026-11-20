@@ -6,6 +6,32 @@ description: A three-switch mesh with IPv4 forwarding entries installed concurre
 
 Three switches form a full mesh. The example uses `AsyncP4RuntimeClient` and `asyncio.gather()` to populate their IPv4 LPM tables concurrently.
 
+## Run it
+
+From the repository root, start the topology.
+
+```sh
+sudo p4net examples/async_concurrent/topology.py
+```
+
+`setup(net)` connects to the three switches before starting the timer. The timer measures the batch of nine inserts until all calls return. Run `pingall` at the `p4net>` prompt.
+
+```
+p4net> pingall
+Pinging 6 host pairs...
+2/6 host pairs checked
+4/6 host pairs checked
+H \ H  h1   h2   h3
+h1     -    1    1
+h2     1    -    1
+h3     1    1    -
+6/6 succeeded
+```
+
+The matrix reports `6/6 succeeded`, covering both directions between each pair of hosts.
+
+When finished, enter `exit` at the `p4net>` prompt to stop the topology.
+
 ## Topology
 
 `examples/async_concurrent/topology.py`:
@@ -25,20 +51,6 @@ Each host is on its own IPv4 subnet. `setup(net)` adds a `/32` on-link route and
 ```
 
 Standard `ipv4_lpm` table; nothing exotic in the pipeline. The interesting bit is on the Python side.
-
-## Run it
-
-```sh
-sudo p4net examples/async_concurrent/topology.py
-```
-
-`setup(net)` connects to the three switches before starting the timer. The timer measures the batch of nine inserts until all calls return. Run `pingall` at the `p4net>` prompt.
-
-```
-pingall
-```
-
-The matrix reports `6/6 succeeded`, covering both directions between each pair of hosts.
 
 ## See also
 

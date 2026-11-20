@@ -6,9 +6,45 @@ description: 将两台双栈主机接到同一台交换机，验证 IPv4 和 IPv
 
 一台交换机上的两台主机，各自既配 IPv4 `/24` 也配 IPv6 `/64`。流水线与[快速上手](quick-start.md)相同——L2 端口翻转一视同仁对待 v4 与 v6。本例的看点是地址管理。
 
-## 你将看到什么
+## 运行
 
-`pingall` 检查 IPv4 连通性，`pingall6` 检查 IPv6 连通性。两台主机在两个方向上都能互通。
+在仓库根目录启动拓扑。
+
+```sh
+sudo p4net examples/dual_stack/topology.py
+```
+
+用 `pingall` 检查 IPv4，用 `pingall6` 检查 IPv6。两条命令都会报告 `2/2 succeeded`。
+
+```
+p4net> hosts
+name  primary_ip   primary_ip6  interfaces
+h1    10.0.0.1/24  fd00::1/64   h1-eth0
+h2    10.0.0.2/24  fd00::2/64   h2-eth0
+
+p4net> h1 cmd ip -6 addr show dev h1-eth0
+3: h1-eth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> ...
+    inet6 fd00::1/64 scope global
+       valid_lft forever preferred_lft forever
+    inet6 fe80::200:ff:fe00:1/64 scope link
+       valid_lft forever preferred_lft forever
+
+p4net> pingall
+H \ H  h1   h2
+h1     -    1
+h2     1    -
+2/2 succeeded
+
+p4net> pingall6
+H \ H  h1   h2
+h1     -    1
+h2     1    -
+2/2 succeeded
+```
+
+`fd00::1/64` 来自拓扑配置。这次运行中，Linux 还生成了链路本地地址 `fe80::200:ff:fe00:1/64`。是否生成此类地址取决于内核的 `addr_gen_mode` 设置。
+
+完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
 
 ## 拓扑
 
@@ -29,34 +65,6 @@ description: 将两台双栈主机接到同一台交换机，验证 IPv4 和 IPv
 ```
 
 流水线对 L3 无感——只做端口翻转。v4 与 v6 走完全相同的路径。
-
-## 运行
-
-```sh
-sudo p4net examples/dual_stack/topology.py
-```
-
-```
-p4net> hosts
-name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  fd00::1/64   h1-eth0
-h2    10.0.0.2/24  fd00::2/64   h2-eth0
-
-p4net> h1 cmd ip -6 addr show dev h1-eth0
-3: h1-eth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> ...
-    inet6 fd00::1/64 scope global
-       valid_lft forever preferred_lft forever
-    inet6 fe80::200:ff:fe00:1/64 scope link
-       valid_lft forever preferred_lft forever
-
-p4net> pingall
-2/2 succeeded
-
-p4net> pingall6
-2/2 succeeded
-```
-
-`fd00::1/64` 来自拓扑配置。这次运行中，Linux 还生成了链路本地地址 `fe80::200:ff:fe00:1/64`。是否生成此类地址取决于内核的 `addr_gen_mode` 设置。
 
 ## 关键设计点
 

@@ -6,11 +6,44 @@ description: Multi-hop INT demo. Two switches in series, both running the same P
 
 Two switches in series each insert a 14-byte INT shim header into every forwarded IPv4 packet. The receiver reads both headers to see the packet's path. The [single-switch INT example](int.md) introduces the shim format.
 
-## What this demonstrates
+## Run it
 
-- **Hop-by-hop metadata accumulation**: every switch on the path inserts its own shim, so the egress receiver sees one block of metadata per traversed switch.
-- **Shim chaining via `next_proto`**: each shim's `next_proto` field names the next header in order. The parser walks `etherType → shim_1.next_proto → shim_2.next_proto → ipv4`. No P4 header stack required for the two-hop case.
-- **Per-switch identity from a register**: the same P4 program runs on both switches; per-switch `switch_id` comes from the v1.2 register API via `write_register("MyIngress.switch_id_reg", index=0, value=N)` at start-up.
+From the repository root, start the topology in the first terminal.
+
+```sh
+sudo p4net examples/int_multi_hop/topology.py
+```
+
+Once the `p4net>` prompt appears, open a second terminal in the repository root and start the listener in `h2`.
+
+```sh
+sudo ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0 --count 3
+```
+
+When the listener prints `boot times loaded`, send three ICMP requests from a third terminal.
+
+```sh
+sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
+```
+
+The switches add INT headers to the requests. The listener receives all three frames. The receiving host sends no ICMP replies, so `ping` reports `100% packet loss`.
+
+### Sample output
+
+The listener prints two hop lines per packet. This is one of the three packets.
+
+```
+packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
+  hop 1: switch_id=1 ts=676402us aligned=1795161753919021us egress_port=2 queue_depth=0
+  hop 2: switch_id=2 ts=467984us aligned=1795161753918136us egress_port=2 queue_depth=0
+  latency_s1_to_s2 = -885us
+```
+
+`hop 1` is `s1` and `hop 2` is `s2`. Each `ts` comes from that switch's `ingress_global_timestamp`. The listener estimates both arrival times in Unix microseconds (`aligned`) and prints their difference as `latency_s1_to_s2`. See [how timestamp alignment works](#how-cross-switch-timestamp-alignment-works) for why this estimate can be negative.
+
+Without a boot-time file, the listener prints the raw `ts` values marked `[unaligned]`.
+
+The listener exits after three frames. Then enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Topology
 
@@ -20,7 +53,7 @@ Two switches in series each insert a 14-byte INT shim header into every forwarde
 --8<-- "examples/int_multi_hop/topology.py"
 ```
 
-Four nodes, three links, linear path: `h1 — s1 — s2 — h2`.
+The path is `h1 → s1 → s2 → h2`. The `setup(net)` hook installs the L2 forwarding entries on both switches and configures static ARP on both hosts.
 
 ## P4 program
 
@@ -30,11 +63,12 @@ Four nodes, three links, linear path: `h1 — s1 — s2 — h2`.
 --8<-- "examples/int_multi_hop/int_multi_hop.p4"
 ```
 
-Key points:
+<span id="what-this-demonstrates"></span>Key points:
 
 - Two named header instances `int_shim_1` and `int_shim_2` instead of a P4 header stack. Easier to read at two hops; for N hops, see the "Extending" section in the example README.
 - Ingress picks the first unfilled shim slot and writes it from `standard_metadata` plus the configured `switch_id`. The `next_proto` chain is re-stitched so the receiver sees `eth → shim_1 → shim_2 → ipv4`.
 - The deparser emits every valid header in declaration order.
+- At startup, the topology assigns a distinct ID to each switch with `write_register("MyIngress.switch_id_reg", index=0, value=N)`.
 
 ## The listener
 
@@ -45,45 +79,6 @@ Key points:
 ```
 
 The listener walks the shim chain starting from the outer EtherType, parsing one 14-byte shim per hop until `next_proto` leaves the INT space.
-
-## Run it
-
-In one terminal:
-
-```sh
-sudo p4net examples/int_multi_hop/topology.py
-```
-
-`setup(net)` installs the L2 forwarding tables on both switches, pre-seeds static ARP on both hosts, and writes each switch's identity register. Drop into the `p4net>` shell.
-
-In a second terminal (or `h2 xterm` from the shell):
-
-```sh
-sudo ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0
-```
-
-From a third terminal:
-
-```sh
-sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
-```
-
-The listener prints one block per packet, with one `hop` line per traversed switch (two lines per packet in this topology).
-
-## Sample output
-
-One packet captured by the listener with boot timestamps loaded.
-
-```
-packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=676402us aligned=1795161753919021us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=467984us aligned=1795161753918136us egress_port=2 queue_depth=0
-  latency_s1_to_s2 = -885us
-```
-
-`hop 1` is `s1` and `hop 2` is `s2`. Each `ts` comes from that switch's `ingress_global_timestamp`. The listener estimates both arrival times in Unix microseconds (`aligned`) and prints their difference as `latency_s1_to_s2`.
-
-Without a boot-time file, the listener prints the raw `ts` values marked `[unaligned]`.
 
 ## How cross-switch timestamp alignment works
 
@@ -139,10 +134,9 @@ The listener prints three packets with two aligned hops each. The shell reports 
 ## What's interesting
 
 - **Egress ports correspond to the path direction.** s1 forwards out port 2 toward s2; s2 forwards out port 2 toward h2. Different topologies produce different numbers.
-- **`queue_depth` is reliably 0** at this offered load — BMv2's default queueing doesn't surface non-zero values without explicit configuration and saturation.
 
 ## Caveats
 
 - **Two hops only with the current pipeline.** A third switch on the path would find both shim slots full and forward without further annotation. Real deployments use a P4 header stack of MAX_HOPS depth — see the example README for the rewrite recipe.
-- **`queue_depth` is almost always 0.** Same as the single-switch example.
+- **Queue depth.** `queue_depth` is usually zero at the traffic rate used in this example.
 - **No checksum recomputation for the inserted shims.** The IPv4 checksum covers only the IPv4 header; the shim layer between Ethernet and IPv4 is unprotected, matching how production INT works (the INT spec assumes link-layer integrity).

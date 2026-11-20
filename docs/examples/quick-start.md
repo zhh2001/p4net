@@ -6,9 +6,30 @@ description: The simplest p4net topology — two hosts on a switch with a hardco
 
 Two hosts on a single switch with a static port-swap pipeline. No runtime table programming. The "hello world" of p4net.
 
-## What you'll see
+## Run it
 
-A successful `pingall` between two hosts whose dataplane is a 30-line P4 program that swaps ports 1 ↔ 2 unconditionally.
+From the repository root, start the topology.
+
+```sh
+sudo p4net examples/quick_start/quick_start.py
+```
+
+<span id="what-youll-see"></span>At the `p4net>` prompt, use `hosts` to list the interfaces and `pingall` to check connectivity in both directions.
+
+```
+p4net> hosts
+name  primary_ip   primary_ip6  interfaces
+h1    10.0.0.1/24  -           h1-eth0
+h2    10.0.0.2/24  -           h2-eth0
+
+p4net> pingall
+H \ H  h1   h2
+h1     -    1
+h2     1    -
+2/2 succeeded
+```
+
+When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Topology
 
@@ -32,27 +53,6 @@ The interesting bits:
 ```
 
 The ingress control sets `std.egress_spec` based on `ingress_port` — no tables, no runtime control plane needed.
-
-## Run it
-
-```sh
-sudo p4net examples/quick_start/quick_start.py
-```
-
-Then in the shell:
-
-```
-p4net> hosts
-name  primary_ip   primary_ip6  interfaces
-h1    10.0.0.1/24  -            h1-eth0
-h2    10.0.0.2/24  -            h2-eth0
-
-p4net> pingall
-H \ H  h1   h2
-h1     -    1
-h2     1    -
-2/2 succeeded
-```
 
 ## What's interesting
 
