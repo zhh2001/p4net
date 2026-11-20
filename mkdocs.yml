@@ -1,5 +1,5 @@
-site_name: p4net
-site_description: Mininet-style P4 SDN sandbox in Python — BMv2 + P4Runtime native, Linux netns / veth / tc, topology DSL, interactive CLI.
+site_name: P4Net
+site_description: A Python framework for BMv2 and P4Runtime experiments on Linux.
 site_url: https://zhh2001.github.io/p4net/
 site_author: Henghua Zhang
 repo_url: https://github.com/zhh2001/p4net

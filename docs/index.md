@@ -1,24 +1,45 @@
 ---
-description: Run P4 network experiments on Linux with Python, BMv2 software switches, and P4Runtime.
+description: P4Net is a Python framework for BMv2 and P4Runtime experiments on Linux.
 ---
 
-# p4net
+# P4Net
 
-p4net is a Python framework for running P4 network experiments on Linux. Use it for teaching labs, P4Runtime controller prototypes, and tests of P4 forwarding behavior.
+P4Net is a Python framework for BMv2 and P4Runtime experiments on Linux. Use it for P4 teaching, controller prototyping, and forwarding tests.
 
-p4net compiles P4 programs with `p4c` and connects nodes with virtual Ethernet (`veth`) pairs. Each host gets its own Linux network namespace. BMv2 software switches run in the same namespace as the p4net process, normally the system's root network namespace.
+P4Net connects nodes with virtual Ethernet (`veth`) pairs. Each host gets its own Linux network namespace. BMv2 software switches run in the same namespace as the `p4net` process, normally the system's root network namespace.
 
-p4net controls BMv2 switches through P4Runtime, a protocol also supported by compatible hardware switches. Throughput and latency measured in p4net reflect the software forwarding and Linux environment of the experiment. See [Known Limitations](known-limitations.md).
+P4Net controls BMv2 switches through P4Runtime, a protocol also supported by compatible hardware switches. Throughput and latency measured in P4Net reflect the software forwarding and Linux environment of the experiment. See [Known Limitations](known-limitations.md).
 
 ## Install
 
-Follow the [installation guide](getting-started/installation.md) to set up p4c, BMv2, and the p4net CLI. Then run your first topology in [Quick Start](getting-started/quickstart.md).
+Follow the [installation guide](getting-started/installation.md) to set up p4c, BMv2, and the `p4net` CLI.
 
-## What you can do
+## Try L3 forwarding
 
-- **Build topologies in Python.** Connect IPv4 and IPv6 hosts to switches. Set bandwidth, delay, jitter, or packet loss separately for each link direction.
-- **Program switches.** Use the sync or async P4Runtime client to install table entries, read indirect counters, manage multicast groups, receive PacketIn, and send PacketOut.
-- **Inspect a running network.** Use the [interactive CLI](cli.md) to run host commands, check connectivity, and inspect switch tables.
+With the CLI installed, clone the repository and launch the example.
+
+```sh
+git clone https://github.com/zhh2001/p4net.git
+cd p4net
+sudo p4net examples/l3_forwarding/topology.py
+```
+
+At the `p4net>` prompt, inspect the switch's IPv4 routes and then test connectivity between the hosts.
+
+```text
+s1 table dump MyIngress.ipv4_lpm
+pingall
+```
+
+The table shows two `/32` routes, and `pingall` reports `2/2 succeeded`. Enter `exit` to stop the topology. See the [L3 forwarding example](examples/l3-forwarding.md) for the P4 program and startup configuration.
+
+## Why P4Net
+
+- **Start BMv2 with P4Runtime in one command.** P4Net compiles the P4 programs with `p4c`, starts BMv2, waits for the switches to be ready, connects its built-in P4Runtime client, and installs the pipelines.
+- **Reuse the topology in automated tests.** The CLI runs the optional `setup(net)` function before opening the shell. A Python test can use the same topology and setup function, with `Network` as a context manager for startup and cleanup.
+- **Debug hosts and switches in one shell.** Run host commands and ping tests alongside P4Runtime table updates, counter reads, and PacketIn and PacketOut operations. See the [CLI reference](cli.md).
+- **Configure several switches concurrently.** The async P4Runtime example installs nine forwarding entries on three BMv2 switches from one Python event loop. See the [async example](examples/async-concurrent.md).
+- **Reproduce link conditions.** Configure IPv4 and IPv6 hosts, set bandwidth, delay, jitter, or packet loss for each link direction, and capture traffic on switch ports.
 - **Export topology diagrams.** Save the topology as DOT or use Graphviz to render it as SVG, PNG, or PDF.
 
 ## Python example
@@ -52,6 +73,7 @@ The script prints `True` when `h1` receives a reply from `h2`. The network shuts
 
 ## Guides and reference
 
+- [Quick Start](getting-started/quickstart.md) builds a two-host topology from scratch.
 - [Tutorial](tutorial.md) walks through dual-stack forwarding, table programming, directional link delay, and CPU-port packet I/O.
 - [Examples](examples/index.md) contains nine runnable topologies, including in-band telemetry and concurrent switch configuration.
 - [Architecture](architecture.md) shows how the Python packages fit together.
@@ -59,4 +81,4 @@ The script prints `True` when `h1` receives a reply from `h2`. The network shuts
 
 ## Project status
 
-p4net **v1.10.0** is a stable release. See the [changelog](changelog.md), [API stability policy](api-stability.md), and [roadmap](roadmap.md).
+P4Net **v1.10.0** is a stable release. See the [changelog](changelog.md), [API stability policy](api-stability.md), and [roadmap](roadmap.md).

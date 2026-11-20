@@ -1,4 +1,4 @@
-# p4net
+# P4Net
 
 [![CI](https://github.com/zhh2001/p4net/actions/workflows/ci.yml/badge.svg)](https://github.com/zhh2001/p4net/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/p4net.svg)](https://pypi.org/project/p4net/)
@@ -7,28 +7,17 @@
 [![Documentation](https://img.shields.io/badge/docs-zhh2001.github.io%2Fp4net-blue)](https://zhh2001.github.io/p4net/)
 [![Status](https://img.shields.io/badge/status-stable-green.svg)](https://zhh2001.github.io/p4net/api-stability/)
 
-A P4Runtime-native SDN simulation framework for BMv2.
+P4Net is a Python framework for BMv2 and P4Runtime experiments on Linux.
 
 Status: 1.10.0, stable. Public APIs follow the [API stability rules](https://zhh2001.github.io/p4net/api-stability/). See the [changelog](CHANGELOG.md) for new features, fixes and upgrade notes.
 
-## Features
+## Why use P4Net
 
-- P4Runtime-native control plane.
-- BMv2 `simple_switch_grpc` data plane.
-- Linux network-namespace based hosts.
-- veth-based links with `tc`/`netem` impairment.
-- Programmable Python topology DSL.
-- Interactive CLI.
-- Per-port packet capture.
-- P4Runtime CPU-port packet I/O (`<switch> packet send` / `listen`).
-- IPv4 and IPv6 host addressing with per-interface sysctl gating.
-- Asymmetric link impairment (per-direction `bandwidth`, `delay`, `jitter`, `loss_pct`).
-- Topology visualization (Graphviz DOT / PNG / SVG).
-- In-band network telemetry (INT) — a single-switch introduction and a multi-hop example that estimates cross-switch timing from BMv2 timestamps.
-- Direct P4 register read/write via P4Runtime gRPC.
-- Unified `p4net.*` logger hierarchy with CLI verbosity control.
-- Async P4Runtime client (`AsyncP4RuntimeClient`, Stable since 1.7.0) for concurrent multi-switch operations.
-- No OpenFlow, no Open vSwitch, no Docker.
+- **Start BMv2 with P4Runtime in one command.** P4Net compiles the P4 programs, builds the Linux topology, starts BMv2, connects the built-in P4Runtime client, and installs the pipelines.
+- **Reuse one topology for debugging and automated tests.** Define hosts, links, and switches in Python. Put initial table entries in `setup(net)` and reuse that function with the same topology in a Python test.
+- **Debug hosts and switches in one shell.** Check connectivity, run host commands, and use P4Runtime to inspect or program tables, read counters, and handle PacketIn and PacketOut. See the [L3 forwarding example](docs/examples/l3-forwarding.md).
+- **Configure several switches concurrently.** Use `AsyncP4RuntimeClient` to send P4Runtime requests from one Python event loop. The [async example](docs/examples/async-concurrent.md) installs forwarding entries on a three-switch mesh.
+- **Repeat experiments under defined link conditions.** Configure IPv4 and IPv6 hosts, set bandwidth, delay, jitter, and loss per direction, and capture traffic on switch ports.
 
 ## Requirements
 
