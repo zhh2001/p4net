@@ -41,7 +41,7 @@ Identical port-swap pipeline as [Quick start](quick-start.md). The asymmetry liv
 
 ## Run it
 
-```
+```sh
 sudo p4net examples/asymmetric_link/topology.py
 ```
 

@@ -2,9 +2,9 @@
 description: 多跳 INT 示例。两台交换机串联运行同一份 P4，每台插入自己的元数据 shim；接收端解析整条逐跳链。
 ---
 
-# 多跳 INT（带内遥测）
+# 多跳 INT
 
-两台交换机串联，每台在每个转发包里插入自己的 14 字节 INT shim 头。接收端解析整条逐跳栈，重建包穿过拓扑的轨迹。这是更贴近真实部署形态的 INT 示例；想看更简单的单交换机入门，请参见 [INT（带内遥测）](int.md)。
+两台交换机串联，每台在每个转发包里插入自己的 14 字节 INT shim 头。接收端解析整条逐跳栈，重建包穿过拓扑的轨迹。这是更贴近真实部署形态的 INT 示例；想看更简单的单交换机入门，请参见 [INT](int.md)。
 
 ## 这个示例展示了什么
 
@@ -50,7 +50,7 @@ listener 从外层 EtherType 开始遍历 shim 链，每跳解出一个 14 字�
 
 一个终端：
 
-```
+```sh
 sudo p4net examples/int_multi_hop/topology.py
 ```
 
@@ -58,13 +58,13 @@ sudo p4net examples/int_multi_hop/topology.py
 
 另一个终端（或从 shell 起 `h2 xterm`）：
 
-```
+```sh
 sudo ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0
 ```
 
 再开一个终端：
 
-```
+```sh
 sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 ```
 

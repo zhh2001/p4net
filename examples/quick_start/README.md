@@ -17,7 +17,7 @@ BMv2 switch running a port-2-port swap, and `pingall` returning
 
 Run the example from the repository root.
 
-```
+```sh
 sudo p4net examples/quick_start/quick_start.py
 ```
 

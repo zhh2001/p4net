@@ -63,6 +63,6 @@ with Network(topo) as net:
 
 ## 项目状态
 
-p4net **v1.9.0** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
+p4net **v1.10.0** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
 
-本版本新增交互模式的启停提示、收包等待提示和 `counter --nonzero`，并改进帮助和表项的排版。发布详情见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。
+本版本为多次 ping、主机命令和收包监听加入实时输出，并为 ping 矩阵加入进度显示。按 `Ctrl-C` 可取消当前命令，拓扑继续运行。发布详情见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。

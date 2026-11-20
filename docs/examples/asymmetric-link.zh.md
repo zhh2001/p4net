@@ -41,7 +41,7 @@ h1↔s1 链路上的 `delay_a_to_b="200ms"` 应用在 a 侧（`h1` 命名空间�
 
 ## 运行
 
-```
+```sh
 sudo p4net examples/asymmetric_link/topology.py
 ```
 

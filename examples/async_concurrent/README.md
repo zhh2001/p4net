@@ -62,7 +62,7 @@ The full source is in [`topology.py`](topology.py).
 
 ## Run it
 
-```
+```sh
 sudo p4net examples/async_concurrent/topology.py
 ```
 

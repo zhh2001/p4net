@@ -4,13 +4,11 @@ description: The simplest p4net topology — two hosts on a switch with a hardco
 
 # Quick start (port swap)
 
-Two hosts on a single switch with a static port-swap pipeline. No
-runtime table programming. The "hello world" of p4net.
+Two hosts on a single switch with a static port-swap pipeline. No runtime table programming. The "hello world" of p4net.
 
 ## What you'll see
 
-A successful `pingall` between two hosts whose dataplane is a 30-line
-P4 program that swaps ports 1 ↔ 2 unconditionally.
+A successful `pingall` between two hosts whose dataplane is a 30-line P4 program that swaps ports 1 ↔ 2 unconditionally.
 
 ## Topology
 
@@ -22,12 +20,8 @@ P4 program that swaps ports 1 ↔ 2 unconditionally.
 
 The interesting bits:
 
-- `setup(net)` is the hook the `p4net` console script calls between
-  bring-up and shell. Static ARP is seeded here so the first ICMP
-  doesn't have to resolve.
-- The same file works under `python quick_start.py` (the
-  `if __name__ == "__main__"` block) or under `p4net quick_start.py`
-  (the module-level `topology` and `setup`).
+- `setup(net)` is the hook the `p4net` console script calls between bring-up and shell. Static ARP is seeded here so the first ICMP doesn't have to resolve.
+- The same file works under `python quick_start.py` (the `if __name__ == "__main__"` block) or under `p4net quick_start.py` (the module-level `topology` and `setup`).
 
 ## P4 program
 
@@ -37,12 +31,11 @@ The interesting bits:
 --8<-- "examples/quick_start/quick_start.p4"
 ```
 
-The ingress control sets `std.egress_spec` based on `ingress_port` —
-no tables, no runtime control plane needed.
+The ingress control sets `std.egress_spec` based on `ingress_port` — no tables, no runtime control plane needed.
 
 ## Run it
 
-```
+```sh
 sudo p4net examples/quick_start/quick_start.py
 ```
 
@@ -63,18 +56,11 @@ h2     1    -
 
 ## What's interesting
 
-- It's the smallest possible working program. If `pingall` succeeds
-  here, the rest of the toolchain (`p4c`, BMv2, namespaces, veth
-  pairs, P4Runtime) is operational.
-- The dataplane has no notion of L3 — no IPv4 header parsing, no
-  ARP. Static ARP in `setup(net)` is what makes the L3 ping work.
+- It's the smallest possible working program. If `pingall` succeeds here, the rest of the toolchain (`p4c`, BMv2, namespaces, veth pairs, P4Runtime) is operational.
+- The dataplane has no notion of L3 — no IPv4 header parsing, no ARP. Static ARP in `setup(net)` is what makes the L3 ping work.
 
 ## Variations to try
 
-- Add a third host on port 3. Without table programming, packets
-  to port 3 hit the implicit drop (since the port-swap covers only
-  1 ↔ 2).
-- Replace the conditional with a single `mark_to_drop(std)` and watch
-  `pingall` produce all `X` cells.
-- Set a `Link(..., loss_pct=20.0)` and observe the success rate
-  drop in `pingall 10 1`.
+- Add a third host on port 3. Without table programming, packets to port 3 hit the implicit drop (since the port-swap covers only 1 ↔ 2).
+- Replace the conditional with a single `mark_to_drop(std)` and watch `pingall` produce all `X` cells.
+- Set a `Link(..., loss_pct=20.0)` and observe the success rate drop in `pingall 10 1`.

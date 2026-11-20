@@ -47,8 +47,7 @@ def _help_completer(dispatcher: CommandDispatcher) -> NestedCompleter:
 def _switch_subcommands_for(dispatcher: CommandDispatcher) -> list[str]:
     """Read the dispatcher's switch handler keys at completer-build time.
 
-    Phase-2 ships an empty handler map; phase-3 fills it in. This helper
-    keeps the completer in sync without requiring two import paths.
+    This helper keeps the completer in sync without requiring two import paths.
     """
     # `_switch_handlers` is private but stable; the alternative is duplicating
     # the verb list, which would drift.

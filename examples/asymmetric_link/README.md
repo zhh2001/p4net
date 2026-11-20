@@ -26,7 +26,7 @@ Resulting one-way delays:
 
 ## Running
 
-```
+```sh
 sudo p4net examples/asymmetric_link/topology.py
 ```
 

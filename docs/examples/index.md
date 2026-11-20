@@ -4,10 +4,7 @@ description: Eight runnable p4net example topologies, each isolating one capabil
 
 # Examples
 
-p4net ships eight runnable example topologies under `examples/` in the
-repository. Each one isolates a single capability so the source is
-easy to read and copy. [Install the CLI with pipx](../getting-started/installation.md#install-cli)
-before running the quick-start example from the repository root.
+p4net ships eight runnable example topologies under `examples/` in the repository. Each one isolates a single capability so the source is easy to read and copy. [Install the CLI with pipx](../getting-started/installation.md#install-cli) before running the quick-start example from the repository root.
 
 ```sh
 sudo p4net examples/quick_start/quick_start.py
@@ -17,33 +14,14 @@ Each walkthrough gives the command for its own topology file.
 
 ## What's bundled
 
-- **[Quick start (port swap)](quick-start.md)** — two hosts on a
-  single switch with a hardcoded port-swap pipeline. The smallest
-  working topology; no runtime table programming needed.
-- **[L3 forwarding](l3-forwarding.md)** — same two hosts, but the
-  pipeline routes via an `ipv4_lpm` table that's programmed from
-  Python at startup. ARP is pre-seeded.
-- **[CPU punt](cpu-punt.md)** — a one-host topology where every
-  dataplane packet is punted to the controller via the CPU port.
-  Demonstrates `<switch> packet send` and `<switch> packet listen`.
-- **[Dual stack](dual-stack.md)** — two hosts each with both IPv4 and
-  IPv6 addresses on the same `/24` and `/64`. Shows the per-interface
-  IPv6 sysctl gating.
-- **[Asymmetric link](asymmetric-link.md)** — two hosts with
-  per-direction link delay. Demonstrates `delay_a_to_b` /
-  `delay_b_to_a` and the resulting one-way RTT asymmetry.
-- **[IPv6 LPM](ipv6-lpm.md)** — two IPv6-only hosts with a 128-bit
-  LPM table programmed at runtime. Shows how `<switch> table dump`
-  renders IPv6 entries in human form (`fd00::1/128`) instead of raw
-  bytes.
-- **[INT (in-band telemetry)](int.md)** — single-switch INT: the
-  pipeline inserts a 14-byte shim header carrying switch identity,
-  ingress timestamp, egress port, queue depth, and the original
-  etherType. A raw-socket listener decodes the shim on the receiver.
-- **[Multi-hop INT](int-multi-hop.md)** — two switches in series each
-  insert their own shim; the listener decodes the full hop-by-hop
-  stack. Production-style telemetry topology; same P4 binary on both
-  switches, identity supplied by the v1.2 register API.
+- **[Quick start (port swap)](quick-start.md)** — two hosts on a single switch with a hardcoded port-swap pipeline. The smallest working topology; no runtime table programming needed.
+- **[L3 forwarding](l3-forwarding.md)** — same two hosts, but the pipeline routes via an `ipv4_lpm` table that's programmed from Python at startup. ARP is pre-seeded.
+- **[CPU punt](cpu-punt.md)** — a one-host topology where every dataplane packet is punted to the controller via the CPU port. Demonstrates `<switch> packet send` and `<switch> packet listen`.
+- **[Dual stack](dual-stack.md)** — two hosts each with both IPv4 and IPv6 addresses on the same `/24` and `/64`. Shows the per-interface IPv6 sysctl gating.
+- **[Asymmetric link](asymmetric-link.md)** — two hosts with per-direction link delay. Demonstrates `delay_a_to_b` / `delay_b_to_a` and the resulting one-way RTT asymmetry.
+- **[IPv6 LPM](ipv6-lpm.md)** — two IPv6-only hosts with a 128-bit LPM table programmed at runtime. Shows how `<switch> table dump` renders IPv6 entries in human form (`fd00::1/128`) instead of raw bytes.
+- **[INT (in-band network telemetry)](int.md)** — single-switch INT: the pipeline inserts a 14-byte shim header carrying switch identity, ingress timestamp, egress port, queue depth, and the original etherType. A raw-socket listener decodes the shim on the receiver.
+- **[Multi-hop INT](int-multi-hop.md)** — two switches in series each insert their own shim; the listener decodes the full hop-by-hop stack. Production-style telemetry topology; same P4 binary on both switches, identity supplied by the v1.2 register API.
 
 ## How they fit together
 
@@ -58,6 +36,4 @@ Each walkthrough gives the command for its own topology file.
 | int             | 2     | 1        | ✓    |      |            |          | ✓              | ✓         |
 | int_multi_hop   | 2     | 2        | ✓    |      |            |          | ✓              | ✓ (×2)    |
 
-The [Tutorial](../tutorial.md) combines every feature in one
-4-host, 2-switch program — useful as a kitchen-sink example, but
-each individual feature is easier to understand in isolation here.
+The [Tutorial](../tutorial.md) combines every feature in one 4-host, 2-switch program — useful as a kitchen-sink example, but each individual feature is easier to understand in isolation here.

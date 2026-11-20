@@ -2,9 +2,9 @@
 description: Multi-hop INT demo. Two switches in series, both running the same P4, each insert their own metadata shim. The receiver decodes the full hop-by-hop chain.
 ---
 
-# Multi-hop INT (in-band telemetry)
+# Multi-hop INT
 
-Two switches in series, each inserting its own 14-byte INT shim header into every forwarded packet. The receiver decodes the full hop-by-hop stack to reconstruct the packet's journey across the topology. This is the production-style INT example; for the simpler single-switch introduction see [INT (in-band telemetry)](int.md).
+Two switches in series, each inserting its own 14-byte INT shim header into every forwarded packet. The receiver decodes the full hop-by-hop stack to reconstruct the packet's journey across the topology. This is the production-style INT example; for the simpler single-switch introduction see [INT (in-band network telemetry)](int.md).
 
 ## What this demonstrates
 
@@ -50,7 +50,7 @@ The listener walks the shim chain starting from the outer EtherType, parsing one
 
 In one terminal:
 
-```
+```sh
 sudo p4net examples/int_multi_hop/topology.py
 ```
 
@@ -58,13 +58,13 @@ sudo p4net examples/int_multi_hop/topology.py
 
 In a second terminal (or `h2 xterm` from the shell):
 
-```
+```sh
 sudo ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0
 ```
 
 From a third terminal:
 
-```
+```sh
 sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 ```
 

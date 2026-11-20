@@ -1,4 +1,4 @@
-"""Phase-13 end-to-end tests: IPv6 LPM, pingall6, and human-form table dump.
+"""End-to-end tests: IPv6 LPM, pingall6, and human-form table dump.
 
 Run with:
 

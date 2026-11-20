@@ -880,7 +880,7 @@ def test_pingall_skips_hosts_without_primary_ip(patched: dict[str, Any], tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# IPv6 + asymmetric netem (phase 12)
+# IPv6 + asymmetric netem
 # ---------------------------------------------------------------------------
 
 
@@ -1026,7 +1026,7 @@ def test_symmetric_bandwidth_with_asymmetric_delay_a_to_b(
 
 
 # ---------------------------------------------------------------------------
-# xterm + pingall6 (phase 13)
+# xterm + pingall6
 # ---------------------------------------------------------------------------
 
 

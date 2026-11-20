@@ -576,7 +576,7 @@ def test_status_handles_log_dir_unavailable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# pingall6 + <host> xterm (phase 13)
+# pingall6 + <host> xterm
 # ---------------------------------------------------------------------------
 
 
@@ -637,7 +637,7 @@ def test_host_xterm_rejects_arguments(two_host_network: MagicMock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# topology graph (phase 13)
+# topology graph
 # ---------------------------------------------------------------------------
 
 

@@ -9,9 +9,9 @@ pinned to the same regexes.
 
 Patterns we own and may purge:
 
-- phase-1 runtime integration: ``nsXXXXXXXX`` (8 hex), ``nsA_XXXXXXXX``,
+- runtime integration: ``nsXXXXXXXX`` (8 hex), ``nsA_XXXXXXXX``,
   ``nsB_XXXXXXXX``, plus veth ifaces ``v[A-D]_XXXXXXXX``.
-- phase-6 orchestrator integration: hosts ``h<6hex>[abc]?`` and switches
+- orchestrator integration: hosts ``h<6hex>[abc]?`` and switches
   ``s<6hex>[abc]?``, plus their auto-generated ifaces
   ``<name>-eth<port>``.
 

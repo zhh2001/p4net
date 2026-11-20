@@ -307,7 +307,7 @@ def test_link_a_must_be_linkendpoint() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Asymmetric impairment + IPv6 endpoint (phase 12)
+# Asymmetric impairment + IPv6 endpoint
 # ---------------------------------------------------------------------------
 
 

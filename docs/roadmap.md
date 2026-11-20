@@ -29,6 +29,7 @@ See the [changelog](changelog.md) for complete release notes.
 | 1.8.1 | 2026-11-19 | CLI output and help fixes, BMv2 startup timeout diagnostics, and global pipx installation guidance. |
 | 1.8.2 | 2026-11-19 | Fix for idle P4Runtime disconnects caused by gRPC keepalive on BMv2. |
 | 1.9.0 | 2026-11-20 | Interactive startup, shutdown, and packet wait messages, compact counter reads, and clearer help and table dumps. |
+| 1.10.0 | 2026-11-20 | Live CLI output, ping matrix progress, and command cancellation that keeps the topology running. |
 
 ## 1.x candidates (additive, no API breakage)
 

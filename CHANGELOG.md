@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-20
+
+### Added
+
+- `ping` and `ping6` with multiple probes display replies as they arrive and summarize sent and received probes and packet loss. `pingall` and `pingall6` report progress in batches and show partial results when cancelled.
+- `<host> cmd` streams stdout and stderr as the process flushes them. `<switch> packet listen` shows each packet as it arrives and reports the number received when it finishes.
+- `NetworkNamespace.popen()` accepts `start_new_session`. `NSProcess.stdout` and `NSProcess.stderr` expose captured pipes.
+
+### Changed
+
+- Updated the CPU punt, asymmetric link, and multi-hop INT walkthroughs. The INT walkthrough shows how to run separate copies with independent namespaces and timestamp files.
+- Clarified that BMv2 resets the fields selected by the P4Info counter unit when `counter reset` runs.
+
+### Fixed
+
+- Pressing `Ctrl-C` during an interactive command cancels that command and returns to the prompt with the topology running. Cancelling or timing out a host command cleans up its process group. A terminal hangup with the default signal handler cleans up the topology.
+- Multi-hop INT integration tests use per-test timestamp files, so parallel runs avoid overwriting each other's results or the example's file.
+
+### Upgrading from 1.9
+
+- Scripts that parse interactive output should allow progress lines before results, the multi-probe ping totals, and the final `packet listen` count. A single ping probe prints `OK` or `FAIL`. Stdout and stderr from host commands can now appear in the order the shell reads them.
+- To shut down from the interactive prompt, use `exit`, `quit`, or `Ctrl-D` on an empty line.
+
 ## [1.9.0] - 2026-11-20
 
 ### Added
@@ -172,7 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - INT (In-band Network Telemetry) example: single-switch topology where the P4 pipeline inserts a 14-byte INT shim header (switch_id, ingress_timestamp, egress_port, queue_depth, original etherType, reserved) between Ethernet and IPv4 on every forwarded packet. A raw AF_PACKET socket listener inside the receiving host's namespace decodes the shim and prints structured per-frame telemetry. Demonstrates real wire-level in-band telemetry, not controller-punt.
-- `Link.delay_a_to_b_extra`, `Link.delay_b_to_a_extra`, `Link.jitter_a_to_b_extra`, `Link.jitter_b_to_a_extra`, `Link.loss_pct_a_to_b_extra`, `Link.loss_pct_b_to_a_extra`: per-direction additive impairment on top of the symmetric base. Closes phase-12 OQ #4. Round-trips through `Topology.to_dict` / `from_dict`.
+- `Link.delay_a_to_b_extra`, `Link.delay_b_to_a_extra`, `Link.jitter_a_to_b_extra`, `Link.jitter_b_to_a_extra`, `Link.loss_pct_a_to_b_extra`, `Link.loss_pct_b_to_a_extra`: per-direction additive impairment on top of the symmetric base. Round-trips through `Topology.to_dict` / `from_dict`.
 - Unified `p4net.*` logger hierarchy with documented level conventions. Logger namespace is **stable** in 1.x; per-event levels and log message text are not.
 - CLI `--verbose` / `-v` (INFO) and `-vv` (DEBUG) flags for log-level control. Default level remains WARNING.
 - `docs/known-limitations.md`: explicit catalogue of what's not supported in 1.x with workarounds where they exist (single Network lifecycle per Python process, single-host operation, no PSA, no live mutation, BMv2 throughput bounds).
@@ -199,9 +222,9 @@ PSA architecture support, live topology mutation, async P4Runtime client, and di
 
 ### Fixed
 
-- `<switch> table dump` now correctly disambiguates action-parameter widths across multi-switch topologies that share an action name (closes phase-13 OQ #1).
-- `Network.stop()` skips `terminate()` for already-exited spawned processes (e.g. xterms closed by the user) instead of issuing a no-op syscall (closes phase-13 OQ #2).
-- Phase-13 integration test now writes captured output to `tmp_path` rather than a hardcoded `/tmp/` path (closes phase-13 OQ #4).
+- `<switch> table dump` now correctly disambiguates action-parameter widths across multi-switch topologies that share an action name.
+- `Network.stop()` skips `terminate()` for already-exited spawned processes (e.g. xterms closed by the user) instead of issuing a no-op syscall.
+- Integration test now writes captured output to `tmp_path` rather than a hardcoded `/tmp/` path.
 - Documentation CLI reference shows the dispatcher's actual `OK`/`FAIL` casing for ping success/failure.
 
 ### Changed
@@ -209,7 +232,7 @@ PSA architecture support, live topology mutation, async P4Runtime client, and di
 - CI matrix expanded to include Ubuntu 22.04 alongside Ubuntu 24.04, plus a wheel-install smoke job to verify `pip install` correctness on every PR.
 - GitHub Actions versions updated to current major releases
   (`checkout@v6`, `setup-python@v6`, `upload-pages-artifact@v5`, `deploy-pages@v5`).
-- Documentation site uses Unicode-aware slugify, so Chinese (and other CJK) headings now produce stable cross-page anchors (closes phase-16 OQ #1).
+- Documentation site uses Unicode-aware slugify, so Chinese (and other CJK) headings now produce stable cross-page anchors.
 
 ### Added
 

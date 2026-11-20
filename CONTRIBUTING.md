@@ -12,7 +12,7 @@ go straight to a PR.
 
 After cloning the repository:
 
-```
+```sh
 pip install -e '.[dev]' && pre-commit install
 ```
 
@@ -20,7 +20,7 @@ pip install -e '.[dev]' && pre-commit install
 
 Run the full local check suite and make sure it is clean:
 
-```
+```sh
 ruff check . && ruff format --check . && mypy src/p4net && pytest
 ```
 

@@ -55,7 +55,7 @@ the user's privilege envelope rather than escalating.
 A common alternative is to grant `CAP_NET_ADMIN` to the Python
 interpreter directly:
 
-```
+```sh
 sudo setcap 'cap_net_admin,cap_sys_admin+ep' "$(readlink -f $(which python3))"
 ```
 
@@ -64,7 +64,7 @@ that Python interpreter, including untrusted scripts. If the
 interpreter is shared across the system, prefer a dedicated venv
 interpreter:
 
-```
+```sh
 python3 -m venv /opt/p4net-venv
 sudo setcap 'cap_net_admin,cap_sys_admin+ep' /opt/p4net-venv/bin/python
 ```

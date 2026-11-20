@@ -6,11 +6,11 @@ from tests._artifact_patterns import TEST_IFACE_PATTERN, TEST_NS_PATTERN
 
 
 def test_ns_pattern_matches_expected_test_names() -> None:
-    # phase-1 runtime integration
+    # runtime integration
     assert TEST_NS_PATTERN.match("ns12345678")
     assert TEST_NS_PATTERN.match("nsA_12345678")
     assert TEST_NS_PATTERN.match("nsB_deadbeef")
-    # phase-6 e2e: 6-hex with optional a/b/c suffix
+    # e2e: 6-hex with optional a/b/c suffix
     assert TEST_NS_PATTERN.match("h123456")
     assert TEST_NS_PATTERN.match("s123456")
     assert TEST_NS_PATTERN.match("habcdef")
@@ -34,12 +34,12 @@ def test_ns_pattern_rejects_user_names() -> None:
 
 
 def test_iface_pattern_matches_expected_iface_names() -> None:
-    # phase-1 veth ifaces
+    # veth ifaces
     assert TEST_IFACE_PATTERN.match("vA_12345678")
     assert TEST_IFACE_PATTERN.match("vB_12345678")
     assert TEST_IFACE_PATTERN.match("vC_deadbeef")
     assert TEST_IFACE_PATTERN.match("vD_cafebabe")
-    # phase-6 host/switch veth ifaces
+    # host/switch veth ifaces
     assert TEST_IFACE_PATTERN.match("h123456-eth0")
     assert TEST_IFACE_PATTERN.match("h123456a-eth0")
     assert TEST_IFACE_PATTERN.match("s123456-eth1")

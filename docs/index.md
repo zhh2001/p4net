@@ -63,6 +63,6 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
 
 ## Project status
 
-p4net **v1.9.0** is a stable release. Public interfaces follow the [API stability rules](api-stability.md), including the deprecation cycle for stable and provisional APIs.
+p4net **v1.10.0** is a stable release. Public interfaces follow the [API stability rules](api-stability.md), including the deprecation cycle for stable and provisional APIs.
 
-This release adds interactive startup, shutdown, and packet wait messages, introduces `counter --nonzero`, and improves help and table dump output. See the [Changelog](changelog.md) for release details, [Known Limitations](known-limitations.md) for current boundaries, and the [Roadmap](roadmap.md) for future plans.
+This release adds live output for multi-probe ping, host commands, and packet listening, along with progress for ping matrices. Press `Ctrl-C` to cancel an interactive command while keeping the topology running. See the [Changelog](changelog.md) for release details, [Known Limitations](known-limitations.md) for current boundaries, and the [Roadmap](roadmap.md) for future plans.

@@ -4,6 +4,20 @@ description: p4net 的各版本变更与升级说明，以及完整英文版本�
 
 # 变更日志
 
+## 1.10.0 · 2026-11-20
+
+- `ping` 和 `ping6` 发送多个探测包时逐条显示应答，结束时汇总发送数、接收数和丢包率。`pingall` 和 `pingall6` 分批显示进度，取消时显示已完成的结果。
+- `<host> cmd` 随命令刷新及时显示 stdout 和 stderr。`<switch> packet listen` 逐包显示，监听结束时汇总收到的包数。
+- `NetworkNamespace.popen()` 新增 `start_new_session` 参数。`NSProcess.stdout` 和 `NSProcess.stderr` 可访问已捕获的管道。
+- 执行交互命令时按 `Ctrl-C` 会取消当前命令并返回提示符，拓扑继续运行。主机命令取消或超时时会清理进程组。终端挂断由默认信号处理机制接管时，会清理拓扑。
+- 更新 CPU punt、非对称链路和多跳 INT 示例。多跳 INT 教程补充了隔离命名空间和时间戳文件的并行运行方法，集成测试也改用各自的时间戳文件。
+- 明确 BMv2 执行 `counter reset` 时，会按 P4Info 中的计数器单位清零相应字段。
+
+### 从 1.9 升级
+
+- 解析交互输出的脚本应处理新增的进度行、多次 ping 的汇总，以及 `packet listen` 结束时的包数。单次 ping 显示 `OK` 或 `FAIL`。主机命令的 stdout 和 stderr 可能按终端读到的顺序交错出现。
+- 要关闭拓扑，在提示符处输入 `exit` 或 `quit`，也可以在空行上按 `Ctrl-D`。
+
 ## 1.9.0 · 2026-11-20
 
 - 交互模式提示拓扑开始启动、网络与 `setup()` 就绪，以及开始清理。`packet listen` 在等待前显示交换机、目标包数和超时。
