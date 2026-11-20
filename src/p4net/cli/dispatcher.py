@@ -11,10 +11,12 @@ import logging
 import math
 import re
 import shlex
+import subprocess
 from collections.abc import Callable, Mapping
 from textwrap import fill
 from typing import TYPE_CHECKING
 
+from p4net.cli._command_output import stream_command_output
 from p4net.cli.exceptions import CLIExit, CLIUsageError, _CommandErrorOutput
 from p4net.cli.formatting import bold, render_pingall_matrix
 from p4net.network.orchestrator import _hosts_with_ip, _ping_host_pairs
@@ -27,6 +29,7 @@ _log = logging.getLogger(__name__)
 
 # poll(2) accepts signed 32-bit millisecond timeouts.
 _MAX_PING_WAIT = ((1 << 31) - 1) // 1000
+_HOST_COMMAND_TIMEOUT = 30
 _PING_REPLY = re.compile(r"^\d+ bytes from .*?\bicmp_seq=(\d+)\b.*? (time[=<][\d.]+ ms)")
 _PING_STATS = re.compile(
     r"^(\d+) packets transmitted, (\d+) (?:packets )?received.*?, (\S+)% packet loss\b"
@@ -147,10 +150,12 @@ class CommandDispatcher:
         *,
         color: bool = False,
         on_progress: Callable[[str], None] | None = None,
+        on_command_output: Callable[[str], None] | None = None,
     ) -> None:
         self._network = network
         self._color = color
         self._on_progress = on_progress
+        self._on_command_output = on_command_output
         self._top_level_handlers = {
             "help": self._cmd_help,
             "exit": self._cmd_exit,
@@ -537,8 +542,20 @@ class CommandDispatcher:
         if not tokens:
             raise CLIUsageError(f"{host_name} cmd: missing argv")
         host = self._network.host(host_name)
-        result = host.exec(tokens, timeout=30, check=False, capture_output=True)
-        return self._format_cmd_result(result)
+        output = self._on_command_output
+        if output is None:
+            result = host.exec(
+                tokens, timeout=_HOST_COMMAND_TIMEOUT, check=False, capture_output=True
+            )
+            return self._format_cmd_result(result)
+        try:
+            with self._network._host_command(host, tokens) as process:
+                rc = stream_command_output(process, tokens, _HOST_COMMAND_TIMEOUT, output)
+        except subprocess.TimeoutExpired:
+            return _CommandErrorOutput(
+                f"error: command timed out after {_HOST_COMMAND_TIMEOUT} seconds"
+            )
+        return f"[exit {rc}]" if rc else ""
 
     def _cmd_host_ifconfig(self, host_name: str, tokens: list[str]) -> str:
         if tokens:
@@ -996,8 +1013,6 @@ class CommandDispatcher:
 
     @staticmethod
     def _format_cmd_result(result: object) -> str:
-        # `result` is a subprocess.CompletedProcess[bytes]; we don't import
-        # subprocess here to keep the dispatcher type-light.
         out_bytes = getattr(result, "stdout", b"") or b""
         err_bytes = getattr(result, "stderr", b"") or b""
         rc = int(getattr(result, "returncode", 0))

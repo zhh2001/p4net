@@ -33,6 +33,7 @@ from types import TracebackType
 from p4net.compiler import CompileResult, P4Compiler
 from p4net.control import P4RuntimeClient
 from p4net.network._cleanup import (
+    defer_cleanup_signals,
     install_handlers,
     register,
     unregister,
@@ -175,6 +176,7 @@ class Network:
         self._host_iface_ip: dict[str, dict[str, str | None]] = {}
         self._host_iface_ip6: dict[str, dict[str, str | None]] = {}
         self._spawned_processes: list[NSProcess] = []
+        self._host_commands: set[NSProcess] = set()
         self._async_disconnects: list[tuple[str, asyncio.AbstractEventLoop, Future[None]]] = []
         self._stop_lock = threading.RLock()
         self._start_future: Future[None] | None = None
@@ -483,7 +485,29 @@ class Network:
         hosts = _hosts_with_ip(self._running_hosts, ipv6=True)
         return dict(_ping_host_pairs(hosts, count=count, timeout=timeout, ipv6=True))
 
-    # ----- xterm helper -------------------------------------------------
+    # ----- Host commands ------------------------------------------------
+
+    @contextlib.contextmanager
+    def _host_command(self, host: RunningHost, argv: Sequence[str]) -> Iterator[NSProcess]:
+        """Track the command group until the interactive caller finishes with it."""
+        process: NSProcess | None = None
+        try:
+            with defer_cleanup_signals():
+                process = host.namespace.popen(
+                    argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+                )
+                self._host_commands.add(process)
+            yield process
+        except BaseException:
+            if process is not None:
+                process._stop_group()
+            raise
+        finally:
+            if process is not None:
+                self._host_commands.discard(process)
+                for pipe in (process.stdout, process.stderr):
+                    if pipe is not None:
+                        pipe.close()
 
     def xterm(
         self,
@@ -841,6 +865,13 @@ class Network:
         if self._running:
             logger.info("Network.stop: tearing down")
         # 0. user-spawned processes (xterm, etc.) — reap before namespaces vanish.
+        for command in tuple(self._host_commands):
+            try:
+                command._stop_group()
+            except Exception as exc:
+                logger.warning("host command cleanup (pid=%s): %r", command.pid, exc)
+        self._host_commands.clear()
+
         for proc in list(self._spawned_processes):
             try:
                 if proc.poll() is None:

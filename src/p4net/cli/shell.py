@@ -66,7 +66,12 @@ class P4NetShell:
         prompt: str = "p4net> ",
     ) -> None:
         self._network = network
-        self._dispatcher = CommandDispatcher(network, color=True, on_progress=print_formatted_text)
+        self._dispatcher = CommandDispatcher(
+            network,
+            color=True,
+            on_progress=print_formatted_text,
+            on_command_output=lambda text: print_formatted_text(ANSI(text), end=""),
+        )
         self._history_file = Path(history_file) if history_file is not None else _DEFAULT_HISTORY
         self._prompt = prompt
 

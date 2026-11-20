@@ -1122,6 +1122,27 @@ def test_already_exited_spawn_skips_terminate_and_wait(
     fake_proc.kill.assert_not_called()
 
 
+def test_host_command_reaps_group_if_interrupted_while_spawning() -> None:
+    net = Network(Topology())
+    host = MagicMock()
+    process = MagicMock()
+
+    def spawn(*args: object, **kwargs: object) -> MagicMock:
+        signal.raise_signal(signal.SIGINT)
+        return process
+
+    host.namespace.popen.side_effect = spawn
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(KeyboardInterrupt), net._host_command(host, ["true"]):
+            pytest.fail("interrupted command reached its caller")
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    process._stop_group.assert_called_once_with()
+    assert not net._host_commands
+
+
 def test_pingall6_skips_v4_only_hosts(patched: dict[str, Any], tmp_path: Path) -> None:
     topo = Topology()
     topo.add_host("h1", ip="10.0.0.1/24", ip6="fd00::1/64")

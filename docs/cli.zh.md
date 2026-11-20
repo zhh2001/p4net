@@ -182,7 +182,7 @@ PID 随实际进程变化。
 
 在主机命名空间内执行命令，超时为 30 秒。引号按 `shlex` 规则将文本组合为参数，随后直接执行命令。需要管道或重定向等 Shell 功能时，使用 `sh -c '...'`。
 
-先显示 stdout，再逐行显示带 `[stderr]` 前缀的 stderr。退出状态非零时，末尾追加 `[exit N]`。
+命令刷新 stdout 或 stderr 时，终端实时显示输出。stderr 各行带 `[stderr]` 前缀，退出状态非零时在末尾显示 `[exit N]`。按 `Ctrl-C` 可取消。取消或超时后，终端会停止本次命令的进程组，再返回提示符。
 
 ```text
 p4net> h1 cmd printf 'hello\n'

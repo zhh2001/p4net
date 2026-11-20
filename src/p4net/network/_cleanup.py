@@ -24,6 +24,8 @@ import logging
 import os
 import signal
 import threading
+from collections.abc import Iterator
+from types import FrameType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -66,6 +68,37 @@ def unregister(net: Network) -> None:
     """Remove ``net`` from the cleanup registry. Idempotent."""
     with _LOCK:
         _ACTIVE.discard(net)
+
+
+@contextlib.contextmanager
+def defer_cleanup_signals() -> Iterator[None]:
+    """Replay handled signals after a child process has been registered."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    pending: list[int] = []
+    previous: dict[signal.Signals, Any] = {}
+
+    def remember(signum: int, _frame: FrameType | None) -> None:
+        pending.append(signum)
+
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            handler = signal.getsignal(sig)
+            if callable(handler):
+                signal.signal(sig, remember)
+                previous[sig] = handler
+        yield
+    finally:
+        mask = signal.pthread_sigmask(signal.SIG_BLOCK, previous)
+        try:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        for signum in pending:
+            signal.raise_signal(signum)
 
 
 def _run_cleanup() -> None:

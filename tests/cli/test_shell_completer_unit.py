@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -175,9 +174,13 @@ def test_shell_renders_errors_consistently(tmp_path: Path, color: bool) -> None:
     )
     host = network.hosts["h1"]
     host.ping.side_effect = RuntimeError("ping unavailable\n")
-    host.exec.return_value = subprocess.CompletedProcess(
-        args=["printf"], returncode=0, stdout=b"error: from host\n", stderr=b""
-    )
+
+    def host_output(*args: object) -> int:
+        write = args[-1]
+        assert callable(write)
+        write("error: from host\n\n")
+        return 0
+
     session = MagicMock()
     session.prompt.side_effect = [
         "unknown",
@@ -198,6 +201,7 @@ def test_shell_renders_errors_consistently(tmp_path: Path, color: bool) -> None:
     shell = P4NetShell(network, history_file=tmp_path / "history")
     with (
         patch("p4net.cli.shell.PromptSession", return_value=session),
+        patch("p4net.cli.dispatcher.stream_command_output", side_effect=host_output),
         create_app_session(output=output),
     ):
         shell.run()

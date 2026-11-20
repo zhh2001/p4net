@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
+import signal
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from types import TracebackType
 from typing import IO, Any
@@ -120,6 +123,7 @@ class NetworkNamespace:
         stdout: int | IO[Any] | None = None,
         stderr: int | IO[Any] | None = None,
         stdin: int | IO[Any] | None = None,
+        start_new_session: bool = False,
     ) -> NSProcess:
         """Spawn a long-running process inside this namespace.
 
@@ -138,6 +142,8 @@ class NetworkNamespace:
             kwargs["stderr"] = stderr
         if stdin is not None:
             kwargs["stdin"] = stdin
+        if start_new_session:
+            kwargs["start_new_session"] = True
         popen = subprocess.Popen(full_argv, **kwargs)
         logger.debug(
             "spawned process %r in namespace %r (pid=%d)",
@@ -190,6 +196,27 @@ class NSProcess:
         """The captured stdout pipe when created with ``stdout=PIPE``."""
         stream: IO[bytes] | None = self._popen.stdout
         return stream
+
+    @property
+    def stderr(self) -> IO[bytes] | None:
+        """The captured stderr pipe when created with ``stderr=PIPE``."""
+        stream: IO[bytes] | None = self._popen.stderr
+        return stream
+
+    def _stop_group(self) -> None:
+        """Stop the group of a process started in its own session."""
+        if self._popen.returncode is not None:
+            return
+        try:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.pid, signal.SIGTERM)
+                time.sleep(0.2)
+        finally:
+            # Keep the leader unreaped until after signalling its group so
+            # the group ID cannot be reused while this cleanup owns it.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self.pid, signal.SIGKILL)
+            self.wait()
 
     def poll(self) -> int | None:
         """Non-blocking liveness check; returns the exit code or ``None``."""

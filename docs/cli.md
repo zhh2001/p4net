@@ -182,7 +182,7 @@ The PID varies between runs.
 
 Run a command in the host's namespace, with a 30-second timeout. Quotes group arguments using `shlex`; the command is executed directly. Use `sh -c '...'` when you need shell features such as pipes or redirection.
 
-Stdout is printed first, then stderr with `[stderr]` before each line. A nonzero exit status adds `[exit N]`.
+The shell displays stdout and stderr as the command writes and flushes them. Stderr lines start with `[stderr]`, and a nonzero exit status adds `[exit N]`. Press `Ctrl-C` to cancel. On cancellation or timeout, the shell stops the command's process group before returning to the prompt.
 
 ```text
 p4net> h1 cmd printf 'hello\n'

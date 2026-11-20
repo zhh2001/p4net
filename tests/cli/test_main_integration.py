@@ -6,12 +6,14 @@ import contextlib
 import os
 import re
 import select
+import shlex
 import signal
 import socket
 import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -93,6 +95,78 @@ def test_cli_dataclass_topology_starts_and_runs_setup(
                 sys.modules.pop(name, None)
 
 
+def _check_host_command_streams(
+    master: int, read_through: Callable[[bytes], bytes], tmp_path: Path, host: str
+) -> None:
+    payload = tmp_path / "host_command.py"
+    payload.write_text(
+        """
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+def wait_for(name):
+    while not Path(__file__).with_name(name).exists():
+        time.sleep(0.01)
+
+
+if sys.argv[1] == "output":
+    print("early stdout", end="", flush=True)
+    wait_for("stdout-seen")
+    print("early stderr", file=sys.stderr, flush=True)
+    wait_for("stderr-seen")
+    print("late stdout", flush=True)
+    sys.exit(7)
+
+child = subprocess.Popen([
+    sys.executable, "-u", "-c",
+    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "print('descendant-ready'); time.sleep(60)",
+], stdout=subprocess.PIPE, text=True)
+print(f"child={child.pid}", flush=True)
+print(child.stdout.readline().rstrip(), flush=True)
+""",
+        encoding="utf-8",
+    )
+    # stderr remains inherited by the child even after the command leader exits.
+    command = shlex.join([host, "cmd", sys.executable, str(payload)])
+    os.write(master, f"{command} output\n".encode())
+    read_through(b"early stdout")
+    (tmp_path / "stdout-seen").touch()
+    read_through(b"[stderr] early stderr")
+    (tmp_path / "stderr-seen").touch()
+    read_through(b"late stdout")
+    read_through(b"[exit 7]")
+    read_through(b"p4net>")
+
+    for interrupt in (True, False):
+        os.write(master, f"{command} group\n".encode())
+        read_through(b"child=")
+        pid = int(read_through(b"\r\n").strip())
+        read_through(b"descendant-ready")
+        status = Path(f"/proc/{pid}/status")
+        assert status.exists()
+        if interrupt:
+            os.write(master, b"\x03")
+            read_through(b"^C cancelled")
+        else:
+            read_through(b"Error: command timed out after 5 seconds")
+        read_through(b"p4net>")
+
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                state = status.read_text()
+            except FileNotFoundError:
+                break
+            if "State:\tZ" in state:
+                break
+            assert time.monotonic() < deadline, f"descendant {pid} survived"
+            time.sleep(0.02)
+
+
 @pytest.mark.parametrize(
     ("verb", "shutdown"),
     [
@@ -102,6 +176,7 @@ def test_cli_dataclass_topology_starts_and_runs_setup(
         ("ping6", "exit"),
         ("pingall", "exit"),
         ("pingall6", "exit"),
+        ("cmd", "exit"),
     ],
 )
 def test_ctrl_c_cancels_command_without_stopping_topology(
@@ -119,8 +194,11 @@ from pathlib import Path
 fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 signal.signal(signal.SIGHUP, signal.SIG_DFL)
 from p4net.cli import shell
+from p4net.cli import dispatcher
 from p4net.cli.main import main
 
+if sys.argv.pop(1) == "cmd":
+    dispatcher._HOST_COMMAND_TIMEOUT = 5
 shell._DEFAULT_HISTORY = Path(sys.argv.pop(1))
 raise SystemExit(main())
 """
@@ -150,6 +228,7 @@ raise SystemExit(main())
                 sys.executable,
                 "-c",
                 script,
+                verb,
                 str(tmp_path / "history"),
                 str(topology),
                 "--log-dir",
@@ -166,7 +245,9 @@ raise SystemExit(main())
             try:
                 read_through(b"p4net>", timeout=30)
                 assert all(path.exists() for path in namespaces)
-                if verb == "listen":
+                if verb == "cmd":
+                    _check_host_command_streams(master, read_through, tmp_path, h1)
+                elif verb == "listen":
                     os.write(master, f"{switch} packet listen timeout=30\n".encode())
                     read_through(f"Waiting for 1 packet on {switch}".encode())
                 elif verb.startswith("pingall"):
@@ -177,18 +258,19 @@ raise SystemExit(main())
                     target = "::1" if verb == "ping6" else h2
                     os.write(master, f"{h1} {verb} {target} 30\n".encode())
                     read_through(b"seq=1  time")
-                os.write(master, b"\x03")
-                output = read_through(b"^C cancelled")
-                if verb.startswith("pingall"):
-                    assert re.search(rb"\b" + h1.encode() + rb" +- +1", output), output
-                    assert re.search(rb"\b" + h2.encode() + rb" +\? +-", output), output
-                    assert b"1/1 succeeded" in output, output
-                elif verb != "listen":
-                    stats = re.search(rb"(\d+) sent, (\d+) received, [\d.]+% loss", output)
-                    assert stats is not None, output
-                    sent, received = map(int, stats.groups())
-                    assert 1 <= received <= sent < 30
-                read_through(b"p4net>")
+                if verb != "cmd":
+                    os.write(master, b"\x03")
+                    output = read_through(b"^C cancelled")
+                    if verb.startswith("pingall"):
+                        assert re.search(rb"\b" + h1.encode() + rb" +- +1", output), output
+                        assert re.search(rb"\b" + h2.encode() + rb" +\? +-", output), output
+                        assert b"1/1 succeeded" in output, output
+                    elif verb != "listen":
+                        stats = re.search(rb"(\d+) sent, (\d+) received, [\d.]+% loss", output)
+                        assert stats is not None, output
+                        sent, received = map(int, stats.groups())
+                        assert 1 <= received <= sent < 30
+                    read_through(b"p4net>")
 
                 os.write(master, b"status\n")
                 read_through(b"running:   ")
