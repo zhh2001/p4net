@@ -1,10 +1,10 @@
 ---
-description: 把每个数据平面包都通过 CPU 端口上送控制器的流水线。演示 `<switch> packet send` 与 `<switch> packet listen`。
+description: 通过交换机的 CPU 端口接收 PacketIn 和发送 PacketOut。
 ---
 
 # CPU 上送
 
-一台主机、一台交换机，每个数据平面包都被通过 CPU 端口（510）上送控制器。控制器也可以通过带有显式出口端口元数据的 `PacketOut` 把数据包注入回数据平面。
+一台主机接在一台交换机上。交换机通过 CPU 端口（510）将主机发来的报文上送控制器。控制器也可以用 `PacketOut` 向指定的出端口发送报文。
 
 ## 运行
 
@@ -76,13 +76,12 @@ s1 packet send 00000000000102000000009988b548656c6c6f metadata: egress_port=1
 --8<-- "examples/cpu_punt/cpu_punt.p4"
 ```
 
-两个 `@controller_header` 声明分别定义 PacketIn（上送控制器）与 PacketOut（控制器注入）的元数据布局。parser 根据 `std.ingress_port == CPU_PORT` 判断是否需要在 ethernet 之前先解析 `packet_out` 报头。入口控制：
+两个 `@controller_header` 声明分别定义 PacketIn 和 PacketOut 的元数据格式。来自 CPU 端口的报文先解析 `packet_out` 报头，再解析以太网头。
 
-- 控制器注入的包：把 `egress_port` 复制进 `std.egress_spec`，并使控制器报头无效。
-- 数据平面包：把 `std.egress_spec = CPU_PORT`，使 `packet_in` 报头有效，并写入 `ingress_port`。
+- 控制器发出的报文按 `egress_port` 转发。发送前将控制器报头置为无效。
+- 主机发来的报文转至 CPU 端口，并在 `packet_in` 报头中记录 `ingress_port`。
 
 ## 可尝试的变体
 
-- 用 `s1.client.on_packet_in(handler)` 注册一个 Python 处理器，解析上送的以太网帧，做学习交换机式的逻辑。
-- 在 setup 脚本里用 `s1.client.send_packet_out(payload, {"egress_port": 1})` 注入一串探测帧。
-- 加一张 `default_action = punt()` 的 `ipv4_lpm` 表，把已编程的转发与控制器兜底逻辑混合起来。
+- 用 `s1.client.on_packet_in(handler)` 注册 Python 处理函数，从 PacketIn 中读取源 MAC 地址和入端口。
+- 在初始化函数中用 `s1.client.send_packet_out(payload, {"egress_port": 1})` 从端口 1 发送探测帧。

@@ -1,10 +1,10 @@
 ---
-description: Two IPv6-only hosts with a 128-bit LPM table programmed at runtime. Demonstrates IPv6 codec round-tripping in `<switch> table dump`.
+description: Program IPv6 routes for two hosts and inspect the prefixes and forwarding counters.
 ---
 
 # IPv6 LPM
 
-Two IPv6-only hosts on a single switch with an `ipv6_lpm` table that matches a 128-bit destination address. Programmed at runtime over P4Runtime. The interesting thing is that `<switch> table dump` renders the IPv6 entries in human form (`fd00::1/128`) instead of as raw canonical bytes.
+Two IPv6 hosts share a switch. P4Runtime installs their routes in the `ipv6_lpm` table, and `table dump` displays prefixes such as `fd00::1/128`.
 
 ## Run it
 
@@ -54,7 +54,7 @@ When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 --8<-- "examples/ipv6_lpm/topology.py"
 ```
 
-`Host.ip6` is the only L3 address — both hosts are IPv6-only. The orchestrator runs `enable_ipv6(ns, iface)` and assigns `fd00::1/64` / `fd00::2/64` before bringing the interfaces up.
+P4Net enables IPv6 and assigns `fd00::1/64` and `fd00::2/64` before bringing up the host interfaces. `setup(net)` installs static IPv6 neighbor entries and one `/128` route per host.
 
 ## P4 program
 
@@ -64,18 +64,10 @@ When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 --8<-- "examples/ipv6_lpm/ipv6_lpm.p4"
 ```
 
-Two notable bits:
-
-- The match key is `bit<128> dstAddr` with `lpm` — the runtime layer stores the canonical bytes plus a prefix length, and `decode_match` knows to format 128-bit fields as IPv6.
-- `set_egress_port` bumps an indirect counter so we can verify forwarded traffic from the controller.
-
-## What's interesting
-
-- **Width-aware decoding selects IPv6 format for 128-bit fields.** The same `decode_match` function renders 32-bit fields as IPv4, 48-bit fields as MAC, 128-bit fields as IPv6 condensed form. No per-field annotations needed in the P4Info; the bitwidth is the hint.
-- **Canonical bytes round-trip cleanly.** `encode_value("fd00::1", 128)` produces `b'\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01'`. P4Runtime canonicalizes by stripping leading zeros, then BMv2 stores whatever bytes the controller sent. On read, `decode_ipv6` zero-extends on the high (most-significant) side back to 16 bytes and feeds `ipaddress.IPv6Address.__str__`.
+The LPM table matches the 128-bit IPv6 destination address. The `set_egress_port` action selects the output port and increments its indirect counter.
 
 ## Variations to try
 
-- Replace one `/128` entry with `/64` (covering both hosts) and observe how LPM resolves on the longer prefix when both are installed.
-- Add a third host on `fd00::3/64` and install a routing entry from Python at runtime, without touching the P4 source or restarting.
-- Use `client.read_counter("MyIngress.ipv6_pkts")` from a Python controller to poll counters periodically while traffic flows.
+- Replace `fd00::1/128` with `fd00::/64` on port 1 and keep `fd00::2/128` on port 2. The `/128` entry still wins for packets to `h2`. Check that `pingall6` reports `2/2 succeeded`.
+- Add a third host on port 3 with address `fd00::3/64` and a unique MAC address. In `setup(net)`, install `fd00::3/128` on port 3 and add static IPv6 neighbor entries between the new host and each existing host. Start the extended topology and check that `pingall6` reports `6/6 succeeded`.
+- Use `client.read_counter("MyIngress.ipv6_pkts", index=2)` in Python to read the counter for port 2.

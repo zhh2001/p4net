@@ -1,10 +1,10 @@
 ---
-description: 多跳 INT 示例。两台交换机串联运行同一份 P4，每台插入自己的元数据 shim；接收端解析整条逐跳链。
+description: 读取两台交换机插入的 INT 遥测头，估算报文到达各跳的时间。
 ---
 
 # 多跳 INT
 
-两台交换机串联，各自在转发的 IPv4 报文中插入一个 14 字节的 INT shim 头。接收端读取这两个头部，就能看到报文经过了哪些交换机。[单交换机 INT 示例](int.md)介绍了 shim 的格式。
+两台串联的交换机分别在转发的 IPv4 报文中插入一个 14 字节的 INT 遥测头。接收端读取这两个遥测头，就能知道报文经过了哪些交换机。[单交换机 INT 示例](int.md)介绍了遥测头的格式。
 
 ## 跑起来
 
@@ -41,6 +41,8 @@ packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
 
 `hop 1` 对应 `s1`，`hop 2` 对应 `s2`。`ts` 来自各自交换机的 `ingress_global_timestamp`。`aligned` 是监听器估算的到达时刻，用 Unix 微秒表示。两个估算值之差显示在 `latency_s1_to_s2` 一行。关于上例中的负值，见[跨交换机时间戳对齐](#跨交换机时间戳对齐如何工作)。
 
+在本拓扑中，`s1` 从端口 2 发往 `s2`，`s2` 从端口 2 发往 `h2`。在这个发包速率下，`queue_depth` 通常为 0。
+
 没有启动时间戳文件时，监听器会显示原始的 `ts`，并标注 `[unaligned]`。
 
 监听器显示三个帧后自动退出。然后在 `p4net>` 提示符下输入 `exit` 停止拓扑。
@@ -63,14 +65,11 @@ packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
 --8<-- "examples/int_multi_hop/int_multi_hop.p4"
 ```
 
-要点：
-
-- 用两个命名 header 实例 `int_shim_1`、`int_shim_2`，不用 P4 header stack。两跳情况下更易读；要做 N 跳，请参考示例 README 的「扩展到 N 跳」一节。
-- ingress 选择第一个未填的 shim slot，从 `standard_metadata` 与配置的 `switch_id` 写入。`next_proto` 链路被重新拼接，使接收方看到 `eth → shim_1 → shim_2 → ipv4` 的顺序。
-- deparser 按声明顺序 emit 所有 valid header。
+- 程序为遥测头预留 `int_shim_1` 和 `int_shim_2` 两个位置。每台交换机在第一个空位写入 `standard_metadata` 中的相关字段和自己的 `switch_id`。路径上后续的交换机直接转发带这两个遥测头的报文。
+- `next_proto` 标明各报头的顺序：以太网头、遥测头 1、遥测头 2、IPv4 头。IPv4 校验和只覆盖 IPv4 头。
 - 拓扑启动时通过 `write_register("MyIngress.switch_id_reg", index=0, value=N)` 为两台交换机分别设置 ID。
 
-## listener
+## 监听器
 
 `examples/int_multi_hop/listener.py`：
 
@@ -78,7 +77,7 @@ packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
 --8<-- "examples/int_multi_hop/listener.py"
 ```
 
-listener 从外层 EtherType 开始遍历 shim 链，每跳解出一个 14 字节 shim，直到 `next_proto` 离开 INT 范围为止。
+监听器从外层 EtherType 开始，每跳读取一个 14 字节的遥测头，并通过 `next_proto` 确定下一个报头的类型。
 
 ## 跨交换机时间戳对齐如何工作
 
@@ -91,7 +90,7 @@ latency_s1_to_s2 = aligned_s2 - aligned_s1
 
 这个差值估算报文先后到达 `s1` 和 `s2` 的时间间隔。从 p4net 记录启动时间戳到 BMv2 开始计时，两台交换机经过的时间可能不同。这会给估算带来误差，有时会像上面的示例一样算出负值。
 
-`setup(net)` 默认把 `Network.boot_timestamps` 保存到 `/tmp/p4net-int-multi-hop-boot-times.json`，监听器启动时读取。每次访问这个属性都会得到一个新的字典，以交换机名为键。可以修改这份副本，运行中的网络状态不受影响。
+`setup(net)` 默认把 `Network.boot_timestamps` 保存到 `/tmp/p4net-int-multi-hop-boot-times.json`。监听器在启动时读取这个文件。
 
 ## 同主机并行运行多份拓扑
 
@@ -115,7 +114,7 @@ printf 'int_shell_pid=%s int_boot_times=%s\n' "$$" "$int_boot_times"
 P4NET_INT_BOOT_TIMES_PATH="$int_boot_times" p4net examples/int_multi_hop/topology.py
 ```
 
-看到 `p4net>` 后，把本次启动输出的 `int_shell_pid=... int_boot_times=...` 整行复制到位于仓库根目录的第二个终端，再进入对应的 `h2` 命名空间启动 listener。
+看到 `p4net>` 后，把本次启动输出的 `int_shell_pid=... int_boot_times=...` 整行复制到位于仓库根目录的第二个终端，再进入对应的 `h2` 命名空间启动监听器。
 
 ```bash
 sudo nsenter --target "$int_shell_pid" --mount --net -- \
@@ -123,20 +122,10 @@ sudo nsenter --target "$int_shell_pid" --mount --net -- \
   --iface h2-eth0 --boot-times "$int_boot_times" --count 3
 ```
 
-listener 显示 `boot times loaded` 后，在对应的 `p4net>` 中发送流量。
+监听器显示 `boot times loaded` 后，在对应的 `p4net>` 中发送流量。
 
 ```text
 h1 ping h2 3 1
 ```
 
-listener 会显示三个包，每个包都有两跳对齐后的时间戳。带 INT 头的帧会到达 listener，`ping` 因为收不到 ICMP 回复会显示 `3 sent, 0 received, 100% loss`。完成后，先在 `p4net>` 输入 `exit`，再退出隔离的 Bash shell。Bash 退出时会删除本次的协调文件。
-
-## 值得注意的点
-
-- **出端口对应路径方向**。s1 从 port 2 朝 s2 转发；s2 从 port 2 朝 h2 转发。不同拓扑会得到不同的端口号。
-
-## 注意事项
-
-- **当前流水线只支持两跳**。第三台交换机会发现两个 shim slot 都已 valid，直接转发不再追加。真实部署用 MAX_HOPS 深度的 P4 header stack——示例 README 里有改写步骤。
-- **队列深度**。在本示例的发包速率下，`queue_depth` 通常为 0。
-- **不重算插入 shim 的校验和**。IPv4 校验和只覆盖 IPv4 头本身；位于以太网与 IPv4 之间的 shim 层是无保护的，这与 INT 规范的假设（链路层完整性）一致。
+监听器会显示三个报文及每个报文在两跳的对齐时间戳。此时 `ping` 收不到 ICMP 回复，会显示 `3 sent, 0 received, 100% loss`。完成后，先在 `p4net>` 输入 `exit`，再退出隔离的 Bash。退出 Bash 时会删除本次运行的时间戳文件。

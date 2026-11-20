@@ -1,10 +1,10 @@
 ---
-description: The simplest p4net topology — two hosts on a switch with a hardcoded port-swap pipeline, no runtime table programming.
+description: Connect two hosts through a P4 switch that forwards between ports 1 and 2.
 ---
 
 # Quick start (port swap)
 
-Two hosts on a single switch with a static port-swap pipeline. No runtime table programming. The "hello world" of p4net.
+Two hosts connect to ports 1 and 2 of a BMv2 switch. The P4 program forwards frames between the two ports.
 
 ## Run it
 
@@ -39,10 +39,7 @@ When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 --8<-- "examples/quick_start/quick_start.py"
 ```
 
-The interesting bits:
-
-- `setup(net)` is the hook the `p4net` console script calls between bring-up and shell. Static ARP is seeded here so the first ICMP doesn't have to resolve.
-- The same file works under `python quick_start.py` (the `if __name__ == "__main__"` block) or under `p4net quick_start.py` (the module-level `topology` and `setup`).
+`setup(net)` runs after the network starts and before the shell opens. It sets static ARP entries so the first ping can use the peer's MAC address immediately.
 
 ## P4 program
 
@@ -52,15 +49,10 @@ The interesting bits:
 --8<-- "examples/quick_start/quick_start.p4"
 ```
 
-The ingress control sets `std.egress_spec` based on `ingress_port` — no tables, no runtime control plane needed.
-
-## What's interesting
-
-- It's the smallest possible working program. If `pingall` succeeds here, the rest of the toolchain (`p4c`, BMv2, namespaces, veth pairs, P4Runtime) is operational.
-- The dataplane has no notion of L3 — no IPv4 header parsing, no ARP. Static ARP in `setup(net)` is what makes the L3 ping work.
+The ingress control selects the output port from the input port. This also forwards ARP frames between the two ports.
 
 ## Variations to try
 
-- Add a third host on port 3. Without table programming, packets to port 3 hit the implicit drop (since the port-swap covers only 1 ↔ 2).
-- Replace the conditional with a single `mark_to_drop(std)` and watch `pingall` produce all `X` cells.
+- Add a third host on port 3. The current program drops frames arriving on that port and forwards traffic from ports 1 and 2 only to each other.
+- Replace the ingress conditional with `mark_to_drop(std)` and restart the topology. `pingall` reports `0/2 succeeded`.
 - Add `loss_pct=20.0` to the `add_link()` call for `h1` and `s1`. Compare the loss summaries from `h1 ping h2 10 1` before and after the change.

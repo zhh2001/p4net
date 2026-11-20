@@ -63,12 +63,12 @@ Traffic from `h1` to `h2` gets 220 ms of added delay. The reverse path has no co
 --8<-- "examples/asymmetric_link/asymmetric.p4"
 ```
 
-Identical port-swap pipeline as [Quick start](quick-start.md). The asymmetry lives entirely in the link impairment, not the dataplane.
+The switch forwards between ports 1 and 2 as in [Quick start](quick-start.md). The one-way delays come from the link settings.
 
-## What's interesting
+## Link direction and parameters
 
-- **Direction semantics are fixed by `(a, b)` ordering.** `Link(h1, s1, delay_a_to_b="200ms")` shapes h1→s1. If you swap the order to `Link(s1, h1, ...)`, the same `delay_a_to_b` would shape s1→h1 instead. The `add_link(a, b, ...)` argument order is the source of truth.
-- **Symmetric and asymmetric on the same parameter is rejected at construction.** You can't say `delay="50ms"` plus `delay_a_to_b="100ms"`. Pick one or the other for any given parameter, then mix freely across parameters (e.g. symmetric `bandwidth` with asymmetric `delay`).
+- `add_link(a, b, ...)` defines the directions. For example, `add_link(h1, s1, delay_a_to_b="200ms")` adds delay to traffic from `h1` to `s1`.
+- For the base delay of a link, choose a shared `delay` or separate `delay_a_to_b` and `delay_b_to_a` values. Other settings can use a different choice, such as shared bandwidth with separate delays.
 
 ## Variations to try
 

@@ -7,28 +7,28 @@ description: p4net 文档中使用到的 P4、SDN、Linux 网络与工具相关�
 ## P4 生态
 
 `P4_16`
-:   P4 语言（数据平面编程语言）当前的主要版本。p4net 只消费 P4_16 源码。
+:   P4Net 示例采用的 P4 语言版本。
 
 `v1model`
-:   BMv2 `simple_switch` / `simple_switch_grpc` 使用的 P4 参考架构。规定了 p4net 假设的 parser → ingress → traffic-manager → egress → deparser 形态。
+:   BMv2 的 `simple_switch` 和 `simple_switch_grpc` 使用的 P4 架构。它定义了解析、入口处理、流量管理、出口处理和报文重组等阶段。
 
 `PSA`
 :   可移植交换机架构（Portable Switch Architecture）。它定义了可编程交换机的报文处理模块和常用 extern。p4net 目前只支持 `v1model`。参见 [P4 架构支持](known-limitations.md#3-不支持-psa-架构)。
 
 `p4c`
-:   官方 P4 编译器。p4net 调用 `p4c -b bmv2 --p4runtime-files=p4info.txtpb` 同时产出 BMv2 JSON 与 P4Info。
+:   P4 编译器。P4Net 用它生成 BMv2 JSON 和 P4Info。
 
 `P4Info`
 :   描述编译后 P4 程序中表、动作、计数器、寄存器以及控制器报头布局的 protobuf 消息。让通用 P4Runtime 客户端能够按名字定位具体流水线。
 
 `BMv2`
-:   Behavioral Model 第 2 版——官方软件 P4 数据平面。`simple_switch_grpc` 是开启 P4Runtime 服务的 v1model BMv2 二进制。
+:   Behavioral Model 第 2 版，P4 的参考软件交换机。`simple_switch_grpc` 可运行 v1model 程序并提供 P4Runtime 服务。
 
 `simple_switch_grpc`
-:   p4net 实际使用的 BMv2 二进制。监听可配置的 gRPC 端口（默认 50051）提供 P4Runtime，可选监听 Thrift 端口（默认 9090）提供数据平面调试通道。
+:   P4Net 启动的 BMv2 可执行程序。第一台交换机默认在 50051 端口提供 P4Runtime gRPC 服务，在 9090 端口提供 Thrift 服务。两类端口都可按交换机设置。
 
 `P4Runtime`
-:   P4 数据平面的标准控制平面协议。通过 protobuf 定义；运行在 gRPC 之上。覆盖流水线配置、表项 CRUD、计数器读取、寄存器读取、组播组管理，以及用于异步数据包 I/O 的 StreamChannel。
+:   通过 gRPC 控制 P4 设备的协议，支持配置流水线、表项、计数器、寄存器和组播组，也可通过 StreamChannel 收发报文。
 
 ## P4 数据平面原语
 
@@ -56,10 +56,10 @@ description: p4net 文档中使用到的 P4、SDN、Linux 网络与工具相关�
 ## 控制平面概念
 
 `Control plane`
-:   决定数据平面应该做什么的组件——下发表项、读计数器、响应 packet-in。对 p4net 而言，控制平面就是你的 Python 拓扑加 setup 代码。
+:   配置和监控转发行为的软件。在 P4Net 中，可以通过 Python 控制器或命令行下发表项、读取计数器和接收 PacketIn。
 
 `Data plane`
-:   按线速处理单个数据包的组件。对 p4net 而言是 `simple_switch_grpc`。
+:   交换机中按已加载的程序处理报文的部分。P4Net 在 BMv2 中运行该程序。
 
 `Pipeline`
 :   交换机当前运行的编译后数据平面程序（parser + 控制 + deparser）。通过 P4Runtime 的 `SetForwardingPipelineConfig` 推送。
@@ -73,22 +73,22 @@ description: p4net 文档中使用到的 P4、SDN、Linux 网络与工具相关�
 ## Linux 网络
 
 `Network namespace`（`netns`）
-:   内核隔离的网络栈：独立的接口、路由表、IP 地址、邻居缓存。p4net 把每台主机放进各自的命名空间。
+:   拥有独立接口、地址、路由表和邻居表的网络栈。P4Net 为每台主机创建单独的网络命名空间。
 
 `veth pair`
-:   一对相互连接的虚拟以太网接口——从其一发出的包出现在另一端。p4net 用它把主机（在自己的命名空间里）和交换机（在 root 命名空间）连起来。
+:   一对相连的虚拟以太网接口。报文从一端发出后会到达另一端。P4Net 用它连接拓扑中的节点。
 
 `qdisc`
-:   Queueing discipline。Linux 在接口上的流量控制状态机；负责调度、整形、丢包。
+:   队列调度规则（Queueing discipline）。它决定 Linux 接口如何对报文排队、调度或丢弃。
 
 `netem`
-:   网络仿真 `qdisc`——加可配置的延迟、抖动、丢包、乱序、损坏。
+:   用于网络仿真的 Linux 队列调度规则，可模拟时延、抖动、丢包、乱序和报文损坏。
 
 `tc`
-:   编程 `qdisc` 的用户态工具。p4net 通过 `p4net.runtime.apply_netem` 调用 `tc qdisc add ... root netem ...`。
+:   配置 Linux 流量控制的命令，包括配置 `netem` 等队列调度规则。
 
 `sysctl`
-:   读写内核 `/proc/sys` 旋钮的用户态工具。p4net 用 `sysctl -w net.ipv6.conf.<iface>.disable_ipv6=...` 实现按接口的 IPv6 门控。
+:   读取和修改 `/proc/sys` 下内核参数的命令。P4Net 用 `net.ipv6.conf.<iface>.disable_ipv6` 为单个接口启用或关闭 IPv6。
 
 `Link-local address`
 :   仅在本链路使用的 IPv6 地址，属于 `fe80::/10`。接口启用 IPv6 后，Linux 根据 `addr_gen_mode` 设置决定是否自动生成此类地址。
@@ -97,24 +97,15 @@ description: p4net 文档中使用到的 P4、SDN、Linux 网络与工具相关�
 :   无状态地址自动配置（Stateless Address Autoconfiguration）。p4net 在启用 IPv6 的主机接口上设置 `accept_ra=0` 和 `autoconf=0`，禁止根据路由器通告自动配置地址。
 
 `ND`（Neighbor Discovery）
-:   IPv6 的邻居发现，对应 IPv4 的 ARP；解析 IPv6 到 MAC。
+:   IPv6 的邻居发现协议，可发现路由器和邻居，也可解析 IPv6 地址对应的链路层地址。
 
 `ARP`
-:   Address Resolution Protocol。把 IPv4 解析为 MAC。p4net 的示例都注入静态 ARP，因为 BMv2 没有内置 ARP 响应器。
+:   地址解析协议（Address Resolution Protocol）。它用于查询本地链路上 IPv4 地址对应的 MAC 地址。[L3 转发示例](examples/l3-forwarding.md)为 IPv4 转发程序配置了静态 ARP 条目。
 
 ## 工具与打包
 
 `PyPI`
-:   Python Package Index。p4net 在此发布 wheel，包名为 `p4net`。
-
-`MkDocs`
-:   p4net 文档站点使用的静态站点生成器。
-
-`Material for MkDocs`
-:   本站使用的 MkDocs 主题，提供搜索、深色模式、社交卡片、导航元素等能力。
-
-`mkdocstrings`
-:   从 Python docstring 自动生成 API 参考的 MkDocs 插件。
+:   Python 软件包索引（Python Package Index）。P4Net 的发布包名为 `p4net`。
 
 `Graphviz DOT`
 :   `Topology.to_graphviz()` 输出的图描述语言。`dot` 命令把 DOT 渲染为 PNG/SVG/PDF。

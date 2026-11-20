@@ -1,10 +1,10 @@
 ---
-description: 单交换机 INT（带内网络遥测）示例。交换机在每个转发包里插入 14 字节 shim；接收端用原始套接字解码。
+description: 在一台交换机转发的 IPv4 报文中插入并读取 14 字节的 INT 遥测头。
 ---
 
 # INT（带内网络遥测）
 
-单交换机示例：P4 流水线给每个转发的 IPv4 包嵌入一个 14 字节的 INT shim 头。shim 中携带交换机 ID、入端时间戳、出端口、队列深度，以及原始 etherType。接收主机命名空间里的原始套接字 listener 解析 shim，按包打印结构化遥测。
+交换机为每个转发的 IPv4 报文插入一个 14 字节的遥测头（shim）。接收端从中读取交换机 ID、入口时间戳、出端口、队列深度和原始 EtherType。
 
 ## 跑起来
 
@@ -57,13 +57,11 @@ sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 --8<-- "examples/int/int.p4"
 ```
 
-要点：
+- 报文重组时，将有效的遥测头放在以太网头和 IPv4 头之间。外层 EtherType 为 `0x88B6`，`next_proto` 保存原始 EtherType（IPv4 为 `0x0800`）。
+- LPM 表选定出端口后，入口处理从 `standard_metadata` 读取相关字段并写入遥测头。
+- `setup(net)` 把交换机 ID 1 写入 `MyIngress.switch_id` 寄存器。修改这个值只需调整 `setup(net)`。
 
-- shim 有效时，deparser 将它插入以太网头与 IPv4 头之间。外层 EtherType 是 `0x88B6`，shim 的 `next_proto` 保存原始 EtherType（IPv4 为 `0x0800`）。
-- ingress 控制在 LPM 表设好 `std.egress_spec` 之后再从 `standard_metadata` 填 shim。
-- `switch_id` 现在是寄存器（``register<bit<8>>(1) switch_id;``）。拓扑的 ``setup(net)`` 用 ``s1.client.write_register("MyIngress.switch_id", index=0, value=1)`` 写入；多交换机 INT 部署可以无重编译地为每台分配独立编号。
-
-## listener
+## 监听器
 
 `examples/int/listener.py`：
 
@@ -71,16 +69,11 @@ sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 --8<-- "examples/int/listener.py"
 ```
 
-listener 打开原始 `AF_PACKET` 套接字，按 `etherType == 0x88B6` 过滤，按字节偏移解 14 字节 shim，打印结构化结果。
+监听器通过原始 `AF_PACKET` 套接字接收以太网帧，筛选 EtherType 为 `0x88B6` 的帧，再读取并显示 14 字节的遥测头。
 
-## 注意事项
-
-- **`queue_depth` 几乎总是 0**：BMv2 默认队列下，除非出端队列确实积压（本示例流量根本不会），该字段就停在 0。线路通了仅此而已。
-- [两台交换机的 INT 示例](int-multi-hop.md)展示了如何在每一跳加一个 shim。
-- **交换机 ID 由寄存器配置**：改拓扑 ``setup(net)`` 中 ``write_register("MyIngress.switch_id", index=0, value=N)`` 的 ``N`` 即可换标。多交换机部署给每台分配不同 ``N`` ，无须重编译。
+在本示例的发包速率下，出口队列通常为空，因此 `queue_depth` 通常为 0。
 
 ## 可以试试
 
-- 加第二个交换机，把它的 ``switch_id`` 寄存器写为 ``2``，串成 h1 → s1 → s2 → h2，扩展 listener（或 P4 流水线）处理 shim 栈。
-- 把 listener 输出重定向到文件，离线算出基于 `ingress_timestamp_us` 的逐流延迟差。
-- 给某条 h↔s 链路加 `delay="50ms"` 或 `loss_pct=2.0`，看时间戳与包数是否如预期变化。
+- 比较 `ingress_timestamp_us`，计算相邻报文到达交换机的时间间隔。
+- 运行[两台交换机的 INT 示例](int-multi-hop.md)，读取每一跳插入的遥测头。

@@ -32,7 +32,7 @@ description: 一个四主机两交换机的 p4net 教程，覆盖 IPv4 与 IPv6 
 - 每台主机都拥有同一个 `/24` 与 `/64` 上的 IPv4 与 IPv6 地址。
 - 流水线通过 `ipv4_lpm` 表转发 IPv4，通过 `ipv6_lpm` 表转发 IPv6——两张表都在运行时编程。未匹配的包通过 CPU 端口上送控制器。
 
-## 步骤 1：搭建拓扑骨架
+## 步骤 1：定义拓扑
 
 保存为 `tutorial.py`：
 
@@ -196,7 +196,7 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 - `set_egress_port(port)` 带参数，控制器为任意主机安装路由时无需为每台主机定义不同动作。
 - 控制器注入的包（解析时走 `packet_out` 报头分支）会按 `hdr.packet_out.egress_port` 转发，并在 deparse 之前把控制器报头标记无效，从而让线上包看起来正常。
 
-## 步骤 4：编程表项与注入邻居
+## 步骤 4：下发转发表项并配置静态邻居
 
 回到 `tutorial.py`：
 

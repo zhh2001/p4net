@@ -50,8 +50,6 @@ Each host is on its own IPv4 subnet. `setup(net)` adds a `/32` on-link route and
 --8<-- "examples/async_concurrent/concurrent.p4"
 ```
 
-Standard `ipv4_lpm` table; nothing exotic in the pipeline. The interesting bit is on the Python side.
-
 ## See also
 
 - [Async client](../async-client.md) — overview, mastership patterns, cancellation semantics.

@@ -1,10 +1,10 @@
 ---
-description: Single-switch INT (in-band network telemetry) demo. The switch inserts a 14-byte shim into every forwarded packet; a raw-socket listener decodes it on the receiver.
+description: Insert and read a 14-byte INT header on IPv4 packets forwarded by one switch.
 ---
 
 # INT (in-band network telemetry)
 
-Single-switch demo where the P4 pipeline embeds a 14-byte INT shim header into every forwarded IPv4 packet. The shim carries the switch identifier, ingress timestamp, egress port, queue depth, and the original etherType. A raw-socket listener inside the receiving host's namespace decodes the shim and prints structured per-packet telemetry.
+The switch inserts a 14-byte telemetry header, called a shim, into each forwarded IPv4 packet. The receiver reads the switch ID, ingress timestamp, egress port, queue depth, and original EtherType from this header.
 
 ## Run it
 
@@ -57,11 +57,9 @@ The `setup(net)` hook installs the IPv4 forwarding entries via P4Runtime and con
 --8<-- "examples/int/int.p4"
 ```
 
-Key points:
-
 - The deparser emits the shim between Ethernet and IPv4 when its valid bit is set. The outer EtherType is `0x88B6` and the shim’s `next_proto` carries the original EtherType (`0x0800` for IPv4).
 - The ingress control populates the shim from `standard_metadata` after the LPM table has set `std.egress_spec`.
-- `switch_id` is now register-backed (``register<bit<8>>(1) switch_id;``). The topology's ``setup(net)`` calls ``s1.client.write_register("MyIngress.switch_id", index=0, value=1)``; multi-switch INT deployments can assign distinct identifiers without recompiling.
+- `setup(net)` writes switch ID 1 to the `MyIngress.switch_id` register. Changing this value in `setup(net)` leaves the P4 program intact.
 
 ## The listener
 
@@ -73,14 +71,9 @@ Key points:
 
 The listener opens a raw `AF_PACKET` socket, filters by `etherType == 0x88B6`, decodes the 14-byte shim by byte offset, and prints structured output.
 
-## Caveats
-
-- **`queue_depth` is almost always 0** with BMv2's default queueing. The field is wired in but stays at zero unless the egress queue actually backs up — which doesn't happen at this demo's traffic level.
-- Each switch adds one shim in the [two-switch INT example](int-multi-hop.md).
-- **Switch identifier is register-backed.** Change the ``write_register("MyIngress.switch_id", index=0, value=N)`` call in the topology's ``setup(net)`` to relabel; multi-switch deployments give each switch a distinct ``N`` with no recompile required.
+At the traffic rate used here, the egress queue is typically empty, so `queue_depth` is usually zero.
 
 ## Variations to try
 
-- Add a second switch, write its ``switch_id`` register to ``2``, and chain h1 → s1 → s2 → h2. Extend the listener (or the P4 pipeline) to handle a shim stack.
-- Pipe the listener's output to a file and post-process to compute per-flow latency deltas from `ingress_timestamp_us`.
-- Add `delay="50ms"` or `loss_pct=2.0` to one of the h↔s links and verify the timestamps and packet counts respond as expected.
+- Compare the `ingress_timestamp_us` values to measure the interval between packets arriving at the switch.
+- Follow the [two-switch INT example](int-multi-hop.md) to read a telemetry header from each hop.

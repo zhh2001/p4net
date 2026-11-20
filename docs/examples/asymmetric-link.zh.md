@@ -63,12 +63,12 @@ qdisc netem 8001: root ... delay 200ms
 --8<-- "examples/asymmetric_link/asymmetric.p4"
 ```
 
-与[快速上手](quick-start.md)相同的端口翻转流水线。非对称完全依赖链路损伤实现，与数据平面无关。
+交换机与[快速上手](quick-start.md)一样，在端口 1 和端口 2 之间转发报文。单向时延由链路配置决定。
 
-## 关键设计点
+## 链路方向与参数
 
-- **方向语义由 `(a, b)` 顺序决定**。`Link(h1, s1, delay_a_to_b="200ms")` 整形 h1→s1。如果交换写法为 `Link(s1, h1, ...)`，同样的 `delay_a_to_b` 整形的将是 s1→h1。`add_link(a, b, ...)` 的参数顺序就是基准。
-- **同一参数同时给对称值与非对称值会被构造期拒绝**。不能既写 `delay="50ms"` 又写 `delay_a_to_b="100ms"`——同一个参数只能二选一。但跨参数自由组合是允许的（例如对称 `bandwidth` 加非对称 `delay`）。
+- 链路方向由 `add_link(a, b, ...)` 的端点顺序决定。`add_link(h1, s1, delay_a_to_b="200ms")` 会给从 `h1` 发往 `s1` 的报文增加时延。
+- 设置基础时延时，可以用 `delay` 给两个方向设置同一个值，也可以通过 `delay_a_to_b` 和 `delay_b_to_a` 分别设置。其他参数可以独立选择，例如时延按方向设置、带宽统一设置。
 
 ## 可尝试的变体
 

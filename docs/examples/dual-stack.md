@@ -4,7 +4,7 @@ description: Connect two dual-stack hosts through one switch and verify IPv4 and
 
 # Dual stack
 
-Two hosts on a single switch, each carrying both an IPv4 `/24` and an IPv6 `/64` address. The pipeline is the same port-swap forwarder as [Quick start](quick-start.md) — L2 swapping treats v4 and v6 identically. What's interesting is the address management.
+Two hosts share a switch. Each host has an IPv4 `/24` address and an IPv6 `/64` address. Use `pingall` and `pingall6` to check both protocols.
 
 ## Run it
 
@@ -64,14 +64,14 @@ Each host sets `Host.ip` and `Host.ip6`. The orchestrator enables IPv6 on the in
 --8<-- "examples/dual_stack/dual_stack.p4"
 ```
 
-The pipeline is L3-agnostic — it only swaps ports. v4 and v6 traffic take the same path.
+The program forwards IPv4 and IPv6 frames between ports 1 and 2, using the same forwarding rule as [Quick start](quick-start.md).
 
-## What's interesting
+## IPv6 interface settings
 
 - p4net sets `accept_ra=0` to ignore router advertisements and `autoconf=0` to disable address configuration from advertised prefixes.
 - `setup(net)` adds static IPv4 and IPv6 neighbor entries so the first ping can use the configured MAC addresses.
 
 ## Variations to try
 
-- Drop the `ip6` arguments from one host and confirm `pingall6` excludes it from the matrix (it filters on `primary_ip6`).
+- Remove `ip6` from `h2` and remove both static IPv6 neighbor entries from `setup(net)`. Restart the topology and run `pingall6`. The matrix lists only `h1` and reports `0/0 succeeded`.
 - Add `loss_pct=10.0` to the link between `h1` and `s1`. Compare the loss summaries from `h1 ping h2 10 1` and `h1 ping6 h2 10 1`. The link applies the same drop probability to IPv4 and IPv6 packets, and measured loss can vary between runs.

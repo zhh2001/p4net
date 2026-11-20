@@ -14,15 +14,15 @@ Each walkthrough gives the command for its own topology file.
 
 ## What's bundled
 
-- **[Quick start (port swap)](quick-start.md)** — two hosts on a single switch with a hardcoded port-swap pipeline. The smallest working topology; no runtime table programming needed.
-- **[L3 forwarding](l3-forwarding.md)** — same two hosts, but the pipeline routes via an `ipv4_lpm` table that's programmed from Python at startup. ARP is pre-seeded.
-- **[CPU punt](cpu-punt.md)** — a one-host topology where every dataplane packet is punted to the controller via the CPU port. Demonstrates `<switch> packet send` and `<switch> packet listen`.
-- **[Dual stack](dual-stack.md)** — two hosts each with both IPv4 and IPv6 addresses on the same `/24` and `/64`. Shows the per-interface IPv6 sysctl gating.
-- **[Asymmetric link](asymmetric-link.md)** — two hosts with different one-way delays, configured with `delay_a_to_b` and `delay_b_to_a`.
-- **[IPv6 LPM](ipv6-lpm.md)** — two IPv6-only hosts with a 128-bit LPM table programmed at runtime. Shows how `<switch> table dump` renders IPv6 entries in human form (`fd00::1/128`) instead of raw bytes.
-- **[INT (in-band network telemetry)](int.md)** — single-switch INT: the pipeline inserts a 14-byte shim header carrying switch identity, ingress timestamp, egress port, queue depth, and the original etherType. A raw-socket listener decodes the shim on the receiver.
-- **[Multi-hop INT](int-multi-hop.md)** — two switches in series each insert their own shim; the listener decodes the full hop-by-hop stack. Production-style telemetry topology; same P4 binary on both switches, identity supplied by the v1.2 register API.
-- **[Async concurrent](async-concurrent.md)** — three hosts on a three-switch mesh. `AsyncP4RuntimeClient` populates the switches' IPv4 forwarding tables concurrently.
+- **[Quick start (port swap)](quick-start.md)** forwards frames between switch ports 1 and 2.
+- **[L3 forwarding](l3-forwarding.md)** installs IPv4 routes from Python and includes a longest-prefix matching exercise.
+- **[CPU punt](cpu-punt.md)** shows how to receive PacketIn and send PacketOut through the CPU port.
+- **[Dual stack](dual-stack.md)** assigns IPv4 and IPv6 addresses to two hosts and checks connectivity for both.
+- **[Asymmetric link](asymmetric-link.md)** shows how different delays in each direction affect ping round-trip time.
+- **[IPv6 LPM](ipv6-lpm.md)** installs IPv6 routes and displays them in `table dump` using prefix notation such as `fd00::1/128`.
+- **[INT (in-band network telemetry)](int.md)** uses one switch to insert a telemetry header and a receiver to read it.
+- **[Multi-hop INT](int-multi-hop.md)** shows the telemetry inserted by each of two switches in series.
+- **[Async concurrent](async-concurrent.md)** programs the IPv4 forwarding tables of three switches concurrently.
 
 ## How they fit together
 

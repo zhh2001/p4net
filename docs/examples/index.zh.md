@@ -14,15 +14,15 @@ sudo p4net examples/quick_start/quick_start.py
 
 ## 包含哪些示例
 
-- **[快速上手（端口翻转）](quick-start.md)** —— 一台交换机上的两台主机，使用写死的端口翻转流水线。最小可运行拓扑，无需运行时表项编程。
-- **[L3 转发](l3-forwarding.md)** —— 同样的两台主机，但流水线通过 Python 在启动时编程下发的 `ipv4_lpm` 表来转发。ARP 已预先注入。
-- **[CPU 上送](cpu-punt.md)** —— 单主机拓扑，每个数据平面包都通过 CPU 端口上送控制器。演示 `<switch> packet send` 与 `<switch> packet listen`。
-- **[双栈](dual-stack.md)** —— 两台主机各自在同一 `/24` 与 `/64` 上配置 IPv4 与 IPv6 地址。展示按接口的 IPv6 sysctl 门控。
-- **[非对称链路](asymmetric-link.md)** —— 两台主机，用 `delay_a_to_b` 和 `delay_b_to_a` 按方向增加时延。
-- **[IPv6 LPM](ipv6-lpm.md)** —— 两台仅 IPv6 的主机，128 位 LPM 表在运行时编程。展示 `<switch> table dump` 把 IPv6 表项渲染为人类可读形式（`fd00::1/128`）而非裸字节。
-- **[INT（带内网络遥测）](int.md)** —— 单交换机 INT：流水线在每个转发包里插入一个 14 字节 shim 头，携带交换机标识、入端时间戳、出端口、队列深度与原始 etherType。原始套接字 listener 在接收端解析 shim。
-- **[多跳 INT](int-multi-hop.md)** —— 两台串联交换机各自插入自己的 shim；listener 解析整条逐跳栈。更贴近生产形态的遥测拓扑；同一份 P4 二进制跑在两台交换机上，身份通过 v1.2 寄存器 API 提供。
-- **[异步并发](async-concurrent.md)** —— 三台交换机两两相连，每台接入一台主机。用 `AsyncP4RuntimeClient` 并发下发 IPv4 转发表项。
+- **[快速上手（端口翻转）](quick-start.md)** 在交换机的端口 1 和端口 2 之间转发报文。
+- **[L3 转发](l3-forwarding.md)** 用 Python 下发 IPv4 路由，并验证最长前缀匹配。
+- **[CPU 上送](cpu-punt.md)** 演示通过 CPU 端口接收 PacketIn 和发送 PacketOut。
+- **[双栈](dual-stack.md)** 为两台主机配置 IPv4 和 IPv6 地址，并验证两种协议的连通性。
+- **[非对称链路](asymmetric-link.md)** 查看各方向的时延如何影响 ping 的往返时间。
+- **[IPv6 LPM](ipv6-lpm.md)** 下发 IPv6 路由，并在 `table dump` 中查看 `fd00::1/128` 这样的前缀。
+- **[INT（带内网络遥测）](int.md)** 由一台交换机插入遥测头，再由接收端读取。
+- **[多跳 INT](int-multi-hop.md)** 查看两台串联交换机分别插入的遥测数据。
+- **[异步并发](async-concurrent.md)** 并发配置三台交换机的 IPv4 转发表。
 
 ## 一览
 

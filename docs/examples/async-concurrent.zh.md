@@ -50,8 +50,6 @@ h3     1    1    -
 --8<-- "examples/async_concurrent/concurrent.p4"
 ```
 
-标准 `ipv4_lpm` 表，流水线本身没有什么花活；有趣的部分在 Python 那一侧。
-
 ## 相关阅读
 
 - [异步客户端](../async-client.md)——总览、主控权模式、取消语义。

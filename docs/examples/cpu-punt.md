@@ -83,6 +83,5 @@ Two `@controller_header` declarations define the metadata layout for PacketIn (c
 
 ## Variations to try
 
-- Register a Python handler with `s1.client.on_packet_in(handler)` and parse the punted Ethernet frame to drive a learning switch.
+- Register a Python handler with `s1.client.on_packet_in(handler)` and read the source MAC address and ingress port from each PacketIn.
 - Use `s1.client.send_packet_out(payload, {"egress_port": 1})` from a setup script to inject a sequence of probe frames.
-- Add an `ipv4_lpm` table whose `default_action = punt()` to mix programmed forwarding with controller fallback.
