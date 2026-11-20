@@ -270,14 +270,24 @@ ok
 
 在计数器名称后加 `--nonzero`，可省略包数和字节数都为零的单元。输出会注明省略数量。所有返回的单元均为零时，精简视图只显示省略提示。
 
-表头和数值右对齐。P4 计数器类型决定记录哪些计数。使用 `<switch> counter reset <name> [<index>]` 可清零指定单元，省略索引则清零所有返回的单元。
+表头和数值右对齐。
+
+使用 `<switch> counter reset <name> [<index>]` 重置指定单元，省略索引则重置交换机返回的所有单元。BMv2 同时返回 `pkts` 和 `bytes`，并按 P4Info 中的计数单位清零对应字段。`PACKETS` 清零 `pkts`，`BYTES` 清零 `bytes`，`BOTH` 清零两个字段。
+
+在刚启动的 [L3 转发拓扑](examples/l3-forwarding.md) 中，`MyIngress.ingress_pkts` 的计数单位是 `PACKETS`。执行一次 `ping` 后，索引 `1` 的包数变为非零。以下实测中，重置后 `pkts` 归零，`bytes` 保持为 `98`。
 
 ```text
+p4net> h1 ping h2
+OK
+
+p4net> s1 counter MyIngress.ingress_pkts 1
+pkts=1 bytes=98
+
 p4net> s1 counter reset MyIngress.ingress_pkts 1
 ok
 
 p4net> s1 counter MyIngress.ingress_pkts 1
-pkts=0 bytes=0
+pkts=0 bytes=98
 ```
 
 ### `<switch> mcast list`

@@ -270,14 +270,24 @@ Read an indirect counter. A specific index returns `pkts=N bytes=M`. With just t
 
 Add `--nonzero` after the counter name to omit cells whose packet and byte counts are both zero. The shell reports how many cells were omitted. When all returned cells are zero, this view shows only the omission message.
 
-Table columns are right-aligned. The P4 counter type determines which counts are recorded. Use `<switch> counter reset <name> [<index>]` to clear a specific cell or all returned cells.
+Table columns are right-aligned.
+
+Use `<switch> counter reset <name> [<index>]` to reset one cell. Omit the index to reset all cells returned by the switch. BMv2 reports both `pkts` and `bytes` and clears the fields selected by the counter unit in P4Info. `PACKETS` clears `pkts`, `BYTES` clears `bytes`, and `BOTH` clears both fields.
+
+In a fresh [L3 forwarding topology](examples/l3-forwarding.md), `MyIngress.ingress_pkts` has unit `PACKETS`. One ping gives cell `1` a nonzero packet count. After the reset, `pkts` is zero and `bytes` stays at `98` in this run.
 
 ```text
+p4net> h1 ping h2
+OK
+
+p4net> s1 counter MyIngress.ingress_pkts 1
+pkts=1 bytes=98
+
 p4net> s1 counter reset MyIngress.ingress_pkts 1
 ok
 
 p4net> s1 counter MyIngress.ingress_pkts 1
-pkts=0 bytes=0
+pkts=0 bytes=98
 ```
 
 ### `<switch> mcast list`

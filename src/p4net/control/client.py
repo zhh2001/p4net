@@ -718,7 +718,10 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> None:
-        """Zero one or all indices of an indirect counter."""
+        """Request zero values for one indirect counter cell or all returned cells.
+
+        BMv2 applies the reset to the fields selected by the P4Info counter unit.
+        """
         self._require_connected_with_index()
         idx = self._index
         assert idx is not None

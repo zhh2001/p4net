@@ -60,7 +60,7 @@ description: p4net 公开接口的稳定性等级、弃用规则和各包分类�
 | `P4RuntimeClient` | 稳定 | 同步连接管理、流水线配置、表项、计数器、寄存器、组播组和报文收发。 |
 | `AsyncP4RuntimeClient` | 稳定，自 1.7 起 | 异步连接管理、流水线安装、表项、计数器、寄存器和报文收发。与同步接口的差异见[异步指南](async-client.md#与同步接口的区别)。 |
 | `AsyncOperationCancelledError` | 稳定，自 1.7 起 | 异步客户端的取消异常，继承 `P4RuntimeError`。具体触发条件见[异步指南](async-client.md#错误超时与取消)。 |
-| `P4RuntimeClient.read_counter`、`P4RuntimeClient.reset_counter` | 稳定 | 读取计数器单元，或将其报文数和字节数清零。 |
+| `P4RuntimeClient.read_counter`、`P4RuntimeClient.reset_counter` | 稳定 | 读取或重置间接计数器单元。BMv2 按 P4Info 中的计数单位清零对应字段。 |
 | `P4RuntimeClient.read_register`、`P4RuntimeClient.write_register`、`AsyncP4RuntimeClient.read_register`、`AsyncP4RuntimeClient.write_register` | 稳定 | 通过 BMv2 的 Thrift 服务和 `simple_switch_CLI` 读取寄存器单元或数组、写入单个单元。 |
 | 自动生成选举 ID 的策略 | 暂定 | `Network` 和未显式指定 ID 的异步客户端使用毫秒时间戳。直接创建的同步客户端默认使用 `(1, 0)`。显式传入的 `(high, low)` 参数格式保持稳定。 |
 | `P4InfoIndex` | 稳定 | P4Info 加载、表/动作/计数器/寄存器查询、匹配和动作编码，以及控制器元数据处理。下方单列的格式化方法有自己的等级。 |

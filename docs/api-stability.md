@@ -60,7 +60,7 @@ The sync and async clients have different call patterns and some different metho
 | `P4RuntimeClient` | Stable | Sync connection lifecycle, pipeline configuration, tables, counters, registers, multicast groups, and packet I/O. |
 | `AsyncP4RuntimeClient` | Stable since 1.7 | Async connection lifecycle, pipeline installation, tables, counters, registers, and packet I/O. See the [async guide](async-client.md#differences-from-the-sync-api) for differences from the sync API. |
 | `AsyncOperationCancelledError` | Stable since 1.7 | Async client cancellation error, subclassing `P4RuntimeError`. See the [async guide](async-client.md#errors-timeouts-and-cancellation) for the conditions that raise it. |
-| `P4RuntimeClient.read_counter`, `P4RuntimeClient.reset_counter` | Stable | Read counter cells or reset their packet and byte counts to zero. |
+| `P4RuntimeClient.read_counter`, `P4RuntimeClient.reset_counter` | Stable | Read or reset indirect counter cells. On BMv2, the P4Info counter unit determines which fields are reset. |
 | `P4RuntimeClient.read_register`, `P4RuntimeClient.write_register`, `AsyncP4RuntimeClient.read_register`, `AsyncP4RuntimeClient.write_register` | Stable | Read a register cell or array and write a cell through BMv2's Thrift service using `simple_switch_CLI`. |
 | Automatic election ID generation | Provisional | `Network` and async clients without an explicit ID use millisecond timestamps. A directly constructed sync client defaults to `(1, 0)`. The explicit `(high, low)` parameter format is stable. |
 | `P4InfoIndex` | Stable | P4Info loading, table/action/counter/register lookup, match and action encoding, and controller metadata helpers. The formatting method below has its own tier. |
