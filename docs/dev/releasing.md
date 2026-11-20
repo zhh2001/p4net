@@ -37,7 +37,7 @@ sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
 
 All three pytest flags belong in the same run. Run Python environments sequentially because the tests share namespace and interface cleanup. Record the Python, p4c and BMv2 versions, test summary, warnings, skips and excluded tests. Check that test namespaces, interfaces and BMv2 processes have been cleaned up.
 
-The [CI workflow](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml) covers Python 3.10–3.13 on Ubuntu 22.04 and 24.04, root integration tests and package installation. A separate Ubuntu 24.04 job uses p4c and BMv2 to verify connectivity in the async example. Complete the full toolchain run above on a prepared Linux host. The documentation workflow builds strictly on Python 3.10 and 3.12. Confirm both workflows pass for the final candidate commit.
+The [CI workflow](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml) runs the default test set with Python 3.10–3.15 on Ubuntu 22.04 and 24.04. Separate jobs on Ubuntu 24.04 use Python 3.12 to check package installation, run root integration tests, and verify connectivity in the async example with p4c and BMv2. Complete the full toolchain run above on a prepared Linux host. The documentation workflow builds strictly on Python 3.10 and 3.12. Confirm both workflows pass for the final candidate commit.
 
 ## Update version and changelog
 

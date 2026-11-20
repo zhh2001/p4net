@@ -51,7 +51,7 @@ sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
 ### CI matrix
 
 The [CI workflow](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml)
-runs the default test set with Python 3.10–3.13 on Ubuntu 22.04 and 24.04.
+runs the default test set with Python 3.10–3.15 on Ubuntu 22.04 and 24.04.
 A separate job runs the network namespace integration tests as root.
 
 ## Build the documentation

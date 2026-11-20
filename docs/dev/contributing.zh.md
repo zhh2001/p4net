@@ -45,7 +45,7 @@ sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
 
 ### CI 测试矩阵 { #ci-matrix }
 
-[CI 工作流](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml)在 Ubuntu 22.04 和 24.04 上用 Python 3.10–3.13 运行默认测试集。另有一个任务以 root 权限运行网络命名空间集成测试。
+[CI 工作流](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml)在 Ubuntu 22.04 和 24.04 上用 Python 3.10~3.15 运行默认测试集。另有一个任务以 root 权限运行网络命名空间集成测试。
 
 ## 构建文档 { #build-the-documentation }
 

@@ -37,7 +37,7 @@ sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
 
 三个 pytest 开关在同一次运行中启用。不同 Python 环境串行测试，避免共享的命名空间和接口清理相互影响。记录 Python、p4c、BMv2 版本、测试结果、警告、跳过及未选中的用例，并检查测试命名空间、接口和 BMv2 进程已回收。
 
-[CI 工作流](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml) 覆盖 Ubuntu 22.04、24.04 上的 Python 3.10~3.13，另有 root 集成测试和安装包检查。独立的 Ubuntu 24.04 任务使用 p4c 和 BMv2 验证异步并发示例的连通性。完整工具链测试按上面的命令在 Linux 环境中执行。文档工作流使用 Python 3.10、3.12 严格构建。最终候选提交的两个工作流都应通过。
+[CI 工作流](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml)在 Ubuntu 22.04 和 24.04 上用 Python 3.10~3.15 运行默认测试集。Ubuntu 24.04 和 Python 3.12 还用于安装包检查和 root 集成测试。另有一个任务在相同环境下使用 p4c 和 BMv2 验证异步并发示例的连通性。完整工具链测试按上面的命令在 Linux 环境中执行。文档工作流使用 Python 3.10、3.12 严格构建。最终候选提交的两个工作流都应通过。
 
 ## 更新版本与变更日志
 
