@@ -118,6 +118,8 @@ jobs:
 
   p4-toolchain-smoke:
     runs-on: ubuntu-24.04
+    env:
+      P4_APT_PACKAGES: iproute2 iputils-ping procps p4lang-p4c p4lang-bmv2
     defaults:
       run:
         shell: bash
@@ -130,7 +132,8 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install prebuilt P4 toolchain
+      - name: Resolve P4 toolchain packages
+        id: p4-apt
         run: |
           p4lang_repo=https://download.opensuse.org/repositories/home:/p4lang/xUbuntu_24.04
           curl -fsSL --retry 3 "$p4lang_repo/Release.key" -o "$RUNNER_TEMP/p4lang.asc"
@@ -138,8 +141,49 @@ jobs:
           printf 'deb [signed-by=/etc/apt/keyrings/p4lang.asc] %s/ /\n' "$p4lang_repo" \
             | sudo tee /etc/apt/sources.list.d/p4lang.list >/dev/null
           time sudo apt-get -o Acquire::Retries=3 update
-          time sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            iproute2 iputils-ping procps p4lang-p4c p4lang-bmv2
+
+          archives="$RUNNER_TEMP/p4-apt-cache"
+          manifest="$RUNNER_TEMP/p4-apt.sha256"
+          mkdir -p "$archives"
+          read -r -a packages <<< "$P4_APT_PACKAGES"
+          apt-get -qq -o Dir::Cache::archives="$archives" -o Acquire::ForceHash=sha256 \
+            --print-uris --yes --no-install-recommends install "${packages[@]}" | awk '
+              $4 !~ /^SHA256:[0-9a-f]+$/ || length($4) != 71 {
+                print "Missing SHA-256 in APT download plan: " $0 > "/dev/stderr"
+                exit 1
+              }
+              { print substr($4, 8) "  " $2 }
+            ' | LC_ALL=C sort > "$manifest"
+          manifest_hash=$(sha256sum "$manifest")
+          printf 'manifest=%s\n' "${manifest_hash%% *}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache APT package archives
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/p4-apt-cache/*.deb
+          key: p4-apt-ubuntu-24.04-${{ runner.arch }}-${{ steps.p4-apt.outputs.manifest }}
+          restore-keys: p4-apt-ubuntu-24.04-${{ runner.arch }}-
+
+      - name: Install prebuilt P4 toolchain
+        run: |
+          cd "$RUNNER_TEMP/p4-apt-cache"
+          declare -A checksums=()
+          while read -r checksum archive; do
+            checksums[$archive]=$checksum
+          done < "$RUNNER_TEMP/p4-apt.sha256"
+
+          # APT can reuse an existing archive based on its size alone.
+          shopt -s nullglob
+          for archive in *.deb; do
+            if [[ -z "${checksums[$archive]:-}" ]] ||
+              ! sha256sum --check --quiet <<< "${checksums[$archive]}  $archive"; then
+              rm -- "$archive"
+            fi
+          done
+
+          read -r -a packages <<< "$P4_APT_PACKAGES"
+          time sudo apt-get -o Dir::Cache::archives="$PWD" -o Acquire::Retries=3 \
+            -o APT::Keep-Downloaded-Packages=true install -y --no-install-recommends "${packages[@]}"
           sudo p4c --version
           sudo simple_switch_grpc --version
 
