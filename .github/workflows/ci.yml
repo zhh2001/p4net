@@ -115,3 +115,50 @@ jobs:
 
       - name: Run integration tests as root
         run: sudo "$(which pytest)" -m integration --run-integration
+
+  p4-toolchain-smoke:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install prebuilt P4 toolchain
+        run: |
+          p4lang_repo=https://download.opensuse.org/repositories/home:/p4lang/xUbuntu_24.04
+          curl -fsSL --retry 3 "$p4lang_repo/Release.key" -o "$RUNNER_TEMP/p4lang.asc"
+          sudo install -D -m 0644 "$RUNNER_TEMP/p4lang.asc" /etc/apt/keyrings/p4lang.asc
+          printf 'deb [signed-by=/etc/apt/keyrings/p4lang.asc] %s/ /\n' "$p4lang_repo" \
+            | sudo tee /etc/apt/sources.list.d/p4lang.list >/dev/null
+          time sudo apt-get -o Acquire::Retries=3 update
+          time sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            iproute2 iputils-ping procps p4lang-p4c p4lang-bmv2
+          sudo p4c --version
+          sudo simple_switch_grpc --version
+
+      - name: Install package
+        run: python -m pip install -e '.[dev]'
+
+      - name: Verify all six directions in the async example
+        run: |
+          report="$RUNNER_TEMP/p4-toolchain-smoke.xml"
+          time sudo "$(command -v python)" -m pytest -v \
+            --run-integration --run-p4c --run-bmv2 --junitxml="$report" \
+            tests/control/test_async_client_integration.py::test_async_concurrent_example_connects_all_hosts
+          python - "$report" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse(sys.argv[1]).findall(".//testcase")
+          if len(cases) != 1 or any(
+              cases[0].find(status) is not None for status in ("skipped", "failure", "error")
+          ):
+              raise SystemExit("The P4 toolchain smoke test must run and pass.")
+          PY
