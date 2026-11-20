@@ -4,4 +4,4 @@ description: Set up a development checkout, run checks, build the documentation,
 
 # Contributing
 
---8<-- "CONTRIBUTING.md"
+--8<-- "CONTRIBUTING.md:2:"

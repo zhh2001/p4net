@@ -1,4 +1,3 @@
-<!-- --8<-- [start:contribution-overview] -->
 # Contributing to p4net
 
 Thanks for your interest in contributing.
@@ -8,7 +7,6 @@ Thanks for your interest in contributing.
 For non-trivial changes, please open an issue to discuss the design before
 sending a large pull request. Small fixes and clearly-scoped improvements can
 go straight to a PR.
-<!-- --8<-- [end:contribution-overview] -->
 
 ## Development setup
 
@@ -68,7 +66,6 @@ python -m pip install -e '.[docs]'
 python -m mkdocs build --strict
 ```
 
-<!-- --8<-- [start:commit-messages] -->
 ## Commit messages
 
 Conventional-commit style subjects are preferred:
@@ -79,4 +76,3 @@ type: subject
 
 Allowed types: `feat`, `fix`, `chore`, `docs`, `test`, `refactor`, `ci`,
 `build`.
-<!-- --8<-- [end:commit-messages] -->

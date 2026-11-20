@@ -69,6 +69,4 @@ CLI 新增 `key=值&&&掩码` 三态匹配和 `key=下界..上界` 范围匹配�
 
 ## 完整英文记录
 
-以下内容引用仓库根目录的 `CHANGELOG.md`，包含各版本的完整英文记录。
-
---8<-- "CHANGELOG.md"
+完整的版本历史见[英文变更日志](https://zhh2001.github.io/p4net/changelog/)。

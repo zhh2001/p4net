@@ -4,7 +4,9 @@ description: 搭建 p4net 开发环境、运行检查、构建文档及提交变
 
 # 贡献指南
 
---8<-- "CONTRIBUTING.md:contribution-overview"
+## 讨论改动
+
+涉及设计或范围较大的改动，先在 [GitHub Issues](https://github.com/zhh2001/p4net/issues) 讨论方案，再提交 Pull Request。小修复和范围明确的改进可以直接提交。
 
 ## 开发环境 { #development-setup }
 
@@ -55,4 +57,8 @@ python -m pip install -e '.[docs]'
 python -m mkdocs build --strict
 ```
 
---8<-- "CONTRIBUTING.md:commit-messages"
+## 提交信息
+
+提交信息建议用 `type: subject` 的格式，例如 `docs: clarify installation steps`。可用类型为 `feat`、`fix`、`chore`、`docs`、`test`、`refactor`、`ci` 和 `build`。
+
+英文原文见仓库中的 [CONTRIBUTING.md](https://github.com/zhh2001/p4net/blob/main/CONTRIBUTING.md)。
