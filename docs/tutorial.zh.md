@@ -295,32 +295,15 @@ if __name__ == "__main__":
     raise SystemExit(main([__file__]))
 ```
 
-## 步骤 5：注册 packet-in 处理器（可选）
-
-要观察 punt 路径，可以在进入 Shell 之前注册一个处理器。处理器跑在 StreamChannel 消费者线程上，逻辑要短、要快。
-
-```python
-def setup(net: Network) -> None:
-    # ...（上面所有代码）...
-    def log_punt(payload: bytes, metadata: dict[str, int]) -> None:
-        port = metadata.get("ingress_port", "?")
-        # 截断以便日志可读。
-        head = payload[:32].hex()
-        net.host("h1").exec(  # 通过 h1 命名空间里的 stdout 记录
-            ["logger", "-t", "p4net-punt", f"port={port} head={head}"])
-    net.switch("s1").client.on_packet_in(log_punt)
-    net.switch("s2").client.on_packet_in(log_punt)
-```
-
-生产环境的控制器会解析 punt 上来的以太网帧、做出决策，并通过 `send_packet_out` 注入回去。本例只是把事件记下来。
-
-## 步骤 6：运行和探索
+## 步骤 5：启动拓扑
 
 ```sh
 sudo p4net tutorial.py
 ```
 
-Shell 里：
+## 步骤 6：检查网络 { #步骤-6运行和探索 }
+
+在 `p4net` Shell 中列出主机，检查 IPv4 和 IPv6 连通性，再查看 `s1` 的转发表。
 
 ```
 p4net> hosts
@@ -331,6 +314,10 @@ h3    10.0.0.3/24  fd00::3/64   h3-eth0
 h4    10.0.0.4/24  fd00::4/64   h4-eth0
 
 p4net> pingall
+Pinging 12 host pairs...
+3/12 host pairs checked
+6/12 host pairs checked
+9/12 host pairs checked
 H \ H  h1   h2   h3   h4
 h1     -    1    1    1
 h2     1    -    1    1
@@ -339,9 +326,15 @@ h4     1    1    1    -
 12/12 succeeded
 
 p4net> pingall6
+Pinging 12 host pairs...
+3/12 host pairs checked
+6/12 host pairs checked
+9/12 host pairs checked
 H \ H  h1   h2   h3   h4
 h1     -    1    1    1
-   ...
+h2     1    -    1    1
+h3     1    1    -    1
+h4     1    1    1    -
 12/12 succeeded
 
 p4net> s1 table dump MyIngress.ipv4_lpm
@@ -364,6 +357,36 @@ MyIngress.ipv6_lpm (4 entries)
 ```
 
 注意 IPv6 LPM 的 match 渲染为 `fd00::1/128`，而不是裸字节。这是 `P4InfoIndex.decode_match` 通过 `decode_ipv6` 完成的字节-字符串往返。
+
+### 接收 PacketIn { #步骤-5注册-packet-in-处理器可选 }
+
+保持拓扑运行，打开第二个终端。添加一条静态邻居记录，为 `h1` 指定 `10.0.0.99` 的目标 MAC 地址。
+
+```sh
+sudo ip netns exec h1 ip neigh replace 10.0.0.99 \
+  lladdr 00:00:00:00:00:99 dev h1-eth0 nud permanent
+```
+
+在 `p4net` Shell 中监听 `s1`。
+
+```text
+s1 packet listen count=1 timeout=30
+```
+
+看到 `Waiting for 1 packet on s1` 后，在第二个终端发送探测报文。
+
+```sh
+sudo ip netns exec h1 ping -n -c 1 -W 1 10.0.0.99
+```
+
+`s1` 的转发表没有 `10.0.0.99` 的匹配项，因此把探测报文作为 PacketIn 交给控制器。第二个终端的 `ping` 会超时，`p4net` Shell 会显示从端口 1 收到的报文，该端口连接 `h1`。十六进制内容随报文而变化。
+
+```text
+p4net> s1 packet listen count=1 timeout=30
+Waiting for 1 packet on s1 (up to 30s)...
+[_pad0=0] [ingress_port=1] 00000000009900000000000108004500005418fc400040010d4a0a0000010a00...
+1/1 packets received
+```
 
 ## 步骤 7：测量非对称链路
 

@@ -296,32 +296,15 @@ if __name__ == "__main__":
     raise SystemExit(main([__file__]))
 ```
 
-## Step 5: install a packet-in handler (optional)
-
-For an interactive look at the punt path, register a handler before running the shell. The handler runs on the StreamChannel consumer thread; keep it short and fast.
-
-```python
-def setup(net: Network) -> None:
-    # ... (everything above) ...
-    def log_punt(payload: bytes, metadata: dict[str, int]) -> None:
-        port = metadata.get("ingress_port", "?")
-        # Truncate to keep the log line readable.
-        head = payload[:32].hex()
-        net.host("h1").exec(  # log via stdout in h1's namespace
-            ["logger", "-t", "p4net-punt", f"port={port} head={head}"])
-    net.switch("s1").client.on_packet_in(log_punt)
-    net.switch("s2").client.on_packet_in(log_punt)
-```
-
-In production a controller would parse the punted Ethernet frame, make a decision, and reinject via `send_packet_out`. This handler just records the event.
-
-## Step 6: run and explore
+## Step 5: start the topology
 
 ```sh
 sudo p4net tutorial.py
 ```
 
-In the shell:
+## Step 6: inspect the network { #step-6-run-and-explore }
+
+In the `p4net` shell, list the hosts, check IPv4 and IPv6 connectivity, and inspect the forwarding tables on `s1`.
 
 ```
 p4net> hosts
@@ -332,6 +315,10 @@ h3    10.0.0.3/24  fd00::3/64   h3-eth0
 h4    10.0.0.4/24  fd00::4/64   h4-eth0
 
 p4net> pingall
+Pinging 12 host pairs...
+3/12 host pairs checked
+6/12 host pairs checked
+9/12 host pairs checked
 H \ H  h1   h2   h3   h4
 h1     -    1    1    1
 h2     1    -    1    1
@@ -340,9 +327,15 @@ h4     1    1    1    -
 12/12 succeeded
 
 p4net> pingall6
+Pinging 12 host pairs...
+3/12 host pairs checked
+6/12 host pairs checked
+9/12 host pairs checked
 H \ H  h1   h2   h3   h4
 h1     -    1    1    1
-   ...
+h2     1    -    1    1
+h3     1    1    -    1
+h4     1    1    1    -
 12/12 succeeded
 
 p4net> s1 table dump MyIngress.ipv4_lpm
@@ -365,6 +358,36 @@ MyIngress.ipv6_lpm (4 entries)
 ```
 
 Note the table dump renders IPv6 LPM matches as `fd00::1/128` — not as raw bytes. That's `P4InfoIndex.decode_match` doing the round-trip through `decode_ipv6`.
+
+### Receive a PacketIn { #step-5-install-a-packet-in-handler-optional }
+
+With the topology running, open a second terminal. Add a static neighbor entry so `h1` has a destination MAC address for `10.0.0.99`.
+
+```sh
+sudo ip netns exec h1 ip neigh replace 10.0.0.99 \
+  lladdr 00:00:00:00:00:99 dev h1-eth0 nud permanent
+```
+
+In the `p4net` shell, start listening on `s1`.
+
+```text
+s1 packet listen count=1 timeout=30
+```
+
+When `Waiting for 1 packet on s1` appears, send the probe from the second terminal.
+
+```sh
+sudo ip netns exec h1 ping -n -c 1 -W 1 10.0.0.99
+```
+
+`s1` has no forwarding entry for `10.0.0.99`, so it sends the probe to the controller as a PacketIn. The ping times out in the second terminal. The `p4net` shell shows a packet from ingress port 1, where `h1` is connected. The hex bytes vary with the packet.
+
+```text
+p4net> s1 packet listen count=1 timeout=30
+Waiting for 1 packet on s1 (up to 30s)...
+[_pad0=0] [ingress_port=1] 00000000009900000000000108004500005418fc400040010d4a0a0000010a00...
+1/1 packets received
+```
 
 ## Step 7: measure the asymmetric link
 
