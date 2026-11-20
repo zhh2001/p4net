@@ -301,7 +301,7 @@ if __name__ == "__main__":
 sudo p4net tutorial.py
 ```
 
-## 步骤 6：检查网络 { #步骤-6运行和探索 }
+## 步骤 6：检查网络
 
 在 `p4net` Shell 中列出主机，检查 IPv4 和 IPv6 连通性，再查看 `s1` 的转发表。
 
@@ -358,7 +358,7 @@ MyIngress.ipv6_lpm (4 entries)
 
 注意 IPv6 LPM 的 match 渲染为 `fd00::1/128`，而不是裸字节。这是 `P4InfoIndex.decode_match` 通过 `decode_ipv6` 完成的字节-字符串往返。
 
-### 接收 PacketIn { #步骤-5注册-packet-in-处理器可选 }
+### 接收 PacketIn
 
 保持拓扑运行，打开第二个终端。添加一条静态邻居记录，为 `h1` 指定 `10.0.0.99` 的目标 MAC 地址。
 

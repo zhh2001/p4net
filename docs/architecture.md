@@ -157,7 +157,7 @@ Each host has its own network namespace. BMv2 runs in the root network namespace
 
 The control clients reach the switch through `127.0.0.1:<grpc_port>`. The switch forwards experiment traffic through its attached interfaces. This separates the host network stacks while keeping control-plane connections local. Topology validation catches service-port collisions within a description; BMv2 startup also detects listeners owned by other processes.
 
-### Running namespace commands { #subprocesspopenip-netns-exec--over-pyroute2nspopen }
+### Running namespace commands
 
 Host commands use `subprocess.run()` or `subprocess.Popen()` with `ip netns exec <name> <argv>`. The external `ip` program enters the namespace before executing the requested command. p4net does not use `pyroute2.NSPopen` for this path or supply a Python `preexec_fn`.
 
@@ -169,7 +169,7 @@ Changes to included headers, macro expansion, or headers selected through `-I` a
 
 Preprocessing and backend compilation run outside the cache lock. Concurrent calls compile into separate staging directories. A directory lock protects the final artifact check and publication. Missing or empty JSON/P4Info artifacts cause a rebuild. `force=True` retains the previous entry until the new artifacts are ready, then replaces it under the lock and restores it if publication fails.
 
-### Resource cleanup { #cleanup-is-first-class }
+### Resource cleanup
 
 Cleanup runs when a `with Network(...)` block exits, at normal process exit, on SIGTERM, or through an explicit `stop()`/`astop()` call. SIGINT also triggers cleanup outside the interactive shell. With the default SIGHUP disposition, closing the terminal triggers cleanup. In a running main-thread event loop, signal handling awaits `astop()` before restoring the previous handler and redelivering the signal. Outside an event loop, it uses synchronous cleanup.
 
@@ -191,7 +191,7 @@ Before bringing up a host interface, the orchestrator checks its resolved IPv6 a
 
 The latter settings disable router-advertisement processing and SLAAC. Link-local address generation has a separate kernel setting, `addr_gen_mode`; p4net leaves it unchanged. An IPv6-enabled interface can therefore also acquire a link-local address. See the [Linux IPv6 sysctl documentation](https://docs.kernel.org/networking/ip-sysctl.html#proc-sys-net-ipv6-variables).
 
-### Directional link impairments { #asymmetric-impairment-via-direction-mapped-veth-side-tc-qdisc }
+### Directional link impairments
 
 For a link declared with endpoints `a` and `b`, `*_a_to_b` settings apply to egress on the `a` interface. `*_b_to_a` settings apply to egress on `b`. The endpoint order determines the direction, whether the endpoint is a host or a switch.
 
@@ -210,7 +210,7 @@ The [quick-start example](examples/quick-start.md) connects two hosts to ports 1
 
 The port-swap program parses only Ethernet headers. IPv4, IPv6, and ARP frames use the same forwarding path. With IPv6 host addresses configured, IPv6 ping uses `-6` and the same interfaces.
 
-## Current scope { #whats-deliberately-not-supported }
+## Current scope
 
 p4net currently runs local Linux experiments with `simple_switch_grpc` and the `v1model` architecture. Host isolation uses network namespaces rather than a container runtime. The control interfaces are P4Runtime and the BMv2 Thrift CLI for register operations.
 

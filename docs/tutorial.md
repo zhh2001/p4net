@@ -302,7 +302,7 @@ if __name__ == "__main__":
 sudo p4net tutorial.py
 ```
 
-## Step 6: inspect the network { #step-6-run-and-explore }
+## Step 6: inspect the network
 
 In the `p4net` shell, list the hosts, check IPv4 and IPv6 connectivity, and inspect the forwarding tables on `s1`.
 
@@ -359,7 +359,7 @@ MyIngress.ipv6_lpm (4 entries)
 
 Note the table dump renders IPv6 LPM matches as `fd00::1/128` — not as raw bytes. That's `P4InfoIndex.decode_match` doing the round-trip through `decode_ipv6`.
 
-### Receive a PacketIn { #step-5-install-a-packet-in-handler-optional }
+### Receive a PacketIn
 
 With the topology running, open a second terminal. Add a static neighbor entry so `h1` has a destination MAC address for `10.0.0.99`.
 

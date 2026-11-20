@@ -128,11 +128,17 @@ plugins:
             Performance: 性能特征
             Known Limitations: 已知限制
             Logging: 日志
+            Glossary: 术语表
+            Examples: 示例
+            Overview: 概览
+            Quick Start (port swap): 快速上手（端口翻转）
+            L3 forwarding: L3 转发
+            CPU punt: CPU 上送
+            Dual stack: 双栈
+            Asymmetric link: 非对称链路
             INT (in-band network telemetry): INT（带内网络遥测）
             Multi-hop INT: 多跳 INT
             Async concurrent: 异步并发
-            Glossary: 术语表
-            Examples: 示例
             Development: 开发
             Contributing: 贡献
             Releasing: 发版流程

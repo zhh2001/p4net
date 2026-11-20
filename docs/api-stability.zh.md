@@ -23,7 +23,7 @@ description: p4net 公开接口的稳定性等级、弃用规则和各包分类�
 
 例如，1.2 中弃用的接口在 1.3 中仍可使用。暂定 API 最早可在 1.4 中移除或进行不兼容变更。稳定 API 也要完成这个周期，但只能在下一个主版本中移除或进行不兼容变更。实验性 API 不要求经过这一周期。
 
-## 异步客户端 { #临时provisional等级与异步客户端 }
+## 异步客户端
 
 `AsyncP4RuntimeClient`、`AsyncOperationCancelledError` 和 `RunningSwitch.async_client` 在 1.6.0 中以暂定 API 引入，1.7.0 起属于稳定 API，遵循相同的兼容规则。
 

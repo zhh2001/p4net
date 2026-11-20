@@ -6,7 +6,7 @@ description: p4net 命令行参考，介绍拓扑启动、连通性测试、主�
 
 `p4net` 命令启动拓扑后会进入交互式命令行，可在其中执行主机命令、测试连通性、配置交换机表项、读取计数器和管理组播组。[安装 p4net](getting-started/installation.md) 后即可使用该命令。
 
-## 启动命令行 { #启动-shell }
+## 启动命令行
 
 拓扑文件必须定义模块级变量 `topology`，其值为 `Topology` 实例。文件还可以定义 `setup(net)`，在网络启动后、进入交互命令行前执行。[IPv4 转发示例](examples/l3-forwarding.md) 包含这两部分。
 
@@ -48,13 +48,13 @@ usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
 
 指定 `--pcap-dir` 后，可在 `Topology.add_switch()` 中设置 `pcap_enabled=False`，关闭某台交换机的抓包。
 
-### 虚拟环境与 `sudo` { #关于-sudo-与-path }
+### 虚拟环境与 `sudo`
 
 如果 p4net 安装在虚拟环境中，请使用[该项目环境中的命令入口](getting-started/installation.md#project-environments)。
 
 以下示例使用主机 `h1`、`h2` 和交换机 `s1`。IPv6 命令需要主机配置 IPv6 地址。表名、动作名、计数器和控制器元数据由加载的 P4 程序决定。`p4net>` 后的每条命令均在一行内输入。
 
-## 网络命令 { #顶级命令 }
+## 网络命令
 
 ### `help` 与 `help <command>`
 
@@ -262,7 +262,7 @@ p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:0
 ok
 ```
 
-### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
+### `<switch> table del <table> match: <kv>... [priority: <n>]`
 
 按匹配键删除表项，匹配值格式与 `table add` 相同，也使用 `值&&&掩码` 和 `下界..上界`。含 optional、ternary 或 range 字段的表必须用 `priority: N` 指定条目的原优先级，通配条目也一样。优先级必须是 `1` 到 `2147483647` 之间的整数。缺少必需的优先级时显示 `EncodingError`。仅含 exact/LPM 字段的表不填写 `priority:`。
 
@@ -275,7 +275,7 @@ ok
 
 删除表中所有表项，返回 `cleared N entries`。
 
-### `<switch> counter <name> [<index> | --all | --nonzero]` { #counter-reset-- }
+### `<switch> counter <name> [<index> | --all | --nonzero]`
 
 读取间接计数器。指定索引时返回 `pkts=N bytes=M`。仅指定计数器名称或加上 `--all` 时，按索引顺序列出交换机返回的全部单元。交换机没有返回单元时显示 `(no populated cells)`。
 

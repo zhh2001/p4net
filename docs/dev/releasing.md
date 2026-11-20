@@ -6,7 +6,7 @@ description: Choose a version, verify the candidate, and prepare tested wheel an
 
 Prepare a release from a Linux checkout with the [development](contributing.md#development-setup) and [documentation](contributing.md#build-the-documentation) dependencies installed. Run the commands below from the repository root in the active virtual environment. Replace `X.Y.Z` with the chosen version and keep the same shell for the build and installation steps.
 
-## Choose a version { #when-to-cut-a-release }
+## Choose a version
 
 Fix the release scope before final verification. Record unresolved issues and decide which ones block this release.
 
@@ -18,7 +18,7 @@ Fix the release scope before final verification. Record unresolved issues and de
 
 Review names, signatures, documented behavior and the topology snapshot format against the previous release. Apply the [API stability rules](../api-stability.md) to each affected interface. Stable and provisional APIs retain their deprecation cycle; experimental interfaces follow their own tier. Document migration steps for affected callers.
 
-## Verify the candidate { #pre-release-checklist }
+## Verify the candidate
 
 Use a clean working tree and record the candidate commit. Check that the external tools are available, then run lint, format, type, documentation and full runtime checks:
 
@@ -39,7 +39,7 @@ All three pytest flags belong in the same run. Run Python environments sequentia
 
 The current [CI workflow](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml) covers Python 3.10–3.13 on Ubuntu 22.04 and 24.04, plus a root integration job and a package installation job. Its matrix uses the default test selection, and its root job does not install p4c or BMv2. Complete the full toolchain run above on a prepared Linux host. The documentation workflow builds strictly on Python 3.10 and 3.12. Confirm both workflows pass for the final candidate commit.
 
-## Update version and changelog { #version-bump }
+## Update version and changelog
 
 Set the same version in `pyproject.toml` (`project.version`) and `src/p4net/__init__.py` (`__version__`).
 
@@ -52,7 +52,7 @@ date +%F
 
 Commit the release metadata and record the final revision before building the delivery packages. If code or metadata changes after verification, rerun the affected checks and rebuild from that revision.
 
-## Build wheel and sdist { #wheel-build }
+## Build wheel and sdist
 
 Install the build tools and create a fresh output directory. `python -m build` produces both a wheel and a source distribution; [Twine check](https://twine.readthedocs.io/en/stable/#twine-check) checks the distribution description for PyPI rendering.
 

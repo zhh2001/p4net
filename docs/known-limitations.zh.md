@@ -21,7 +21,7 @@ subprocess.run([sys.executable, "topology.py"], check=True)
 
 每个脚本结束前，用 `net.stop()` 关闭网络；在事件循环中则使用 `await net.astop()`。p4net 的清理注册表会在 fork 后的子进程中重置，这不会修复继承的 gRPC 资源。参见 [gRPC 的 fork 说明](https://github.com/grpc/grpc/blob/master/doc/fork_support.md)和[异步客户端指南](async-client.md)。
 
-## 本机部署 { #2-仅支持单机运行 }
+## 本机部署
 
 `Network` 在本机 Linux 系统中创建命名空间、接口和 BMv2 进程，没有远程部署或跨机器协调接口。
 
@@ -39,7 +39,7 @@ subprocess.run([sys.executable, "topology.py"], check=True)
 
 调整拓扑时，先停止当前网络，再修改描述并创建、启动新的 `Network`。在事件循环中，应先 `await net.astop()` 完成清理，再创建新网络。通过底层运行时接口修改资源时，需要另行管理资源与拓扑描述的对应关系。
 
-## 软件交换机的性能 { #5-bmv2-吞吐受限 }
+## 软件交换机的性能
 
 BMv2 用于 P4 程序的开发、测试和调试。吞吐量和时延受 P4 程序、编译器与 BMv2 构建、表项、报文长度和流量模式、主机资源影响，日志、抓包和虚拟化环境也会影响结果。详见 [BMv2 性能说明](https://github.com/p4lang/behavioral-model/blob/main/docs/performance.md)。
 

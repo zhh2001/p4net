@@ -48,7 +48,7 @@ usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
 
 With `--pcap-dir` set, `pcap_enabled=False` in `Topology.add_switch()` excludes that switch from capture.
 
-### Using `sudo` with a virtual environment { #note-on-sudo-and-path }
+### Using `sudo` with a virtual environment
 
 If you installed p4net in a virtual environment, use the [entry point for that project environment](getting-started/installation.md#project-environments).
 
@@ -262,7 +262,7 @@ p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:0
 ok
 ```
 
-### `<switch> table del <table> match: <kv>... [priority: <n>]` { #table-del--match- }
+### `<switch> table del <table> match: <kv>... [priority: <n>]`
 
 Delete an entry using its match key. Use the same match-value formats as `table add`, including `value&&&mask` and `low..high`. For tables with optional, ternary or range keys, supply the entry's original priority as `priority: N`, including for wildcard entries. It must be an integer from `1` to `2147483647`. Omitting a required priority reports an `EncodingError`. For exact/LPM-only tables, omit `priority:`.
 
@@ -275,7 +275,7 @@ ok
 
 Delete all entries from the table and return `cleared N entries`.
 
-### `<switch> counter <name> [<index> | --all | --nonzero]` { #counter-reset-- }
+### `<switch> counter <name> [<index> | --all | --nonzero]`
 
 Read an indirect counter. A specific index returns `pkts=N bytes=M`. With just the counter name or with `--all`, the table lists every returned cell in index order. If the switch returns no cells, the shell displays `(no populated cells)`.
 

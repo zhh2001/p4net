@@ -6,7 +6,7 @@ description: 确定版本、验证候选代码，构建并检查 wheel 和源码
 
 在 Linux 检出项目，并安装[开发依赖](contributing.md#development-setup)和[文档依赖](contributing.md#build-the-documentation)。以下命令在仓库根目录的虚拟环境中运行。将 `X.Y.Z` 替换为本次版本号，构建和安装验证使用同一个 shell。
 
-## 选择版本 { #何时切发版 }
+## 选择版本
 
 最终验证前确定发布范围，列出尚未解决的问题，明确哪些问题必须在本次发布前处理。
 
@@ -18,7 +18,7 @@ description: 确定版本、验证候选代码，构建并检查 wheel 和源码
 
 对照上一版本核对名称、签名、文档规定的行为和拓扑快照格式，按各接口的 [API 稳定性约定](../api-stability.md) 判断兼容性。稳定和暂定接口遵循各自的弃用规则，实验性接口按其分级处理。有调用方式变更时，写明迁移步骤。
 
-## 验证候选版本 { #发版前检查 }
+## 验证候选版本
 
 使用干净的工作区，记录候选提交。先确认外部工具可用，再检查代码规范、格式、类型、文档和完整运行测试：
 
@@ -39,7 +39,7 @@ sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
 
 当前 [CI 工作流](https://github.com/zhh2001/p4net/blob/main/.github/workflows/ci.yml) 覆盖 Ubuntu 22.04、24.04 上的 Python 3.10～3.13，另有 root 集成测试和安装包检查。版本矩阵运行默认测试集，root 任务没有安装 p4c、BMv2，因此完整工具链测试仍需在准备好的 Linux 环境中执行。文档工作流使用 Python 3.10、3.12 严格构建。最终候选提交的两个工作流都应通过。
 
-## 更新版本与变更日志 { #版本号变更 }
+## 更新版本与变更日志
 
 将 `pyproject.toml` 的 `project.version` 和 `src/p4net/__init__.py` 的 `__version__` 设为同一版本。
 
@@ -52,7 +52,7 @@ date +%F
 
 提交版本信息后，记录最终提交，再构建交付包。验证后若代码或元数据发生变化，重新运行受影响的检查，并从该提交重新构建。
 
-## 构建 wheel 和源码包 { #构建-wheel }
+## 构建 wheel 和源码包
 
 安装构建工具，创建独立的输出目录。`python -m build` 同时生成 wheel 和源码包，[Twine check](https://twine.readthedocs.io/en/stable/#twine-check) 检查包的描述能否在 PyPI 正确渲染。
 
