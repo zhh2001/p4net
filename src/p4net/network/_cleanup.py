@@ -1,11 +1,11 @@
 """Process-wide cleanup hooks for `Network` instances.
 
 A module-level registry of active `Network` objects, plus an `atexit` hook
-and (only on the main thread) SIGINT/SIGTERM handlers that call
-`net.stop()` on each before re-raising the signal via the previously
-installed handler. The atexit hook is installed once. Signal handlers can
-be installed later on the main thread if a worker installed the exit hook.
-In an event loop, signal cleanup awaits `astop()` before redelivery.
+and main-thread handlers for SIGINT, SIGTERM, and default SIGHUP. The
+handlers call `net.stop()` on each network before redelivering the signal
+to the previous handler. The atexit hook is installed once. Signal handlers
+can be installed later on the main thread if a worker installed the exit
+hook. In an event loop, signal cleanup awaits `astop()` before redelivery.
 
 Forked children start with their own empty registry and an unlocked mutex.
 
@@ -90,7 +90,7 @@ def install_handlers() -> None:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
-        for sig in (signal.SIGINT, signal.SIGTERM):
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             owner = _SIGNAL_LOOPS.get(sig)
             if owner is not None and owner.is_closed():
                 _SIGNAL_LOOPS.pop(sig)
@@ -99,6 +99,9 @@ def install_handlers() -> None:
             if sig in _PREV_HANDLERS and owner is loop:
                 continue
             previous = _PREV_HANDLERS.get(sig, signal.getsignal(sig))
+            if sig == signal.SIGHUP and previous != signal.SIG_DFL:
+                # Respect nohup and application-installed hangup handlers.
+                continue
             try:
                 if owner is not None:
                     owner.remove_signal_handler(sig)

@@ -322,7 +322,7 @@ Each packet is shown on one line with `[name=value]` metadata fields sorted by n
 
 ## Keyboard shortcuts
 
-- `Ctrl-C`: cancel the input line being edited.
+- `Ctrl-C`: cancel the current input line or command. The topology keeps running.
 - `Ctrl-D` on an empty line: leave the shell and shut down the network.
 - `↑` / `↓`: browse history, stored in `~/.p4net_history`.
 - `Tab`: complete top-level commands, host and switch names, and node verbs such as `ping` or `table`.

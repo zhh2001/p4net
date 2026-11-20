@@ -124,7 +124,7 @@ See the [control-plane API](api/control.md).
 
 1. Validate the topology unless `unsafe=True`, then allocate log and optional pcap directories.
 2. Compile each switch's P4 source.
-3. Register the network for process-exit cleanup. On the main thread, install SIGINT/SIGTERM handling as well.
+3. Register the network for process-exit cleanup. On the main thread, also install handlers for SIGINT, SIGTERM, and SIGHUP with its default disposition.
 4. Create a namespace for each host and bring up its loopback interface.
 5. Create veth pairs, move host ends into their namespaces, configure IPv6 settings, addresses, MAC, MTU, and link state, then apply directional impairments.
 6. Add configured IPv4 and IPv6 default routes.
@@ -171,7 +171,7 @@ Preprocessing and backend compilation run outside the cache lock. Concurrent cal
 
 ### Resource cleanup { #cleanup-is-first-class }
 
-Cleanup runs when a `with Network(...)` block exits, at normal process exit, on SIGINT/SIGTERM, or through an explicit `stop()`/`astop()` call. In a running main-thread event loop, signal handling awaits `astop()` before restoring the previous handler and redelivering the signal. Outside an event loop, it uses synchronous cleanup.
+Cleanup runs when a `with Network(...)` block exits, at normal process exit, on SIGTERM, or through an explicit `stop()`/`astop()` call. SIGINT also triggers cleanup outside the interactive shell. With the default SIGHUP disposition, closing the terminal triggers cleanup. In a running main-thread event loop, signal handling awaits `astop()` before restoring the previous handler and redelivering the signal. Outside an event loop, it uses synchronous cleanup.
 
 The cleanup order is:
 

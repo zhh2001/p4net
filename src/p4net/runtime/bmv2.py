@@ -246,6 +246,8 @@ class BMv2Switch:
                 stderr=subprocess.STDOUT,
                 bufsize=0,
                 close_fds=True,
+                # The CLI owns shutdown. Terminal Ctrl-C cancels its current command.
+                start_new_session=True,
             )
         except OSError as exc:
             log_handle.close()

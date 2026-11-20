@@ -6,7 +6,7 @@ connect P4Runtime, push pipelines). Any failure rolls back partial state
 via `_do_stop()` before re-raising. `Network.stop()` is fully idempotent.
 
 Cleanup safety net: the `_cleanup` module installs an atexit hook plus
-SIGINT/SIGTERM handlers on the main thread. In an event loop, signal
+signal handlers on the main thread. In an event loop, signal
 cleanup awaits `astop()` before re-delivering the signal.
 """
 
@@ -300,10 +300,10 @@ class Network:
     async def astart(self) -> None:
         """Bring the topology up in a worker thread without blocking the event loop.
 
-        Call from the main thread's event loop to install SIGINT/SIGTERM
-        cleanup handlers. Cancellation waits for startup and then shuts
-        the network down before propagating. Startup failures roll back
-        partial resources and propagate their original exception.
+        Call from the main thread's event loop to install signal cleanup
+        handlers. Cancellation waits for startup and then shuts the network
+        down before propagating. Startup failures roll back partial resources
+        and propagate their original exception.
 
         Raises:
             NetworkAlreadyRunningError: if already running or starting.

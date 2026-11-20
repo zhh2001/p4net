@@ -170,7 +170,8 @@ from p4net.network import _cleanup as cleanup
 
 mode = sys.argv[1]
 original_signal = signal.signal
-previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
+previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
 
 with patch.object(cleanup.atexit, "register", wraps=cleanup.atexit.register) as register:
     if mode == "worker-first":
@@ -213,12 +214,20 @@ with patch.object(cleanup.atexit, "register", wraps=cleanup.atexit.register) as 
             assert events == ["cleanup", "previous", "cleanup", "previous"], events
         finally:
             cleanup.unregister(net)
+    elif mode.startswith("preserve-"):
+        def custom_hangup(sig, frame):
+            pass
+        handler = signal.SIG_IGN if mode == "preserve-ignored" else custom_hangup
+        signal.signal(signal.SIGHUP, handler)
+        cleanup.install_handlers()
+        assert signal.getsignal(signal.SIGHUP) == handler
+        previous.pop(signal.SIGHUP)
     else:
         with patch.object(cleanup.signal, "signal", wraps=original_signal) as install:
             cleanup.install_handlers()
             cleanup.install_handlers()
             cleanup.install_handlers()
-        assert install.call_count == 2, install.call_count
+        assert install.call_count == len(previous), install.call_count
     assert register.call_count == 1, register.call_count
 
 if mode != "rearm":
@@ -229,7 +238,16 @@ if mode != "rearm":
 
 
 @pytest.mark.parametrize(
-    "mode", ["worker-first", "retry-SIGINT", "retry-SIGTERM", "rearm", "repeat"]
+    "mode",
+    [
+        "worker-first",
+        "retry-SIGINT",
+        "retry-SIGTERM",
+        "rearm",
+        "preserve-ignored",
+        "preserve-custom",
+        "repeat",
+    ],
 )
 def test_cleanup_hooks_register_independently_and_retry(mode: str) -> None:
     result = subprocess.run(

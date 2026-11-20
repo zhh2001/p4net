@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import signal
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,12 +31,31 @@ def _print_output(text: str) -> None:
         print_formatted_text(ANSI(text), end="\n\n")
 
 
+@contextmanager
+def _cancel_command_on_sigint() -> Iterator[None]:
+    """Use KeyboardInterrupt for command cancellation instead of network cleanup."""
+    previous = (
+        signal.getsignal(signal.SIGINT)
+        if threading.current_thread() is threading.main_thread()
+        else None
+    )
+    if previous is None:
+        yield
+        return
+
+    try:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 class P4NetShell:
     """A thin prompt_toolkit REPL around a CommandDispatcher.
 
-    Ctrl-C cancels the current input line and re-prompts; Ctrl-D on an
-    empty line exits cleanly. `exit` and `quit` raise `CLIExit`, which
-    the loop catches to terminate.
+    Ctrl-C cancels the current input or command and re-prompts. Ctrl-D on an
+    empty line exits cleanly. `exit` and `quit` raise `CLIExit`, which the loop
+    catches to terminate.
     """
 
     def __init__(
@@ -75,7 +98,8 @@ class P4NetShell:
                 # Ctrl-D on empty line: exit cleanly.
                 break
             try:
-                output = self._dispatcher.dispatch(line)
+                with _cancel_command_on_sigint():
+                    output = self._dispatcher.dispatch(line)
             except CLIExit:
                 break
             except KeyboardInterrupt:

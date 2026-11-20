@@ -17,6 +17,7 @@ pytestmark = pytest.mark.integration
 
 _SCRIPT = """
 import asyncio
+import signal
 import sys
 
 from p4net import Network
@@ -25,6 +26,7 @@ from p4net.runtime import NetworkNamespace
 from p4net.topo import Topology
 
 name, mode = sys.argv[1:]
+signal.signal(signal.SIGHUP, signal.SIG_DFL)
 
 async def main():
     topo = Topology()
@@ -96,7 +98,7 @@ asyncio.run(main())
         "starting-ipv6",
     ],
 )
-@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
 def test_signal_waits_for_namespace_cleanup(mode: str, signum: signal.Signals) -> None:
     name = "h" + uuid.uuid4().hex[:6]
     namespace = Path("/var/run/netns") / name
