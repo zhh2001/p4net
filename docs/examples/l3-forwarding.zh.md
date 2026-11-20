@@ -1,10 +1,10 @@
 ---
-description: 两台主机由 ipv4_lpm 表转发，表项在启动时由 Python 编程下发。演示运行时表项编程。
+description: 为两台 IPv4 主机下发路由，并在 p4net 命令行验证最长前缀匹配。
 ---
 
 # L3 转发
 
-一台交换机上的两台主机，数据平面通过启动时由 Python 编程下发的 `ipv4_lpm` 表来转发。
+两台主机分别接入同一台 BMv2 交换机的不同端口。启动时，Python 为每台主机在交换机的 `ipv4_lpm` 表中下发一条路由。
 
 ## 运行
 
@@ -39,8 +39,6 @@ p4net> s1 counter MyIngress.ingress_pkts 1
 pkts=2 bytes=196
 ```
 
-match 值渲染为 `10.0.0.1/32`——这是 `decode_match` 把 P4Runtime 规范字节还原为人类可读的 IPv4 字符串。
-
 完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
 
 ## 拓扑
@@ -51,7 +49,7 @@ match 值渲染为 `10.0.0.1/32`——这是 `decode_match` 把 P4Runtime 规范
 --8<-- "examples/l3_forwarding/topology.py"
 ```
 
-`setup(net)` 调用了两次 `client.insert_table_entry(...)`——每台主机一次——表名使用 P4Info 中的全限定名。
+`setup(net)` 通过 `s1.client.insert_table_entry()` 为每台主机配置目的前缀和出端口。客户端根据 P4Info 编码匹配键和动作参数。
 
 ## P4 程序
 
@@ -61,15 +59,28 @@ match 值渲染为 `10.0.0.1/32`——这是 `decode_match` 把 P4Runtime 规范
 --8<-- "examples/l3_forwarding/ipv4_lpm.p4"
 ```
 
-入口控制只在存在 IPv4 报头时应用 `ipv4_lpm`——非 IPv4 流量（例如 ARP）走默认 `NoAction`，无处可去。ARP 之所以能工作，是因为 `setup(net)` 注入了静态条目。
-
-## 关键设计点
-
-- 同一份数据平面可以承载 5 主机、100 主机或完全不同的 L3 设计——改变的只是表项编程，不动 P4。
-- `s1.client.insert_table_entry(...)` 接受普通 Python 类型（字符串、字典、整数）；`P4InfoIndex` 根据已加载的 P4Info 把它们翻译成 P4Runtime 的 FieldMatch 与 Action proto。
+入口处理只对 IPv4 包查询 `ipv4_lpm`。`setup(net)` 在两台主机上配置静态 ARP 条目，让它们提前知道对方的 MAC 地址。
 
 ## 可尝试的变体
 
-- 加一台 `10.0.0.3/24` 的主机，再装一条 LPM 表项。无需修改 P4。
-- 把两条 `/32` 替换为同一条覆盖整个子网、走相同出口的 `/24`，验证 `pingall` 仍然成功。
-- 增加一台位于 `10.1.0.0/24` 的主机，使用 `MyIngress.drop` 动作丢弃其流量——观察 LPM 从最长前缀向最短前缀解析的过程。
+### 验证最长前缀匹配
+
+每条转发表项选择一个出端口。两条 `/32` 路由分别把发往 `h1` 和 `h2` 的包送到端口 1 和端口 2。启动原拓扑后，在 `p4net>` 提示符下添加一条覆盖范围更广的 `/24` 丢弃规则。
+
+```text
+s1 table add MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.0/24 action: MyIngress.drop
+pingall
+```
+
+`pingall` 仍显示 `2/2 succeeded`，因为两条 `/32` 路由优先匹配。删除发往 `h2` 的路由后再检查一次。
+
+```text
+s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.2/32
+pingall
+```
+
+这次 `pingall` 显示 `0/2 succeeded`。发往 `h2` 的请求和应答都会命中 `/24` 丢弃规则。输入 `exit` 后重新启动原拓扑，即可恢复启动时下发的路由。
+
+### 增加第三台主机
+
+把 `h3` 接到交换机端口 3，地址设为 `10.0.0.3/24`，MAC 地址设为 `00:00:00:00:00:03`。在 `setup(net)` 中添加 `10.0.0.3/32` 路由，动作设为 `MyIngress.set_egress_port`，参数设为 `port=3`。补齐 `h3` 与两台现有主机之间的双向静态 ARP 条目。运行扩展后的拓扑，确认 `pingall` 显示 `6/6 succeeded`。

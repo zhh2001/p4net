@@ -1,10 +1,10 @@
 ---
-description: Two hosts forwarded by an ipv4_lpm table programmed from Python at startup. Demonstrates runtime table programming.
+description: Install routes for two IPv4 hosts and test longest-prefix matching in the p4net shell.
 ---
 
 # L3 forwarding
 
-Two hosts on one switch, with the dataplane forwarding via an `ipv4_lpm` table that's programmed from Python at startup time.
+Two hosts connect to separate ports on a BMv2 switch. At startup, Python installs one route per host in the switch's `ipv4_lpm` table.
 
 ## Run it
 
@@ -39,8 +39,6 @@ p4net> s1 counter MyIngress.ingress_pkts 1
 pkts=2 bytes=196
 ```
 
-The match value renders as `10.0.0.1/32` — that's `decode_match` turning P4Runtime canonical bytes back into a human IPv4 string.
-
 When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Topology
@@ -51,7 +49,7 @@ When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 --8<-- "examples/l3_forwarding/topology.py"
 ```
 
-`setup(net)` issues two `client.insert_table_entry(...)` calls — one per host — naming the table by its fully qualified P4Info name.
+`setup(net)` passes each host's destination prefix and egress port to `s1.client.insert_table_entry()`. The client uses P4Info to encode the match key and action parameter.
 
 ## P4 program
 
@@ -61,15 +59,28 @@ When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 --8<-- "examples/l3_forwarding/ipv4_lpm.p4"
 ```
 
-The ingress control applies `ipv4_lpm` only when an IPv4 header is present — non-IPv4 traffic (e.g. ARP) hits the default `NoAction` and goes nowhere. ARP works because `setup(net)` seeds it statically.
-
-## What's interesting
-
-- Same dataplane handles a 5-host topology, a 100-host topology, and a different L3 design — only the table programming changes.
-- `s1.client.insert_table_entry(...)` accepts plain Python types (strings, dicts, ints); the `P4InfoIndex` translates them into P4Runtime FieldMatch and Action protos based on the loaded P4Info.
+The ingress control applies `ipv4_lpm` only to IPv4 packets. `setup(net)` supplies static ARP entries so each host already knows the other host's MAC address.
 
 ## Variations to try
 
-- Add a third host on `10.0.0.3/24` and install a third LPM entry. No P4 changes needed.
-- Replace the `/32` entries with a `/24` covering the whole subnet via the same egress port. Verify `pingall` still works.
-- Add a host on `10.1.0.0/24` and drop its traffic with the `MyIngress.drop` action — watch the LPM resolve from longest to shortest prefix.
+### Test longest-prefix matching
+
+Each forwarding entry selects one egress port. The two `/32` entries direct traffic for `h1` to port 1 and traffic for `h2` to port 2. With the original topology running, add a broader `/24` drop rule at the `p4net>` prompt.
+
+```text
+s1 table add MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.0/24 action: MyIngress.drop
+pingall
+```
+
+`pingall` still reports `2/2 succeeded` because both `/32` entries take precedence. Delete the route to `h2` and repeat the check.
+
+```text
+s1 table del MyIngress.ipv4_lpm match: hdr.ipv4.dstAddr=10.0.0.2/32
+pingall
+```
+
+`pingall` reports `0/2 succeeded`. Requests and replies destined for `h2` now match the `/24` drop rule. Enter `exit` and relaunch the original topology to restore the startup routes.
+
+### Add a third host
+
+Connect `h3` to port 3 with address `10.0.0.3/24` and MAC address `00:00:00:00:00:03`. In `setup(net)`, add a `10.0.0.3/32` route using `MyIngress.set_egress_port` with `port=3`. Add static ARP entries so `h3` and each existing host know each other's MAC address. Launch the extended topology and check that `pingall` reports `6/6 succeeded`.
