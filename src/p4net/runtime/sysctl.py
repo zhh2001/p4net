@@ -56,10 +56,9 @@ def enable_ipv6(
 ) -> None:
     """Set ``disable_ipv6=0`` plus ``accept_ra`` and ``autoconf`` on ``iface``.
 
-    Defaults turn off Router Advertisement handling and SLAAC autoconfiguration
-    so the host only carries addresses we explicitly assign. Set
-    ``accept_ra=True`` or ``autoconf=True`` if you want kernel-level
-    auto-addressing on this interface.
+    By default, the interface ignores router advertisements and disables
+    address autoconfiguration from advertised prefixes. The kernel can
+    still generate a link-local address according to ``addr_gen_mode``.
     """
     _set_one(ns, f"net.ipv6.conf.{iface}.disable_ipv6", "0")
     _set_one(ns, f"net.ipv6.conf.{iface}.accept_ra", "1" if accept_ra else "0")

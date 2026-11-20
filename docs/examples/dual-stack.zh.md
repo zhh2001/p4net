@@ -1,5 +1,5 @@
 ---
-description: 两台主机各自在同一 /24 与 /64 上配置 IPv4 与 IPv6。展示按接口的 IPv6 sysctl 门控。
+description: 将两台双栈主机接到同一台交换机，验证 IPv4 和 IPv6 连通性。
 ---
 
 # 双栈
@@ -8,7 +8,7 @@ description: 两台主机各自在同一 /24 与 /64 上配置 IPv4 与 IPv6。�
 
 ## 你将看到什么
 
-`pingall`（IPv4）与 `pingall6`（IPv6）都成功。主机接口上只有我们显式声明的地址——没有 `fe80::` link-local 噪声，也没有 SLAAC 派生的地址。
+`pingall` 检查 IPv4 连通性，`pingall6` 检查 IPv6 连通性。两台主机在两个方向上都能互通。
 
 ## 拓扑
 
@@ -18,7 +18,7 @@ description: 两台主机各自在同一 /24 与 /64 上配置 IPv4 与 IPv6。�
 --8<-- "examples/dual_stack/topology.py"
 ```
 
-`Host.ip` 与 `Host.ip6` 同时设置。编排器检测到这一点后，会在拉起接口之前调用 `enable_ipv6(ns, iface)`（同时 `accept_ra=0`、`autoconf=0`），然后把两个地址都赋上。
+两台主机都设置了 `Host.ip` 和 `Host.ip6`。p4net 会在启动接口前，为配置了 IPv6 地址的接口启用 IPv6。
 
 ## P4 程序
 
@@ -46,6 +46,8 @@ p4net> h1 cmd ip -6 addr show dev h1-eth0
 3: h1-eth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> ...
     inet6 fd00::1/64 scope global
        valid_lft forever preferred_lft forever
+    inet6 fe80::200:ff:fe00:1/64 scope link
+       valid_lft forever preferred_lft forever
 
 p4net> pingall
 2/2 succeeded
@@ -54,15 +56,14 @@ p4net> pingall6
 2/2 succeeded
 ```
 
-注意：只有 `fd00::1/64`，没有 `fe80::` link-local——sysctl 门控正在生效。
+`fd00::1/64` 来自拓扑配置。这次运行中，Linux 还生成了链路本地地址 `fe80::200:ff:fe00:1/64`。是否生成此类地址取决于内核的 `addr_gen_mode` 设置。
 
 ## 关键设计点
 
-- **`accept_ra=0` 与 `autoconf=0`** 与 `disable_ipv6=0` 一同写入，使得内核不会偷偷地从 Router Advertisement 自动配置额外地址（这里没有 RA，但行为仍然要可预期）。
-- **静态 ND** 在 `setup(net)` 中注入——关闭 `accept_ra` 后，IPv6 邻居发现仍然能工作，但每次冷启动 ping 都要走 ND 解析会拖慢测量。预先注入条目让延迟测量结果更干净。
+- p4net 设置 `accept_ra=0` 来忽略路由器通告，设置 `autoconf=0` 来关闭基于通告前缀的地址自动配置。
+- `setup(net)` 预设 IPv4 和 IPv6 静态邻居项，第一次 ping 就可以使用已配置的 MAC 地址。
 
 ## 可尝试的变体
 
 - 把其中一台主机的 `ip6` 参数去掉，确认 `pingall6` 矩阵中确实排除了它（按 `primary_ip6` 过滤）。
-- 在显式调用 `enable_ipv6(...)` 时把 `accept_ra=True`，观察会出现哪些地址（需要绕过编排器）。
 - 加一个 `loss_pct=10.0` 的链路参数，观察 v4 与 v6 ping 得到相同的丢包率（qdisc 对 L3 无感）。

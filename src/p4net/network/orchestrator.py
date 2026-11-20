@@ -748,8 +748,7 @@ class Network:
                 first_link_seen.add(node.name)
                 self._host_iface_ip[node.name][ep.iface_name] = ip_to_use
                 self._host_iface_ip6[node.name][ep.iface_name] = ip6_to_use
-                # Gate IPv6 BEFORE bringing the iface up so the kernel does not
-                # auto-configure a link-local address we don't want.
+                # Configure IPv6 before bringing up the host interface.
                 ns = self._namespaces[node.name]
                 if ip6_to_use is not None:
                     enable_ipv6(ns, ep.iface_name)

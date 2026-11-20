@@ -91,10 +91,10 @@ description: Glossary of P4, SDN, Linux networking, and tooling terms used in th
 :   The userspace tool that reads/writes kernel `/proc/sys` knobs. p4net uses `sysctl -w net.ipv6.conf.<iface>.disable_ipv6=...` for its per-interface IPv6 gate.
 
 `Link-local address`
-:   A non-routable IPv6 address (`fe80::/10`) that interfaces auto-generate when IPv6 is enabled. p4net suppresses these on interfaces that don't ask for IPv6.
+:   An IPv6 address in `fe80::/10` used on the local link. Linux can generate one when IPv6 is enabled on an interface, depending on its `addr_gen_mode` setting.
 
 `SLAAC`
-:   StateLess Address AutoConfiguration — IPv6 hosts deriving addresses from Router Advertisements. Disabled by default in p4net (`accept_ra=0`, `autoconf=0`) so explicitly assigned addresses are the only ones present.
+:   Stateless Address Autoconfiguration. p4net sets `accept_ra=0` and `autoconf=0` on IPv6-enabled host interfaces to disable address autoconfiguration from router advertisements.
 
 `ND` (Neighbor Discovery)
 :   IPv6's analogue of ARP. Resolves IPv6 addresses to MACs.

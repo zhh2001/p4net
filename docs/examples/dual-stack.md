@@ -1,5 +1,5 @@
 ---
-description: Two hosts each carrying both IPv4 and IPv6 addresses on the same /24 and /64. Demonstrates per-interface IPv6 sysctl gating.
+description: Connect two dual-stack hosts through one switch and verify IPv4 and IPv6 connectivity.
 ---
 
 # Dual stack
@@ -8,7 +8,7 @@ Two hosts on a single switch, each carrying both an IPv4 `/24` and an IPv6 `/64`
 
 ## What you'll see
 
-`pingall` (IPv4) and `pingall6` (IPv6) both succeed. The hosts' interfaces carry exactly the addresses we asked for — no `fe80::` link-local clutter, no SLAAC-derived addresses.
+`pingall` verifies IPv4 connectivity and `pingall6` verifies IPv6 connectivity. Both commands report `2/2 succeeded`.
 
 ## Topology
 
@@ -18,7 +18,7 @@ Two hosts on a single switch, each carrying both an IPv4 `/24` and an IPv6 `/64`
 --8<-- "examples/dual_stack/topology.py"
 ```
 
-Both `Host.ip` and `Host.ip6` are set. The orchestrator detects this and runs `enable_ipv6(ns, iface)` (with `accept_ra=0`, `autoconf=0`) before bringing the interface up, then assigns both addresses.
+Each host sets `Host.ip` and `Host.ip6`. The orchestrator enables IPv6 on the interfaces that receive an IPv6 address before bringing them up.
 
 ## P4 program
 
@@ -46,6 +46,8 @@ p4net> h1 cmd ip -6 addr show dev h1-eth0
 3: h1-eth0@if4: <BROADCAST,MULTICAST,UP,LOWER_UP> ...
     inet6 fd00::1/64 scope global
        valid_lft forever preferred_lft forever
+    inet6 fe80::200:ff:fe00:1/64 scope link
+       valid_lft forever preferred_lft forever
 
 p4net> pingall
 2/2 succeeded
@@ -54,15 +56,14 @@ p4net> pingall6
 2/2 succeeded
 ```
 
-Note: only `fd00::1/64`. No `fe80::` link-local. That's the sysctl gate doing its job.
+`fd00::1/64` comes from the topology. In this run, Linux also generated `fe80::200:ff:fe00:1/64` for use on the local link. Link-local address generation depends on the kernel's `addr_gen_mode` setting.
 
 ## What's interesting
 
-- **`accept_ra=0` and `autoconf=0`** are written along with `disable_ipv6=0` so the kernel doesn't silently auto-configure additional addresses from a Router Advertisement (which there are none of here, but still).
-- **Static ND** in `setup(net)` — with `accept_ra` off, IPv6 neighbor solicitation still works, but doing it for every cold-start ping wastes time. Pre-seeded entries keep the latency measurements clean.
+- p4net sets `accept_ra=0` to ignore router advertisements and `autoconf=0` to disable address configuration from advertised prefixes.
+- `setup(net)` adds static IPv4 and IPv6 neighbor entries so the first ping can use the configured MAC addresses.
 
 ## Variations to try
 
 - Drop the `ip6` arguments from one host and confirm `pingall6` excludes it from the matrix (it filters on `primary_ip6`).
-- Set `accept_ra=True` in a manual `enable_ipv6(...)` call and observe what addresses appear. (Requires bypassing the orchestrator.)
 - Add a `loss_pct=10.0` link parameter and observe that v4 and v6 pings get the same loss rate (the qdisc is L3-agnostic).

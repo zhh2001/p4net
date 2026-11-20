@@ -91,10 +91,10 @@ description: p4net 文档中使用到的 P4、SDN、Linux 网络与工具相关�
 :   读写内核 `/proc/sys` 旋钮的用户态工具。p4net 用 `sysctl -w net.ipv6.conf.<iface>.disable_ipv6=...` 实现按接口的 IPv6 门控。
 
 `Link-local address`
-:   接口启用 IPv6 时自动生成的不可路由 IPv6 地址（`fe80::/10`）。p4net 在未显式请求 IPv6 的接口上抑制此自动行为。
+:   仅在本链路使用的 IPv6 地址，属于 `fe80::/10`。接口启用 IPv6 后，Linux 根据 `addr_gen_mode` 设置决定是否自动生成此类地址。
 
 `SLAAC`
-:   StateLess Address AutoConfiguration——IPv6 主机基于路由通告自动派生地址。p4net 默认关闭（`accept_ra=0`、`autoconf=0`），仅保留显式分配的地址。
+:   无状态地址自动配置（Stateless Address Autoconfiguration）。p4net 在启用 IPv6 的主机接口上设置 `accept_ra=0` 和 `autoconf=0`，禁止根据路由器通告自动配置地址。
 
 `ND`（Neighbor Discovery）
 :   IPv6 的邻居发现，对应 IPv4 的 ARP；解析 IPv6 到 MAC。
