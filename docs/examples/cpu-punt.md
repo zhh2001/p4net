@@ -16,7 +16,7 @@ sudo p4net examples/cpu_punt/topology.py
 
 ### Receive a PacketIn
 
-<span id="what-youll-see"></span>Start listening in the `p4net>` shell.
+Start listening in the `p4net>` shell.
 
 ```text
 s1 packet listen count=10 timeout=15

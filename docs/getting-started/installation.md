@@ -8,8 +8,8 @@ Install the Linux tools first. For the CLI tutorials, install p4net globally wit
 
 ## System requirements
 
-- Linux with kernel 5.4 or newer. CI runs on Ubuntu 22.04 and 24.04.
-- Python 3.10 or newer. CI covers Python 3.10–3.13.
+- Linux with kernel 5.4 or newer.
+- Python 3.10 or newer.
 - Root privileges to run a network, including creating network namespaces, configuring links and starting switches. Defining a topology and compiling P4 programs can use your regular account.
 
 ## Install the external tools { #required-external-tools }
@@ -18,7 +18,7 @@ On Ubuntu, install the Python environment tools and Linux network utilities:
 
 ```bash
 sudo apt update
-sudo apt install python3-venv python3-pip iproute2 iputils-ping procps git
+sudo apt install python3-venv python3-pip iproute2 iputils-ping procps
 ```
 
 Install the P4 compiler and BMv2 using their upstream instructions:
@@ -102,45 +102,6 @@ sudo "$(command -v p4net)" quickstart.py
 
 `command -v` selects the CLI from the active environment before `sudo` switches users. The same CLI is available through `sudo "$(command -v python)" -m p4net quickstart.py`.
 
-## Install from source
-
-For development, clone the repository and install it in editable mode with the test, lint and type-checking tools:
-
-```bash
-git clone https://github.com/zhh2001/p4net.git
-cd p4net
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[dev]'
-```
-
-To run a topology from this checkout, use the [entry point for the active project environment](#project-environments).
-
-The documentation uses [CairoSVG](https://cairosvg.org/documentation/) to generate social cards. On Ubuntu, install the system Cairo library with `sudo apt install libcairo2`, then install the documentation tools from the repository root:
-
-```bash
-python -m pip install -e '.[dev,docs]'
-```
-
-## Run tests and build the documentation
-
-With the source installation, run tests from the repository root:
-
-```bash
-python -m pytest
-```
-
-This selects the default tests. Tests marked as requiring root, p4c or BMv2 are excluded by default. To enable all three groups, install the external tools and run:
-
-```bash
-sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
-  --run-integration --run-p4c --run-bmv2
-```
-
-After installing the documentation tools, build the site with:
-
-```bash
-python -m mkdocs build --strict
-```
+For development setup, tests and documentation builds, see [Contributing](../dev/contributing.md#development-setup).
 
 For installation and startup errors, see [Troubleshooting](../troubleshooting.md).

@@ -57,7 +57,7 @@ sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 --8<-- "examples/int/int.p4"
 ```
 
-<span id="这个示例展示了什么"></span>要点：
+要点：
 
 - shim 有效时，deparser 将它插入以太网头与 IPv4 头之间。外层 EtherType 是 `0x88B6`，shim 的 `next_proto` 保存原始 EtherType（IPv4 为 `0x0800`）。
 - ingress 控制在 LPM 表设好 `std.egress_spec` 之后再从 `standard_metadata` 填 shim。

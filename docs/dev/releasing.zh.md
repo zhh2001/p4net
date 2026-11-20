@@ -4,7 +4,7 @@ description: 确定版本、验证候选代码，构建并检查 wheel 和源码
 
 # 发布流程 { #发版流程 }
 
-在 Linux 检出项目，并安装[开发与文档依赖](../getting-started/installation.md#从源码安装)。以下命令在仓库根目录的虚拟环境中运行。将 `X.Y.Z` 替换为本次版本号，构建和安装验证使用同一个 shell。
+在 Linux 检出项目，并安装[开发依赖](contributing.md#development-setup)和[文档依赖](contributing.md#build-the-documentation)。以下命令在仓库根目录的虚拟环境中运行。将 `X.Y.Z` 替换为本次版本号，构建和安装验证使用同一个 shell。
 
 ## 选择版本 { #何时切发版 }
 
@@ -42,8 +42,6 @@ sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
 ## 更新版本与变更日志 { #版本号变更 }
 
 将 `pyproject.toml` 的 `project.version` 和 `src/p4net/__init__.py` 的 `__version__` 设为同一版本。
-
-<span id="changelog"></span>
 
 检查上一版本以来的提交，补齐 [CHANGELOG.md](../changelog.md)，按新增、变更和修复整理用户可见的内容，并说明兼容性影响。将本次内容放在 `## [X.Y.Z] - YYYY-MM-DD` 下，顶部保留空的 `## [Unreleased]`。日期以本机系统时间为准：
 

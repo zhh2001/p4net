@@ -63,7 +63,7 @@ The path is `h1 → s1 → s2 → h2`. The `setup(net)` hook installs the L2 for
 --8<-- "examples/int_multi_hop/int_multi_hop.p4"
 ```
 
-<span id="what-this-demonstrates"></span>Key points:
+Key points:
 
 - Two named header instances `int_shim_1` and `int_shim_2` instead of a P4 header stack. Easier to read at two hops; for N hops, see the "Extending" section in the example README.
 - Ingress picks the first unfilled shim slot and writes it from `standard_metadata` plus the configured `switch_id`. The `next_proto` chain is re-stitched so the receiver sees `eth → shim_1 → shim_2 → ipv4`.

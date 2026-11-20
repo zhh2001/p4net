@@ -14,7 +14,7 @@ From the repository root, start the topology.
 sudo p4net examples/l3_forwarding/topology.py
 ```
 
-<span id="what-youll-see"></span>At the `p4net>` prompt, check the two `/32` routes installed at startup, then verify connectivity and read the packet counter for egress port 1.
+At the `p4net>` prompt, check the two `/32` routes installed at startup, then verify connectivity and read the packet counter for egress port 1.
 
 ```
 p4net> s1 table dump MyIngress.ipv4_lpm

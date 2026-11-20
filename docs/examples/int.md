@@ -57,7 +57,7 @@ The `setup(net)` hook installs the IPv4 forwarding entries via P4Runtime and con
 --8<-- "examples/int/int.p4"
 ```
 
-<span id="what-this-demonstrates"></span>Key points:
+Key points:
 
 - The deparser emits the shim between Ethernet and IPv4 when its valid bit is set. The outer EtherType is `0x88B6` and the shim’s `next_proto` carries the original EtherType (`0x0800` for IPv4).
 - The ingress control populates the shim from `standard_metadata` after the LPM table has set `std.egress_spec`.

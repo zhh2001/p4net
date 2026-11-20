@@ -14,7 +14,7 @@ From the repository root, start the topology.
 sudo p4net examples/dual_stack/topology.py
 ```
 
-<span id="what-youll-see"></span>Use `pingall` to check IPv4 and `pingall6` to check IPv6. Both commands report `2/2 succeeded`.
+Use `pingall` to check IPv4 and `pingall6` to check IPv6. Both commands report `2/2 succeeded`.
 
 ```
 p4net> hosts

@@ -1,5 +1,5 @@
 ---
-description: How to contribute to p4net — bug reports, pull requests, code style, test coverage expectations.
+description: Set up a development checkout, run checks, build the documentation, and submit changes to p4net.
 ---
 
 # Contributing

@@ -63,7 +63,7 @@ packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
 --8<-- "examples/int_multi_hop/int_multi_hop.p4"
 ```
 
-<span id="这个示例展示了什么"></span>要点：
+要点：
 
 - 用两个命名 header 实例 `int_shim_1`、`int_shim_2`，不用 P4 header stack。两跳情况下更易读；要做 N 跳，请参考示例 README 的「扩展到 N 跳」一节。
 - ingress 选择第一个未填的 shim slot，从 `standard_metadata` 与配置的 `switch_id` 写入。`next_proto` 链路被重新拼接，使接收方看到 `eth → shim_1 → shim_2 → ipv4` 的顺序。

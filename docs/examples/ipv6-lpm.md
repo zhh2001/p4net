@@ -14,7 +14,7 @@ From the repository root, start the topology.
 sudo p4net examples/ipv6_lpm/topology.py
 ```
 
-<span id="what-youll-see"></span>Check the two `/128` routes, verify IPv6 connectivity with `pingall6`, and read the packet counter for egress port 2.
+Check the two `/128` routes, verify IPv6 connectivity with `pingall6`, and read the packet counter for egress port 2.
 
 ```
 p4net> hosts

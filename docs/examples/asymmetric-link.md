@@ -14,7 +14,7 @@ From the repository root, start the topology.
 sudo p4net examples/asymmetric_link/topology.py
 ```
 
-<span id="what-youll-see"></span>`h1 ping h2 5 3` and `h2 ping h1 5 3` both report round-trip times (RTT) around 220 ms.
+`h1 ping h2 5 3` and `h2 ping h1 5 3` both report round-trip times (RTT) around 220 ms.
 
 ```
 p4net> h1 ping h2 5 3

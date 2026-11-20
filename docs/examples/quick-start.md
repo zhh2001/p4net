@@ -14,7 +14,7 @@ From the repository root, start the topology.
 sudo p4net examples/quick_start/quick_start.py
 ```
 
-<span id="what-youll-see"></span>At the `p4net>` prompt, use `hosts` to list the interfaces and `pingall` to check connectivity in both directions.
+At the `p4net>` prompt, use `hosts` to list the interfaces and `pingall` to check connectivity in both directions.
 
 ```
 p4net> hosts

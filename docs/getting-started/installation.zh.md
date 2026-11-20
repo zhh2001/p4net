@@ -8,8 +8,8 @@ description: 安装 Linux 工具和 p4net 命令行，或在 Python 项目中安
 
 ## 系统要求
 
-- Linux，内核版本不低于 5.4。CI 在 Ubuntu 22.04 和 24.04 上运行。
-- Python 3.10 或更高版本。CI 覆盖 Python 3.10–3.13。
+- Linux，内核版本不低于 5.4。
+- Python 3.10 或更高版本。
 - 运行网络需要 root 权限，包括创建网络命名空间、配置链路和启动交换机。定义拓扑和编译 P4 程序可以使用普通账号。
 
 ## 安装外部工具 { #required-external-tools }
@@ -18,7 +18,7 @@ description: 安装 Linux 工具和 p4net 命令行，或在 Python 项目中安
 
 ```bash
 sudo apt update
-sudo apt install python3-venv python3-pip iproute2 iputils-ping procps git
+sudo apt install python3-venv python3-pip iproute2 iputils-ping procps
 ```
 
 然后按照上游文档安装 P4 编译器和 BMv2：
@@ -102,45 +102,6 @@ sudo "$(command -v p4net)" quickstart.py
 
 `command -v` 在 `sudo` 切换用户前找到当前环境中的命令入口。也可以运行 `sudo "$(command -v python)" -m p4net quickstart.py`。
 
-## 从源码安装
-
-开发项目时，克隆仓库并以可编辑模式安装，同时安装测试、代码规范和类型检查工具：
-
-```bash
-git clone https://github.com/zhh2001/p4net.git
-cd p4net
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[dev]'
-```
-
-从这个源码环境启动拓扑时，请使用[当前项目环境的命令入口](#project-environments)。
-
-文档通过 [CairoSVG](https://cairosvg.org/documentation/) 生成分享图片。在 Ubuntu 上，先用 `sudo apt install libcairo2` 安装系统 Cairo 库，再在仓库根目录安装文档工具：
-
-```bash
-python -m pip install -e '.[dev,docs]'
-```
-
-## 运行测试和构建文档
-
-从源码安装后，在仓库根目录运行测试：
-
-```bash
-python -m pytest
-```
-
-该命令只运行默认测试集，不包含标记为需要 root、p4c 或 BMv2 的测试。安装外部工具后，通过以下命令启用这三组测试：
-
-```bash
-sudo env "PATH=$PATH" "$(command -v python)" -m pytest \
-  --run-integration --run-p4c --run-bmv2
-```
-
-安装文档工具后，通过以下命令构建站点：
-
-```bash
-python -m mkdocs build --strict
-```
+从源码搭建开发环境、运行测试或构建文档，请参阅[贡献指南](../dev/contributing.md#development-setup)。
 
 安装或启动时遇到问题，可查阅[故障排查](../troubleshooting.md)。

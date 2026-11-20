@@ -4,7 +4,7 @@ description: Choose a version, verify the candidate, and prepare tested wheel an
 
 # Release process
 
-Prepare a release from a Linux checkout with the [development and documentation dependencies](../getting-started/installation.md#install-from-source) installed. Run the commands below from the repository root in the active virtual environment. Replace `X.Y.Z` with the chosen version and keep the same shell for the build and installation steps.
+Prepare a release from a Linux checkout with the [development](contributing.md#development-setup) and [documentation](contributing.md#build-the-documentation) dependencies installed. Run the commands below from the repository root in the active virtual environment. Replace `X.Y.Z` with the chosen version and keep the same shell for the build and installation steps.
 
 ## Choose a version { #when-to-cut-a-release }
 
@@ -42,8 +42,6 @@ The current [CI workflow](https://github.com/zhh2001/p4net/blob/main/.github/wor
 ## Update version and changelog { #version-bump }
 
 Set the same version in `pyproject.toml` (`project.version`) and `src/p4net/__init__.py` (`__version__`).
-
-<span id="changelog"></span>
 
 Review commits since the previous release and complete [CHANGELOG.md](../changelog.md). Group user-visible additions, changes and fixes, including compatibility notes. Put them under `## [X.Y.Z] - YYYY-MM-DD` and leave an empty `## [Unreleased]` above it. Use the local system date:
 
