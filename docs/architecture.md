@@ -112,7 +112,7 @@ The default cache is `~/.cache/p4net/compiler/`. Each `CompileResult` records th
 
 `P4InfoIndex` resolves names, IDs, match types, bit widths, and controller metadata. The codec functions encode values and format decoded matches. The formatters use IPv4 for 32-bit fields, MAC for 48-bit fields, IPv6 for 128-bit fields, and decimal for other widths.
 
-`Network` supplies its synchronous clients with a millisecond timestamp as the high part of the election ID. A directly constructed `P4RuntimeClient` defaults to `(1, 0)`. Primary status depends on arbitration with the other clients connected to that device. See the [async client guide](async-client.md#connections-and-primary-status) for explicit election IDs.
+`Network` supplies its synchronous clients with a millisecond timestamp as the high part of the election ID. A directly constructed `P4RuntimeClient` defaults to `(1, 0)`. P4Runtime arbitrates primary status separately for each device and role. See the [async client guide](async-client.md#connections-and-primary-status) for explicit election IDs.
 
 When the synchronous StreamChannel ends or fails, the client clears its connection state and closes the channel. Call `connect()` on the same client to reconnect. Lifecycle calls wait for channel cleanup already in progress. A write or pipeline update rejected with `PERMISSION_DENIED` raises `NotPrimaryError`; the connection remains available for reads.
 

@@ -65,10 +65,10 @@ description: Glossary of P4, SDN, Linux networking, and tooling terms used in th
 :   The compiled dataplane program currently running on a switch (parser + controls + deparser). Pushed via P4Runtime's `SetForwardingPipelineConfig`.
 
 `Election ID`
-:   A 128-bit number that orders P4Runtime controllers competing for primary mastership. Highest election ID wins. p4net uses millisecond-since-epoch so re-running the same script always claims primary.
+:   A 128-bit unsigned integer a controller supplies during P4Runtime arbitration. Higher IDs take priority within a device and role. `Network` uses Unix time in milliseconds for the high 64 bits and zero for the low 64 bits. `AsyncP4RuntimeClient` uses the same scheme by default. IDs generated in the same millisecond can coincide. See [Connections and primary status](async-client.md#connections-and-primary-status) to set an ID explicitly.
 
 `Mastership`
-:   Which controller holds the primary role for a device. P4Runtime allows one primary writer at a time.
+:   Primary status for a device and role. P4Runtime elects at most one primary for each `(device_id, role)` pair. The primary can write within that role's permissions. See [P4Runtime client arbitration](https://p4lang.github.io/p4runtime/spec/v1.5.0/P4Runtime-Spec.html#sec-client-arbitration-and-controller-replication).
 
 ## Linux networking
 

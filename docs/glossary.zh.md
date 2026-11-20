@@ -64,11 +64,11 @@ description: p4net 文档中使用到的 P4、SDN、Linux 网络与工具相关�
 `Pipeline`
 :   交换机当前运行的编译后数据平面程序（parser + 控制 + deparser）。通过 P4Runtime 的 `SetForwardingPipelineConfig` 推送。
 
-`Election ID`
-:   一个 128 位整数，用于在多个 P4Runtime 控制器竞争主控权时排序。最大者胜出。p4net 使用毫秒级时间戳，使重跑同一脚本总能稳定地夺得主控者地位。
+`Election ID`（选举 ID）
+:   控制器在 P4Runtime 仲裁时提交的 128 位无符号整数。同一设备和角色下，ID 较大的控制器优先。`Network` 创建的客户端和未显式指定 ID 的 `AsyncP4RuntimeClient` 都用 Unix 毫秒时间戳作为高 64 位，低 64 位为 0。同一毫秒生成的 ID 可能重复。需要显式设置时，参见[连接与主控权](async-client.md#连接与主控权)。
 
-`Mastership`
-:   设备当前的主控者。P4Runtime 一次只允许一个主控写入者。
+`Mastership`（主控权）
+:   控制器对某个设备和角色的主控权。P4Runtime 对每个 `(device_id, role)` 组合单独选主，同一组合最多有一个主控客户端。主控可以在该角色的权限范围内写入。参见 [P4Runtime 客户端仲裁规范](https://p4lang.github.io/p4runtime/spec/v1.5.0/P4Runtime-Spec.html#sec-client-arbitration-and-controller-replication)。
 
 ## Linux 网络
 
