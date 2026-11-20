@@ -22,6 +22,7 @@ from p4net.network import _cleanup as cleanup
 
 mode, log_name = sys.argv[1:]
 log = Path(log_name)
+child_has_network = mode in ("atexit", "child-network", "locked-registry")
 
 
 class TrackedNetwork:
@@ -42,6 +43,8 @@ ready_r, ready_w = os.pipe()
 child_pid = os.fork()
 if child_pid == 0:
     os.close(ready_r)
+    if child_has_network:
+        cleanup.register(TrackedNetwork("child"))
     if mode == "atexit":
         sys.exit(0)
     try:
@@ -50,9 +53,6 @@ if child_pid == 0:
             while True:
                 time.sleep(0.01)
         else:
-            if mode in ("child-network", "locked-registry"):
-                child = TrackedNetwork("child")
-                cleanup.register(child)
             cleanup._run_cleanup()
     except KeyboardInterrupt:
         os._exit(128 + signal.SIGINT)
@@ -85,9 +85,7 @@ try:
         128 + signal.SIGINT if mode == "sigint" else 0
     )
     assert os.waitstatus_to_exitcode(status) == expected_exit
-    child_events = [f"child:{child_pid}"] if mode in (
-        "child-network", "locked-registry"
-    ) else []
+    child_events = [f"child:{child_pid}"] if child_has_network else []
     actual = log.read_text().splitlines() if log.exists() else []
     assert actual == child_events, (actual, child_events)
     cleanup._run_cleanup()
@@ -102,11 +100,29 @@ finally:
 
 
 _ASYNC_FORK_SCRIPT = (
-    "import asyncio\nasync def main():\n"
-    "    import signal\n"
-    "    signal.signal(signal.SIGINT, signal.default_int_handler)\n"
+    "import asyncio\n\ndef exercise():\n"
     + textwrap.indent(_FORK_SCRIPT, "    ")
-    + "\nasyncio.run(main())\n"
+    + """
+loop = asyncio.new_event_loop()
+completed = loop.create_future()
+
+
+def run():
+    try:
+        exercise()
+    except Exception as exc:
+        completed.set_exception(exc)
+    else:
+        completed.set_result(None)
+
+
+# A loop callback lets SystemExit reach the interpreter after fork.
+loop.call_soon(run)
+try:
+    loop.run_until_complete(completed)
+finally:
+    loop.close()
+"""
 )
 
 
