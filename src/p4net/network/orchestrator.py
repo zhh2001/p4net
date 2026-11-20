@@ -241,11 +241,7 @@ class Network:
 
     @property
     def boot_timestamps(self) -> dict[str, int]:
-        """Mapping of switch name to wall-clock μs when its BMv2 started.
-
-        Equivalent to ``{name: self.switch(name).boot_timestamp_us for name
-        in self.topology.switches}``, but more concise and stays in sync
-        with the running set.
+        """Map each running switch's name to its ``boot_timestamp_us``.
 
         Returns:
             Fresh dict (callers may mutate it without affecting the

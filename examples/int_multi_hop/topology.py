@@ -26,10 +26,8 @@ from p4net.topo import Topology
 
 HERE = Path(__file__).resolve().parent
 
-# Coordination file consumed by ``listener.py`` so the listener can align
-# each switch's per-process BMv2 timestamp to wall-clock microseconds:
-#
-#     wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+# The listener adds these launch times to per-process BMv2 timestamps to
+# estimate packet arrival times in Unix microseconds.
 #
 # Written at the end of ``setup(net)`` once both switches are running.
 # ``P4NET_INT_BOOT_TIMES_PATH`` selects the output file. Use the same
@@ -107,11 +105,7 @@ def setup(net: Network) -> None:
             params={"port": 1},
         )
 
-    # Publish each switch's BMv2 boot timestamp so the listener can align
-    # per-switch ``ingress_timestamp_us`` values to a common wall clock.
-    # ``Network.boot_timestamps`` (v1.5+) returns the same mapping as the
-    # previous manual ``{name: net.switch(name).boot_timestamp_us}`` form,
-    # and adapts automatically if more switches are added later.
+    # Publish a snapshot of launch timestamps for the listener.
     boot_times = net.boot_timestamps
     BOOT_TIMES_PATH.write_text(json.dumps(boot_times, indent=2))
     print(f"boot timestamps written to {BOOT_TIMES_PATH}", flush=True)

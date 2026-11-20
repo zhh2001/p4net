@@ -46,11 +46,11 @@ description: p4net 公开接口的稳定性等级、弃用规则和各包分类�
 | --- | --- | --- |
 | `Network` | 稳定 | 启停、主机和交换机访问、`ping()`、`pingall()`、`pingall6()`。在事件循环中，使用 `await net.astart()` 和 `await net.astop()` 等待启动和关闭。取消时先完成清理。 |
 | `Network.xterm` | 实验性 | 通过可用的 X 显示服务打开主机终端。 |
-| `Network.boot_timestamps` | 稳定 | 每次返回一个新字典，将交换机名映射到 BMv2 启动时的 Unix 微秒时间戳。修改该字典不影响网络状态。网络未运行时抛出 `NetworkNotRunningError`。 |
+| `Network.boot_timestamps` | 稳定 | 每次返回一个新字典，将交换机名映射到对应的 `boot_timestamp_us`。修改该字典不影响网络状态。网络未运行时抛出 `NetworkNotRunningError`。 |
 | `RunningHost` | 稳定 | 主机描述、命名空间和接口访问、地址、命令执行及 ping。 |
 | `RunningSwitch` | 稳定 | 交换机描述、BMv2 进程、同步客户端、编译产物及日志路径。 |
 | `RunningSwitch.async_client` | 稳定，自 1.7 起 | 首次访问时创建未连接的客户端，并传入同步客户端当前的 P4Info 索引。实例会缓存，直到 `stop()` 或 `astop()` 将其关闭并清除。 |
-| `RunningSwitch.boot_timestamp_us` | 稳定 | BMv2 启动时的 Unix 微秒时间戳。底层进程没有启动时间戳时抛出 `NetworkNotRunningError`。 |
+| `RunningSwitch.boot_timestamp_us` | 稳定 | 启动 BMv2 进程前记录的 Unix 微秒时间戳。底层进程没有启动时间戳时抛出 `NetworkNotRunningError`。 |
 | `NetworkError`、`NetworkAlreadyRunningError`、`NetworkNotRunningError`、`NodeNotFoundError` | 稳定 | 网络启停和节点查询错误。 |
 
 ### `p4net.control`

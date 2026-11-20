@@ -1,6 +1,6 @@
 # Multi-hop INT (in-band network telemetry)
 
-Two switches in series, each inserting its own 14-byte INT shim header into every forwarded packet. The receiver decodes the full hop-by-hop metadata chain to reconstruct the packet's journey across the topology.
+Two switches in series, each inserting its own 14-byte INT shim header into every forwarded IPv4 packet. The receiver decodes the full hop-by-hop metadata chain to reconstruct the packet's journey across the topology.
 
 This is the "production-style" INT example. For the simpler single-switch introduction, see [`examples/int/`](../int/) — same shim format, one switch, easier to read.
 
@@ -95,36 +95,31 @@ The listener prints one block per packet. With two switches on the path, every b
 
 ## Sample output
 
-Captured from the v1.4 multi-hop integration test (aligned mode):
+One packet captured by the listener with boot timestamps loaded.
 
 ```
 packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=800454us aligned=1778513670403185us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=699418us aligned=1778513670403875us egress_port=2 queue_depth=0
-  latency_s1_to_s2 = 690us
+  hop 1: switch_id=1 ts=676402us aligned=1795161753919021us egress_port=2 queue_depth=0
+  hop 2: switch_id=2 ts=467984us aligned=1795161753918136us egress_port=2 queue_depth=0
+  latency_s1_to_s2 = -885us
 ```
 
-`hop 1` is s1 (forwards out port 2 toward s2); `hop 2` is s2 (forwards out port 2 toward h2). Each `ts` is the per-switch `ingress_global_timestamp` (μs since *that* BMv2 process booted); `aligned` is wall-clock μs since Unix epoch (the formula in the next section); `latency_s1_to_s2` is the wall-clock delta between the two aligned arrival times — real per-hop forwarding latency through BMv2's userspace pipeline plus the veth pair, typically tens to a couple thousand microseconds on this rig.
+`hop 1` is `s1` and `hop 2` is `s2`. Each `ts` comes from that switch's `ingress_global_timestamp`. The listener estimates both arrival times in Unix microseconds (`aligned`) and prints their difference as `latency_s1_to_s2`.
 
-If you run the listener directly with `sudo ip netns exec h2 python3 listener.py --iface h2-eth0` while no topology has populated the coordination file, it falls back to the v1.3 "unaligned" display, which prints the raw per-switch `ts` and notes that no alignment was available.
+Without a boot-time file, the listener prints the raw `ts` values marked `[unaligned]`.
 
 ## How cross-switch timestamp alignment works
 
-BMv2's `standard_metadata.ingress_global_timestamp` is **per-process**: each `simple_switch_grpc` instance's clock starts at zero on boot, so two switches running side-by-side report timestamps in independent reference frames. Raw `shim_1.ts` and `shim_2.ts` can't be compared directly — that's the v1.3 caveat this example used to ship with.
-
-Since v1.4, every `RunningSwitch` exposes a `boot_timestamp_us` property: wall-clock μs since Unix epoch when its BMv2 process started. Captured immediately before `subprocess.Popen`, so drift from BMv2's internal clock zero is bounded by Popen overhead (sub-millisecond on a typical Linux host).
-
-The alignment formula:
+Each BMv2 process starts its own microsecond counter during initialization. p4net records `RunningSwitch.boot_timestamp_us` in Unix microseconds just before launching the process. The listener uses that timestamp as an estimate of when the counter started. See the [BMv2 timestamp implementation notes](https://github.com/p4lang/behavioral-model/blob/2bdd0b7b/docs/simple_switch.md#bmv2-timestamp-implementation-notes).
 
 ```
-wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+aligned = boot_timestamp_us + ts
+latency_s1_to_s2 = aligned_s2 - aligned_s1
 ```
 
-`setup(net)` writes both switches' boot timestamps to a JSON coordination file at `/tmp/p4net-int-multi-hop-boot-times.json`; the listener reads it at startup, looks up each shim's hop-index → switch name, and prints `aligned=...us` next to each raw `ts`. With both aligned values in hand, the trailing `latency_s1_to_s2 = ...us` line is just subtraction.
+The difference estimates the time between the packet arriving at `s1` and arriving at `s2`. The time between the launch timestamp and the start of the BMv2 counter can differ between switches. That difference can make the latency estimate negative, as in the sample above.
 
-`topology.py` builds the mapping with `Network.boot_timestamps` (v1.5+), which includes all running switches.
-
-The alignment is good enough for "is per-hop latency in the 1 ms range or the 100 ms range" — not good enough for nanosecond-precision research. For real per-link latency in production INT you'd still want a shared time source (PTP). The drift is on the order of the Popen syscall (sub-millisecond) plus any kernel-scheduling delay between the `time.time_ns()` capture and BMv2's actual clock zero.
+`setup(net)` saves `Network.boot_timestamps` to `/tmp/p4net-int-multi-hop-boot-times.json` by default. Each access to the property returns a new dictionary keyed by switch name. You can edit the copy independently of the running network. The listener loads the file at startup.
 
 ## Running concurrent topologies
 
@@ -166,7 +161,6 @@ The listener prints three packets with two aligned hops each. The shell reports 
 
 ## What's interesting
 
-- **Per-hop forwarding latency is now observable.** The `latency_s1_to_s2` line is the wall-clock delta between hop 1 and hop 2; on this rig it ranges from a few hundred microseconds to a few milliseconds. Real ASIC switches report tens to hundreds of nanoseconds; BMv2's userspace interpreter is two to three orders of magnitude slower.
 - **Egress ports correspond to the path direction**, not to a fixed numbering scheme. s1's port 2 leads to s2; s2's port 2 leads to h2. Different topologies will produce different `egress_port` values.
 - **`queue_depth` is reliably 0** in this configuration, the same as in the single-switch INT example. BMv2's `deq_qdepth` would surface non-zero values only under explicit queue configuration with saturating offered load — not at one ICMP echo per second.
 
@@ -204,6 +198,5 @@ The listener already handles arbitrary hop counts — it stops decoding when `ne
 ## Caveats
 
 - **Two hops only with the current pipeline.** A packet entering a third switch on the path would find both shim slots already valid and would forward without further annotation. The receiver sees only the first two hops; deeper paths require the header-stack rewrite above.
-- **Alignment drift is sub-millisecond.** `boot_timestamp_us` is captured immediately before `Popen`, but BMv2's actual internal clock zero is slightly later (after exec, after process init). The drift is bounded by Popen + early-init overhead — typically well under 1 ms on a typical Linux host, occasionally a couple of ms under load. Good enough for "is this in the μs or ms regime", not good enough for serious latency research; use PTP for that.
 - **`queue_depth` is almost always 0.** Same as the single-switch example — BMv2's default queueing doesn't surface meaningful values.
 - **No checksum recomputation for the inserted shims.** The IPv4 checksum field covers only the IPv4 header itself; ethernet has no cryptographic protection. The shim layer is between them and unprotected, which matches how real INT works (the INT spec assumes link-layer integrity).

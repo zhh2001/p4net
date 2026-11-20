@@ -4,7 +4,7 @@ description: Multi-hop INT demo. Two switches in series, both running the same P
 
 # Multi-hop INT
 
-Two switches in series, each inserting its own 14-byte INT shim header into every forwarded packet. The receiver decodes the full hop-by-hop stack to reconstruct the packet's journey across the topology. This is the production-style INT example; for the simpler single-switch introduction see [INT (in-band network telemetry)](int.md).
+Two switches in series each insert a 14-byte INT shim header into every forwarded IPv4 packet. The receiver reads both headers to see the packet's path. The [single-switch INT example](int.md) introduces the shim format.
 
 ## What this demonstrates
 
@@ -72,32 +72,31 @@ The listener prints one block per packet, with one `hop` line per traversed swit
 
 ## Sample output
 
-Captured by the v1.4 multi-hop integration test (aligned mode):
+One packet captured by the listener with boot timestamps loaded.
 
 ```
 packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=800454us aligned=1778513670403185us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=699418us aligned=1778513670403875us egress_port=2 queue_depth=0
-  latency_s1_to_s2 = 690us
+  hop 1: switch_id=1 ts=676402us aligned=1795161753919021us egress_port=2 queue_depth=0
+  hop 2: switch_id=2 ts=467984us aligned=1795161753918136us egress_port=2 queue_depth=0
+  latency_s1_to_s2 = -885us
 ```
 
-`hop 1` is s1; `hop 2` is s2. Each `ts` is BMv2's per-process `ingress_global_timestamp`; `aligned` is wall-clock μs since Unix epoch; `latency_s1_to_s2` is the wall-clock delta between aligned arrival times — real per-hop forwarding latency through BMv2's userspace pipeline plus the veth pair.
+`hop 1` is `s1` and `hop 2` is `s2`. Each `ts` comes from that switch's `ingress_global_timestamp`. The listener estimates both arrival times in Unix microseconds (`aligned`) and prints their difference as `latency_s1_to_s2`.
 
-Running the listener directly without `setup(net)` (so no coordination file is present) falls back to the v1.3 unaligned display: raw `ts`, no `aligned=` line, no latency.
+Without a boot-time file, the listener prints the raw `ts` values marked `[unaligned]`.
 
 ## How cross-switch timestamp alignment works
 
-BMv2's `standard_metadata.ingress_global_timestamp` is **per-process**: each `simple_switch_grpc` instance's clock starts at zero on boot, so raw `shim_1.ts` and `shim_2.ts` aren't directly comparable across hops. Since v1.4, every `RunningSwitch` exposes a `boot_timestamp_us` property (wall-clock μs since Unix epoch at process start, captured immediately before `subprocess.Popen`). The alignment formula:
+Each BMv2 process starts its own microsecond counter during initialization. p4net records `RunningSwitch.boot_timestamp_us` in Unix microseconds just before launching the process. The listener uses that timestamp as an estimate of when the counter started. See the [BMv2 timestamp implementation notes](https://github.com/p4lang/behavioral-model/blob/2bdd0b7b/docs/simple_switch.md#bmv2-timestamp-implementation-notes).
 
 ```
-wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+aligned = boot_timestamp_us + ts
+latency_s1_to_s2 = aligned_s2 - aligned_s1
 ```
 
-`setup(net)` writes both switches' boot timestamps to a JSON coordination file at `/tmp/p4net-int-multi-hop-boot-times.json`; the listener reads it at startup and prints `aligned=...us` next to each raw `ts`. Subtraction across hops gives the `latency_s1_to_s2` line.
+The difference estimates the time between the packet arriving at `s1` and arriving at `s2`. The time between the launch timestamp and the start of the BMv2 counter can differ between switches. That difference can make the latency estimate negative, as in the sample above.
 
-Drift is bounded by Popen + early-init overhead — sub-millisecond typically, occasionally a couple of milliseconds under load. Good enough for μs-vs-ms regime decisions; for serious latency research use a real shared time source (PTP).
-
-`topology.py` builds the coordination dict via ``Network.boot_timestamps`` (v1.5+) — a read-only dict keyed by switch name. The previous hand-written ``{name: net.switch(name).boot_timestamp_us}`` comprehension still works but doesn't adapt as switches are added.
+`setup(net)` saves `Network.boot_timestamps` to `/tmp/p4net-int-multi-hop-boot-times.json` by default. Each access to the property returns a new dictionary keyed by switch name. You can edit the copy independently of the running network. The listener loads the file at startup.
 
 ## Running concurrent topologies
 
@@ -139,13 +138,11 @@ The listener prints three packets with two aligned hops each. The shell reports 
 
 ## What's interesting
 
-- **Per-hop forwarding latency is now observable.** The `latency_s1_to_s2` line ranges from a few hundred microseconds to a few milliseconds on this rig. Real ASIC switches are 10–100× faster; BMv2's userspace interpreter is the bottleneck.
 - **Egress ports correspond to the path direction.** s1 forwards out port 2 toward s2; s2 forwards out port 2 toward h2. Different topologies produce different numbers.
 - **`queue_depth` is reliably 0** at this offered load — BMv2's default queueing doesn't surface non-zero values without explicit configuration and saturation.
 
 ## Caveats
 
 - **Two hops only with the current pipeline.** A third switch on the path would find both shim slots full and forward without further annotation. Real deployments use a P4 header stack of MAX_HOPS depth — see the example README for the rewrite recipe.
-- **Alignment drift is sub-millisecond.** `boot_timestamp_us` is captured immediately before `Popen`, but BMv2's actual internal clock zero is slightly later. Good enough for μs/ms regime checks, not good enough for nanosecond-scale latency research; use PTP for that.
 - **`queue_depth` is almost always 0.** Same as the single-switch example.
 - **No checksum recomputation for the inserted shims.** The IPv4 checksum covers only the IPv4 header; the shim layer between Ethernet and IPv4 is unprotected, matching how production INT works (the INT spec assumes link-layer integrity).

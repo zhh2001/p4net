@@ -301,17 +301,14 @@ class RunningSwitch:
 
     @property
     def boot_timestamp_us(self) -> int:
-        """Wall-clock microseconds since Unix epoch when this switch's BMv2
-        process started.
+        """Unix microseconds recorded just before launching this switch's BMv2 process.
 
-        Combined with INT shim ``ingress_timestamp_us``, gives wall-clock
-        arrival time::
+        Adding the switch's process-relative ``ingress_timestamp_us`` estimates
+        the packet's arrival time::
 
-            wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+            estimated_arrival_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
 
-        This is the alignment point for comparing timestamps across multiple
-        switches — BMv2's per-process ``ingress_global_timestamp`` clock
-        starts at zero on each process's boot.
+        BMv2 initializes its ``ingress_global_timestamp`` clock after launch.
 
         Raises:
             NetworkNotRunningError: if the underlying BMv2 process has not

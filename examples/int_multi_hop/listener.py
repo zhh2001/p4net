@@ -6,9 +6,9 @@ back into a non-INT protocol (typically IPv4, ``0x0800``).
 
 If a coordination file is present at
 ``/tmp/p4net-int-multi-hop-boot-times.json`` (written by
-``topology.py``'s ``setup(net)``), each switch's BMv2 boot timestamp is
-loaded and combined with the per-hop ``ingress_timestamp_us`` to print
-wall-clock arrival times and a per-hop forwarding-latency line.
+``topology.py``'s ``setup(net)``), the listener adds each switch's launch
+timestamp to its ``ingress_timestamp_us`` to estimate when the packet
+arrived. It prints the estimated arrival times and their difference.
 
 Usage (must be run as root for AF_PACKET access):
 

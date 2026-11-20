@@ -169,17 +169,15 @@ class BMv2Switch:
 
     @property
     def boot_timestamp_us(self) -> int | None:
-        """Wall-clock microseconds since Unix epoch when this BMv2 process started.
+        """Unix microseconds recorded immediately before ``subprocess.Popen``.
 
-        ``None`` if the switch has not been started yet, or has been stopped
-        since its last start. Captured immediately before ``subprocess.Popen``,
-        so drift from BMv2's internal clock zero is bounded by Popen overhead
-        (sub-millisecond on a typical Linux host).
+        ``None`` before launch or after stop. BMv2 initializes its ingress
+        clock separately during process initialization.
 
-        Combined with INT shim ``ingress_timestamp_us`` to derive wall-clock
-        arrival time across multiple switches::
+        Adding the process-relative INT timestamp estimates the packet's
+        arrival time::
 
-            wall_clock_us = bmv2.boot_timestamp_us + shim.ingress_timestamp_us
+            estimated_arrival_us = bmv2.boot_timestamp_us + shim.ingress_timestamp_us
         """
         return self._boot_timestamp_us
 
@@ -235,9 +233,8 @@ class BMv2Switch:
         log_handle = log_path.open("ab")
         self._log_file_handle = log_handle
         logger.debug("BMv2 %r starting: %s", self._name, argv)
-        # Capture wall-clock immediately before Popen — drift from BMv2's
-        # internal clock zero is bounded by Popen overhead. Do NOT add any
-        # work between this assignment and the Popen call.
+        # Record the launch time as close to Popen as possible. The INT
+        # example uses it to estimate arrival times from BMv2 timestamps.
         self._boot_timestamp_us = time.time_ns() // 1000
         try:
             self._proc = subprocess.Popen(

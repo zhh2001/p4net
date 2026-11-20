@@ -4,7 +4,7 @@ description: 多跳 INT 示例。两台交换机串联运行同一份 P4，每�
 
 # 多跳 INT
 
-两台交换机串联，每台在每个转发包里插入自己的 14 字节 INT shim 头。接收端解析整条逐跳栈，重建包穿过拓扑的轨迹。这是更贴近真实部署形态的 INT 示例；想看更简单的单交换机入门，请参见 [INT](int.md)。
+两台交换机串联，各自在转发的 IPv4 报文中插入一个 14 字节的 INT shim 头。接收端读取这两个头部，就能看到报文经过了哪些交换机。[单交换机 INT 示例](int.md)介绍了 shim 的格式。
 
 ## 这个示例展示了什么
 
@@ -72,32 +72,31 @@ listener 每过一个包打一个块；本拓扑中每个块两行（两个交�
 
 ## 示例输出
 
-v1.4 多跳集成测试的对齐模式实测：
+以下是监听器加载启动时间戳后捕获的一个报文。
 
 ```
 packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
-  hop 1: switch_id=1 ts=800454us aligned=1778513670403185us egress_port=2 queue_depth=0
-  hop 2: switch_id=2 ts=699418us aligned=1778513670403875us egress_port=2 queue_depth=0
-  latency_s1_to_s2 = 690us
+  hop 1: switch_id=1 ts=676402us aligned=1795161753919021us egress_port=2 queue_depth=0
+  hop 2: switch_id=2 ts=467984us aligned=1795161753918136us egress_port=2 queue_depth=0
+  latency_s1_to_s2 = -885us
 ```
 
-`hop 1` 是 s1，`hop 2` 是 s2。`ts` 是 BMv2 每进程本地时间戳；`aligned` 是对齐后的 Unix 微秒挂钟值；`latency_s1_to_s2` 是两条对齐时间戳之差——经过 BMv2 用户态流水线加 veth 对的真实逐跳转发延迟。
+`hop 1` 对应 `s1`，`hop 2` 对应 `s2`。`ts` 来自各自交换机的 `ingress_global_timestamp`。`aligned` 是监听器估算的到达时刻，用 Unix 微秒表示。两个估算值之差显示在 `latency_s1_to_s2` 一行。
 
-直接跑 listener 而不经 `setup(net)`（没有协调文件）时退回 v1.3 的未对齐显示：只有 `ts`，没有 `aligned=` 行，没有 `latency` 行。
+没有启动时间戳文件时，监听器会显示原始的 `ts`，并标注 `[unaligned]`。
 
 ## 跨交换机时间戳对齐如何工作
 
-BMv2 的 `standard_metadata.ingress_global_timestamp` 是**每进程**的：每个 `simple_switch_grpc` 实例的时钟在自身启动时从零开始，因此 raw `shim_1.ts` 与 `shim_2.ts` 无法直接跨交换机比较。自 v1.4 起，每个 `RunningSwitch` 暴露 `boot_timestamp_us` 属性（进程启动时的 Unix 微秒挂钟值，在 `subprocess.Popen` 之前一刻捕获）。对齐公式：
+每个 BMv2 进程在初始化时启动自己的微秒计数器。p4net 在启动进程前记录 `RunningSwitch.boot_timestamp_us`，单位为 Unix 微秒。监听器用这个值估算计数器的起点。参见 [BMv2 时间戳实现说明](https://github.com/p4lang/behavioral-model/blob/2bdd0b7b/docs/simple_switch.md#bmv2-timestamp-implementation-notes)。
 
 ```
-wall_clock_us = switch.boot_timestamp_us + shim.ingress_timestamp_us
+aligned = boot_timestamp_us + ts
+latency_s1_to_s2 = aligned_s2 - aligned_s1
 ```
 
-`setup(net)` 把两台交换机的启动时间戳写到协调文件 `/tmp/p4net-int-multi-hop-boot-times.json`；listener 启动时读取，在每条 raw `ts` 旁边打印 `aligned=...us`，两个对齐值之差即 `latency_s1_to_s2`。
+这个差值估算报文先后到达 `s1` 和 `s2` 的时间间隔。从 p4net 记录启动时间戳到 BMv2 开始计时，两台交换机经过的时间可能不同。这会给估算带来误差，有时会像上面的示例一样算出负值。
 
-漂移由 Popen + 进程初始化开销决定——典型情况下亚毫秒级，有时受负载影响达到几毫秒。够用来判断「跨跳延迟是 μs 量级还是 ms 量级」，真要做纳秒级延迟研究还得用 PTP 这类共享时间源。
-
-`topology.py` 用 ``Network.boot_timestamps``（v1.5+）来构建协调字典——这是一个按交换机名字索引的只读字典。之前手写的 ``{name: net.switch(name).boot_timestamp_us}`` 仍可用，但加交换机时不会自动适配。
+`setup(net)` 默认把 `Network.boot_timestamps` 保存到 `/tmp/p4net-int-multi-hop-boot-times.json`，监听器启动时读取。每次访问这个属性都会得到一个新的字典，以交换机名为键。可以修改这份副本，运行中的网络状态不受影响。
 
 ## 同主机并行运行多份拓扑
 
@@ -139,13 +138,11 @@ listener 会显示三个包，每个包都有两跳对齐后的时间戳。带 I
 
 ## 值得注意的点
 
-- **每跳转发延迟现在可观测**。`latency_s1_to_s2` 这一行在本机从几百微秒到几毫秒不等。真实 ASIC 交换机要快 10–100 倍；BMv2 用户态解释器才是瓶颈。
 - **出端口对应路径方向**。s1 从 port 2 朝 s2 转发；s2 从 port 2 朝 h2 转发。不同拓扑会得到不同的端口号。
 - **`queue_depth` 在本负载下稳定为 0**——BMv2 的默认队列设置下，没有显式队列配置和饱和负载是看不到非零值的。
 
 ## 注意事项
 
 - **当前流水线只支持两跳**。第三台交换机会发现两个 shim slot 都已 valid，直接转发不再追加。真实部署用 MAX_HOPS 深度的 P4 header stack——示例 README 里有改写步骤。
-- **对齐有亚毫秒漂移**。`boot_timestamp_us` 是在 `Popen` 之前一刻抓的，BMv2 实际内部时钟零点要更晚一点。够用来粗看，不够用来做纳秒级精度研究。
 - **`queue_depth` 几乎总是 0**，与单交换机示例一致。
 - **不重算插入 shim 的校验和**。IPv4 校验和只覆盖 IPv4 头本身；位于以太网与 IPv4 之间的 shim 层是无保护的，这与 INT 规范的假设（链路层完整性）一致。

@@ -24,7 +24,7 @@ Status: 1.10.0, stable. Public APIs follow the [API stability rules](https://zhh
 - IPv4 and IPv6 host addressing with per-interface sysctl gating.
 - Asymmetric link impairment (per-direction `bandwidth`, `delay`, `jitter`, `loss_pct`).
 - Topology visualization (Graphviz DOT / PNG / SVG).
-- In-band network telemetry (INT) — single-switch introduction plus a multi-hop production-style example with wall-clock-aligned cross-switch timestamps via `RunningSwitch.boot_timestamp_us`.
+- In-band network telemetry (INT) — a single-switch introduction and a multi-hop example that estimates cross-switch timing from BMv2 timestamps.
 - Direct P4 register read/write via P4Runtime gRPC.
 - Unified `p4net.*` logger hierarchy with CLI verbosity control.
 - Async P4Runtime client (`AsyncP4RuntimeClient`, Stable since 1.7.0) for concurrent multi-switch operations.
