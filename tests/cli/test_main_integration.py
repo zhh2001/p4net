@@ -58,8 +58,8 @@ def cli_topology(tmp_path: Path) -> tuple[Path, Path, str, str, str]:
         "    def ip(self):\n"
         "        return f'{self.prefix}{self.number}/24'\n"
         "topology = Topology()\n"
-        f"topology.add_host({h1!r}, ip=HostConfig(1).ip)\n"
-        f"topology.add_host({h2!r}, ip=HostConfig(2).ip)\n"
+        f"topology.add_host({h1!r}, ip=HostConfig(1).ip, ip6='fd00:249::1/64')\n"
+        f"topology.add_host({h2!r}, ip=HostConfig(2).ip, ip6='fd00:249::2/64')\n"
         f"topology.add_switch({switch!r}, p4_src=Path({str(_PORT_SWAP)!r}),\n"
         f"                    grpc_port={grpc_port}, thrift_port={thrift_port})\n"
         f"topology.add_link({h1!r}, {switch!r}, port_b=1)\n"
@@ -95,7 +95,14 @@ def test_cli_dataclass_topology_starts_and_runs_setup(
 
 @pytest.mark.parametrize(
     ("verb", "shutdown"),
-    [("listen", "exit"), ("listen", "hangup"), ("ping", "exit"), ("ping6", "exit")],
+    [
+        ("listen", "exit"),
+        ("listen", "hangup"),
+        ("ping", "exit"),
+        ("ping6", "exit"),
+        ("pingall", "exit"),
+        ("pingall6", "exit"),
+    ],
 )
 def test_ctrl_c_cancels_command_without_stopping_topology(
     tmp_path: Path, cli_topology: tuple[Path, Path, str, str, str], verb: str, shutdown: str
@@ -162,13 +169,21 @@ raise SystemExit(main())
                 if verb == "listen":
                     os.write(master, f"{switch} packet listen timeout=30\n".encode())
                     read_through(f"Waiting for 1 packet on {switch}".encode())
+                elif verb.startswith("pingall"):
+                    os.write(master, f"{verb} 3\n".encode())
+                    read_through(b"Pinging 2 host pairs...")
+                    read_through(b"1/2 host pairs checked")
                 else:
                     target = "::1" if verb == "ping6" else h2
                     os.write(master, f"{h1} {verb} {target} 30\n".encode())
                     read_through(b"seq=1  time")
                 os.write(master, b"\x03")
                 output = read_through(b"^C cancelled")
-                if verb != "listen":
+                if verb.startswith("pingall"):
+                    assert re.search(rb"\b" + h1.encode() + rb" +- +1", output), output
+                    assert re.search(rb"\b" + h2.encode() + rb" +\? +-", output), output
+                    assert b"1/1 succeeded" in output, output
+                elif verb != "listen":
                     stats = re.search(rb"(\d+) sent, (\d+) received, [\d.]+% loss", output)
                     assert stats is not None, output
                     sent, received = map(int, stats.groups())

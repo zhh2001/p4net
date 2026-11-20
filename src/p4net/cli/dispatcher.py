@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from p4net.cli.exceptions import CLIExit, CLIUsageError, _CommandErrorOutput
 from p4net.cli.formatting import bold, render_pingall_matrix
+from p4net.network.orchestrator import _hosts_with_ip, _ping_host_pairs
 
 if TYPE_CHECKING:
     from p4net.control import P4InfoIndex
@@ -49,11 +50,11 @@ _TOPIC_HELP: dict[str, tuple[str, str]] = {
     "hosts": ("List hosts and their primary IPs / interfaces.", "hosts"),
     "switches": ("List switches and their gRPC addresses / pids.", "switches"),
     "pingall": (
-        "Ping every pair of hosts; print a result matrix.",
+        "Check IPv4 host pairs and show a result matrix with progress.",
         "pingall [count] [timeout]",
     ),
     "pingall6": (
-        "IPv6 ping every pair of v6-equipped hosts; print a result matrix.",
+        "Check IPv6-equipped host pairs and show a result matrix with progress.",
         "pingall6 [count] [timeout]",
     ),
     "topology graph": (
@@ -354,21 +355,53 @@ class CommandDispatcher:
             lines.append(f"{name.ljust(name_w)}  {addr.ljust(addr_w)}  {pid.ljust(pid_w)}  {log}")
         return "\n".join(lines)
 
-    def _cmd_pingall(self, tokens: list[str]) -> str:
-        count, timeout = self._parse_count_timeout(tokens, label="pingall")
-        result = self._network.pingall(count=count, timeout=timeout)
-        hosts = list(self._network.hosts.keys())
-        return render_pingall_matrix(hosts, result, color=self._color)
+    def _cmd_pingall(self, tokens: list[str], *, ipv6: bool = False) -> str:
+        count, timeout = self._parse_count_timeout(tokens, label="pingall6" if ipv6 else "pingall")
+        hosts = self._network.hosts
+        eligible = _hosts_with_ip(hosts, ipv6=ipv6)
+        if ipv6 and not eligible:
+            return "(no IPv6-equipped hosts in topology)"
+        matrix_hosts = list(eligible if ipv6 else hosts)
+        if self._on_progress is not None and len(eligible) > 1:
+            return self._interactive_pingall(matrix_hosts, eligible, count, timeout, ipv6)
+        pingall = self._network.pingall6 if ipv6 else self._network.pingall
+        result = pingall(count=count, timeout=timeout)
+        return render_pingall_matrix(matrix_hosts, result, color=self._color)
 
     def _cmd_pingall6(self, tokens: list[str]) -> str:
-        count, timeout = self._parse_count_timeout(tokens, label="pingall6")
-        eligible = [
-            name for name, host in self._network.hosts.items() if getattr(host, "primary_ip6", None)
-        ]
-        if not eligible:
-            return "(no IPv6-equipped hosts in topology)"
-        result = self._network.pingall6(count=count, timeout=timeout)
-        return render_pingall_matrix(eligible, result, color=self._color)
+        return self._cmd_pingall(tokens, ipv6=True)
+
+    def _interactive_pingall(
+        self,
+        matrix_hosts: list[str],
+        eligible: dict[str, RunningHost],
+        count: int,
+        timeout: float,
+        ipv6: bool,
+    ) -> str:
+        progress = self._on_progress
+        assert progress is not None
+        total = len(eligible) * (len(eligible) - 1)
+        show_progress = count > 1 or len(eligible) > 2
+        batch = (total + 3) // 4
+        last_reported = -1
+        results: dict[tuple[str, str], bool] = {}
+
+        if show_progress:
+            progress(f"Pinging {total} host pairs...")
+        try:
+            for pair, ok in _ping_host_pairs(eligible, count=count, timeout=timeout, ipv6=ipv6):
+                results[pair] = ok
+                checked = len(results)
+                if show_progress and checked < total and checked % batch == 0:
+                    progress(f"{checked}/{total} host pairs checked")
+                    last_reported = checked
+        except KeyboardInterrupt:
+            if len(results) != last_reported:
+                progress(f"{len(results)}/{total} host pairs checked")
+            progress(render_pingall_matrix(matrix_hosts, results, color=False))
+            raise
+        return render_pingall_matrix(matrix_hosts, results, color=self._color)
 
     def _cmd_topology(self, tokens: list[str]) -> str:
         if not tokens:

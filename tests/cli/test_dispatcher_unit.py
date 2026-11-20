@@ -289,6 +289,54 @@ def test_pingall_parses_count_and_timeout(two_host_network: MagicMock) -> None:
     two_host_network.pingall.assert_called_once_with(count=3, timeout=2.5)
 
 
+@pytest.mark.parametrize("verb", ["pingall", "pingall6"])
+def test_pingall_batches_progress_for_eligible_host_pairs(verb: str) -> None:
+    hosts = {
+        f"h{i}": _make_host(f"h{i}", f"10.0.0.{i}", {}, primary_ip6=f"fd00::{i}")
+        for i in range(1, 6)
+    }
+    for host in hosts.values():
+        host.ping.return_value = True
+    hosts["unconfigured"] = _make_host("unconfigured", None, {})
+    progress: list[str] = []
+    result = CommandDispatcher(_make_network(hosts=hosts), on_progress=progress.append).dispatch(
+        verb
+    )
+
+    assert progress == [
+        "Pinging 20 host pairs...",
+        "5/20 host pairs checked",
+        "10/20 host pairs checked",
+        "15/20 host pairs checked",
+    ]
+    assert ("unconfigured" in result) == (verb == "pingall")
+    assert result.endswith("20/20 succeeded")
+    hosts["unconfigured"].ping.assert_not_called()
+
+
+@pytest.mark.parametrize("completed", [0, 1, 2])
+def test_two_host_single_probe_shows_matrix_on_completion_or_interrupt(
+    two_host_network: MagicMock, completed: int
+) -> None:
+    for i, host in enumerate(two_host_network.hosts.values()):
+        if i < completed:
+            host.ping.return_value = True
+        else:
+            host.ping.side_effect = KeyboardInterrupt
+    progress: list[str] = []
+    dispatcher = CommandDispatcher(two_host_network, on_progress=progress.append)
+    if completed == 2:
+        assert dispatcher.dispatch("pingall").endswith("2/2 succeeded")
+        assert not progress
+    else:
+        with pytest.raises(KeyboardInterrupt):
+            dispatcher.dispatch("pingall")
+        checked, matrix = progress
+        assert checked == f"{completed}/2 host pairs checked"
+        assert matrix.count("?") == 2 - completed
+        assert matrix.endswith(f"{completed}/{completed} succeeded")
+
+
 def test_pingall_rejects_too_many_args(two_host_network: MagicMock) -> None:
     d = CommandDispatcher(two_host_network)
     with pytest.raises(CLIUsageError, match="too many"):

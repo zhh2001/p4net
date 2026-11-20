@@ -23,9 +23,10 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from itertools import permutations
 from pathlib import Path
 from types import TracebackType
 
@@ -67,6 +68,27 @@ _DURATION_UNITS_NS: dict[str, int] = {
     "ms": 1_000_000,
     "s": 1_000_000_000,
 }
+
+
+def _hosts_with_ip(hosts: Mapping[str, RunningHost], *, ipv6: bool) -> dict[str, RunningHost]:
+    return {
+        name: host
+        for name, host in hosts.items()
+        if (host.primary_ip6 if ipv6 else host.primary_ip)
+    }
+
+
+def _ping_host_pairs(
+    hosts: Mapping[str, RunningHost], *, count: int, timeout: float, ipv6: bool
+) -> Iterator[tuple[tuple[str, str], bool]]:
+    for (src_name, src_host), (dst_name, dst_host) in permutations(hosts.items(), 2):
+        if ipv6:
+            target = dst_host.primary_ip6
+            assert target is not None  # Hosts are selected by _hosts_with_ip.
+            ok = src_host.ping(target, count=count, timeout=timeout, force_ipv6=True)
+        else:
+            ok = src_host.ping(dst_host, count=count, timeout=timeout)
+        yield (src_name, dst_name), ok
 
 
 def _parse_duration_ns(value: str) -> int:
@@ -445,14 +467,8 @@ class Network:
         timeout: float = 2.0,
     ) -> dict[tuple[str, str], bool]:
         """Run pings between every ordered pair of distinct hosts that have a primary IP."""
-        eligible = {name: rh for name, rh in self._running_hosts.items() if rh.primary_ip}
-        result: dict[tuple[str, str], bool] = {}
-        for src_name, src_host in eligible.items():
-            for dst_name, dst_host in eligible.items():
-                if src_name == dst_name:
-                    continue
-                result[(src_name, dst_name)] = src_host.ping(dst_host, count=count, timeout=timeout)
-        return result
+        hosts = _hosts_with_ip(self._running_hosts, ipv6=False)
+        return dict(_ping_host_pairs(hosts, count=count, timeout=timeout, ipv6=False))
 
     def pingall6(
         self,
@@ -464,21 +480,8 @@ class Network:
 
         Hosts without a primary IPv6 are skipped silently.
         """
-        eligible = {name: rh for name, rh in self._running_hosts.items() if rh.primary_ip6}
-        result: dict[tuple[str, str], bool] = {}
-        for src_name, src_host in eligible.items():
-            for dst_name, dst_host in eligible.items():
-                if src_name == dst_name:
-                    continue
-                target_ip6 = dst_host.primary_ip6
-                assert target_ip6 is not None  # guarded by `eligible` filter
-                result[(src_name, dst_name)] = src_host.ping(
-                    target_ip6,
-                    count=count,
-                    timeout=timeout,
-                    force_ipv6=True,
-                )
-        return result
+        hosts = _hosts_with_ip(self._running_hosts, ipv6=True)
+        return dict(_ping_host_pairs(hosts, count=count, timeout=timeout, ipv6=True))
 
     # ----- xterm helper -------------------------------------------------
 
