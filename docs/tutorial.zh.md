@@ -421,7 +421,7 @@ p4net> topology graph /tmp/topo.dot format=dot
 
 ## 接下来读什么
 
-- [示例目录](examples/index.md)收录七个可运行的拓扑——每个示例只展示一项特性，比这个「大杂烩」教程更易读。
+- 九个可运行的拓扑及其启动命令见[示例目录](examples/index.md)。
 - [API 参考](api/network.md)记录了上文用到的每个类与函数。
 - 要在事件循环中并发配置交换机，可参考[异步客户端指南](async-client.md)。
 - 想系统地学 P4 语言本身？可以参考同作者的中文 P4 教程仓库：[p4-language-guide-zh](https://github.com/zhh2001/p4-language-guide-zh)。

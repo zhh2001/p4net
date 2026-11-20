@@ -57,7 +57,7 @@ The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.m
 - **[Quick Start](getting-started/quickstart.md)** — the same example walked through end to end, with the P4 source.
 - **[Tutorial](tutorial.md)** — a longer walk through dual-stack forwarding, runtime table programming, asymmetric link impairment, and CPU-port packet I/O.
 - **[Architecture](architecture.md)** — what each package does and the design decisions behind the layout.
-- **[Examples](examples/index.md)** — seven runnable topologies, from port-swap and L3 forwarding to in-band network telemetry (INT).
+- **[Examples](examples/index.md)** — nine runnable topologies covering IPv4 and IPv6 forwarding, in-band network telemetry, and concurrent switch programming.
 - **[CLI Reference](cli.md)** — every shell command with synopses and example output.
 - **[API Reference](api/network.md)** — auto-generated from the Python docstrings.
 

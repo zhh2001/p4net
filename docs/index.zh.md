@@ -57,7 +57,7 @@ with Network(topo) as net:
 - **[快速上手](getting-started/quickstart.md)** —— 上面这个示例的逐步说明，附带 P4 程序源码。
 - **[教程](tutorial.md)** —— 一个更长的讲解，覆盖双栈转发、运行时表项编程、非对称链路损伤、CPU 端口数据包 I/O。
 - **[架构](architecture.md)** —— 各包的职责与背后设计取舍。
-- **[示例](examples/index.md)** —— 七个可运行的拓扑，从端口翻转、L3 转发，一直到带内网络遥测（INT）。
+- **[示例](examples/index.md)** —— 九个可运行的拓扑，涵盖 IPv4 和 IPv6 转发、带内网络遥测及多交换机并发配置。
 - **[CLI 参考](cli.md)** —— 每条 Shell 命令的说明与示例输出。
 - **[API 参考](api/network.md)** —— 由 Python docstring 自动生成。
 

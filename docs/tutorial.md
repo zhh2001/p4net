@@ -422,6 +422,6 @@ p4net> topology graph /tmp/topo.dot format=dot
 
 ## Where to go next
 
-- The [Examples directory](examples/index.md) ships six runnable topologies — each one isolates a single feature, which is sometimes easier to read than this kitchen-sink tutorial.
+- Browse [nine runnable examples](examples/index.md) for their topology files and run commands.
 - The [API reference](api/network.md) documents every class and function used above.
 - To program switches concurrently from an event loop, see the [async client guide](async-client.md).

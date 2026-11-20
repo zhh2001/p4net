@@ -1,10 +1,10 @@
 ---
-description: Eight runnable p4net example topologies, each isolating one capability for easy reading and copy-paste — from quick-start to multi-hop in-band telemetry.
+description: Nine runnable p4net topologies covering forwarding, per-direction link delay, in-band telemetry, and concurrent switch programming.
 ---
 
 # Examples
 
-p4net ships eight runnable example topologies under `examples/` in the repository. Each one isolates a single capability so the source is easy to read and copy. [Install the CLI with pipx](../getting-started/installation.md#install-cli) before running the quick-start example from the repository root.
+The repository's `examples/` directory contains nine runnable topologies. [Install the CLI with pipx](../getting-started/installation.md#install-cli), then run the quick-start example from the repository root.
 
 ```sh
 sudo p4net examples/quick_start/quick_start.py
@@ -22,6 +22,7 @@ Each walkthrough gives the command for its own topology file.
 - **[IPv6 LPM](ipv6-lpm.md)** — two IPv6-only hosts with a 128-bit LPM table programmed at runtime. Shows how `<switch> table dump` renders IPv6 entries in human form (`fd00::1/128`) instead of raw bytes.
 - **[INT (in-band network telemetry)](int.md)** — single-switch INT: the pipeline inserts a 14-byte shim header carrying switch identity, ingress timestamp, egress port, queue depth, and the original etherType. A raw-socket listener decodes the shim on the receiver.
 - **[Multi-hop INT](int-multi-hop.md)** — two switches in series each insert their own shim; the listener decodes the full hop-by-hop stack. Production-style telemetry topology; same P4 binary on both switches, identity supplied by the v1.2 register API.
+- **[Async concurrent](async-concurrent.md)** — three hosts on a three-switch mesh. `AsyncP4RuntimeClient` populates the switches' IPv4 forwarding tables concurrently.
 
 ## How they fit together
 
@@ -35,5 +36,6 @@ Each walkthrough gives the command for its own topology file.
 | ipv6_lpm        | 2     | 1        |      | ✓    |            |          | ✓              |           |
 | int             | 2     | 1        | ✓    |      |            |          | ✓              | ✓         |
 | int_multi_hop   | 2     | 2        | ✓    |      |            |          | ✓              | ✓ (×2)    |
+| async_concurrent | 3    | 3        | ✓    |      |            |          | ✓              |           |
 
-The [Tutorial](../tutorial.md) combines every feature in one 4-host, 2-switch program — useful as a kitchen-sink example, but each individual feature is easier to understand in isolation here.
+For a four-host, two-switch topology that combines dual-stack forwarding, asymmetric delay, and PacketIn, see the [tutorial](../tutorial.md).
