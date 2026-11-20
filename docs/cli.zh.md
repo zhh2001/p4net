@@ -62,8 +62,8 @@ usage: p4net [-h] [--no-shell] [--unsafe] [--log-dir LOG_DIR]
 
 ```text
 p4net> help switches
-pingall [count] [timeout]
-  Ping every pair of hosts; print a result matrix.
+switches
+  List switches and their gRPC addresses / pids.
 
 p4net>
 ```

@@ -62,8 +62,8 @@ The examples below use hosts `h1`, `h2` and switch `s1`. IPv6 commands use hosts
 
 ```text
 p4net> help switches
-pingall [count] [timeout]
-  Ping every pair of hosts; print a result matrix.
+switches
+  List switches and their gRPC addresses / pids.
 
 p4net>
 ```
