@@ -16,6 +16,7 @@ Run with:
 from __future__ import annotations
 
 import io
+import json
 import socket
 import struct
 import threading
@@ -242,14 +243,12 @@ def test_two_switches_each_insert_their_own_shim(compiled: dict[str, Path], tmp_
         # Mirror what examples/int_multi_hop/topology.py setup(net) does: publish
         # each switch's BMv2 boot timestamp so per-switch ``ingress_timestamp_us``
         # values can be aligned to wall clock.
-        import json as _json
-
-        boot_times_path = Path("/tmp/p4net-int-multi-hop-boot-times.json")
+        boot_times_path = tmp_path / "boot-times.json"
         boot_times = {
             "s1": s1_rt.boot_timestamp_us,
             "s2": s2_rt.boot_timestamp_us,
         }
-        boot_times_path.write_text(_json.dumps(boot_times, indent=2))
+        boot_times_path.write_text(json.dumps(boot_times, indent=2))
 
         for sw_rt, sw_port in ((s1_rt, 2), (s2_rt, 2)):
             sw_rt.client.insert_table_entry(
@@ -335,7 +334,7 @@ def test_two_switches_each_insert_their_own_shim(compiled: dict[str, Path], tmp_
 
         # Coordination file from setup is present and well-formed.
         assert boot_times_path.is_file()
-        on_disk = _json.loads(boot_times_path.read_text())
+        on_disk = json.loads(boot_times_path.read_text())
         assert on_disk == {"s1": s1_boot, "s2": s2_boot}
 
         # Stash a listener-style rendering for the report and README sample.
@@ -350,36 +349,20 @@ def test_env_var_overrides_coordination_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``P4NET_INT_BOOT_TIMES_PATH`` redirects the coordination file.
-
-    Two parts:
-
-    1. Loading ``examples/int_multi_hop/topology.py`` with the env var set
-       picks up the override as ``BOOT_TIMES_PATH``.
-    2. A real network bring-up using ``net.boot_timestamps`` writes the
-       file at the override path and does not touch the default path.
-    """
+    """The example setup writes both switch timestamps to the configured path."""
     import importlib.util
-    import json as _json
 
-    override_path = tmp_path / "phase22-override.json"
-    default_path = Path("/tmp/p4net-int-multi-hop-boot-times.json")
-    if default_path.exists():
-        default_path.unlink()
+    override_path = tmp_path / "boot-times.json"
     monkeypatch.setenv("P4NET_INT_BOOT_TIMES_PATH", str(override_path))
 
-    # Part 1: load topology.py as a one-off module and confirm BOOT_TIMES_PATH
-    # honors the env var. No package import shenanigans needed.
-    topology_py = (
-        Path(__file__).resolve().parent.parent.parent / "examples" / "int_multi_hop" / "topology.py"
+    spec = importlib.util.spec_from_file_location(
+        "int_multi_hop_example", _EXAMPLE_DIR / "topology.py"
     )
-    spec = importlib.util.spec_from_file_location("_phase22_topology", topology_py)
     assert spec is not None and spec.loader is not None
-    topo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(topo_mod)
-    assert override_path == topo_mod.BOOT_TIMES_PATH
+    example = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(example)
+    assert override_path == example.BOOT_TIMES_PATH
 
-    # Part 2: real bring-up; assert the file lands at the override path.
     suffix = _suffix()
     h1 = f"h{suffix}a"
     h2 = f"h{suffix}b"
@@ -396,17 +379,20 @@ def test_env_var_overrides_coordination_path(
     topo.add_link(s1, s2, port_a=2, port_b=1)
     topo.add_link(s2, h2, port_a=2)
 
-    net = Network(topo, log_dir=tmp_path / "logs")
-    net.start()
-    try:
-        boot_times = net.boot_timestamps
-        override_path.write_text(_json.dumps(boot_times, indent=2))
-        assert override_path.is_file()
-        assert not default_path.exists(), (
-            "default coordination file should not be touched when env var is set"
-        )
-        on_disk = _json.loads(override_path.read_text())
+    # Give each host the interface name used by setup() inside its own namespace.
+    data = topo.to_dict()
+    data["links"][0]["a"]["iface_name"] = "h1-eth0"
+    data["links"][2]["b"]["iface_name"] = "h2-eth0"
+    with Network(Topology.from_dict(data), log_dir=tmp_path / "logs") as net:
+        # Resolve the example's fixed names to this run's devices.
+        hosts = {"h1": net.host(h1), "h2": net.host(h2)}
+        switches = {"s1": net.switch(s1), "s2": net.switch(s2)}
+        with monkeypatch.context() as names:
+            names.setattr(net, "host", hosts.__getitem__)
+            names.setattr(net, "switch", switches.__getitem__)
+            example.setup(net)
+
+        on_disk = json.loads(override_path.read_text())
+        assert on_disk == net.boot_timestamps
         assert set(on_disk) == {s1, s2}
         assert all(isinstance(v, int) and v > 0 for v in on_disk.values())
-    finally:
-        net.stop()
