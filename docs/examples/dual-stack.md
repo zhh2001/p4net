@@ -66,4 +66,4 @@ p4net> pingall6
 ## Variations to try
 
 - Drop the `ip6` arguments from one host and confirm `pingall6` excludes it from the matrix (it filters on `primary_ip6`).
-- Add a `loss_pct=10.0` link parameter and observe that v4 and v6 pings get the same loss rate (the qdisc is L3-agnostic).
+- Add `loss_pct=10.0` to the link between `h1` and `s1`. Compare the loss summaries from `h1 ping h2 10 1` and `h1 ping6 h2 10 1`. The link applies the same drop probability to IPv4 and IPv6 packets, and measured loss can vary between runs.

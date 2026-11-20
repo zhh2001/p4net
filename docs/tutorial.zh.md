@@ -76,7 +76,7 @@ topology.add_link(h4, s2, port_b=2)
 topology.add_link(s1, s2, port_a=3, port_b=3, delay_a_to_b="100ms")
 ```
 
-h1↔s1 链路上的 `delay_a_to_b="50ms"` 把 `tc netem delay 50ms` 应用到 a 侧 veth——也就是位于 `h1` 命名空间里的那一端。从 `h1` 出向 `s1` 的方向上累加 50ms；反向不整形。同理，s1↔s2 链路上的 `delay_a_to_b="100ms"` 只对 s1 → s2 方向生效。所以单向 `h1 → h3` 累计 50ms（h1→s1）+ 100ms（s1→s2）+ 0ms（s2→h3）= 150ms；反向 `h3 → h1` 不整形，因此 h1 到 h3 的 ping RTT 大约为 150ms，抖动在亚毫秒级别。
+`delay_a_to_b` 给 `add_link()` 第一个端点发出的报文增加时延。这里 `h1` 到 `s1` 增加 50 ms，`s1` 到 `s2` 增加 100 ms。两个链路的反向都没有配置额外时延。
 
 ## 步骤 3：P4 程序
 
@@ -390,7 +390,7 @@ Waiting for 1 packet on s1 (up to 30s)...
 
 ## 步骤 7：测量非对称链路
 
-`h1 → h3` 经过两段被整形的链路：50ms（h1 → s1）加 100ms（s1 → s2）。反向无整形。所以 ping RTT 约 150ms。
+从 `h1` 到 `h3`，第一段链路增加 50 ms，骨干链路再增加 100 ms。反向没有配置额外时延。ping 测的是请求和应答的往返时间，所以从任一端发起 ping，RTT 都约为 150 ms。
 
 ```
 p4net> h1 ping h3 5 3
@@ -401,7 +401,7 @@ seq=2  time=151 ms
 5 sent, 5 received, 0% loss
 ```
 
-`h2 → h3` 在 h2 一侧无整形，只穿过 100ms 的骨干，因此 RTT 约 100ms；`h1 → h2` 仅在 h1 出口被整形 50ms，RTT 约 50ms。
+`h2` 和 `h3` 之间只有骨干链路增加 100 ms 时延，RTT 约为 100 ms。`h1` 和 `h2` 之间的 50 ms 时延来自 `h1` 的出口，RTT 约为 50 ms。
 
 ## 步骤 8：可视化
 

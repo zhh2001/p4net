@@ -76,7 +76,7 @@ topology.add_link(h4, s2, port_b=2)
 topology.add_link(s1, s2, port_a=3, port_b=3, delay_a_to_b="100ms")
 ```
 
-`delay_a_to_b="50ms"` on the h1↔s1 link applies `tc netem delay 50ms` to the `a`-side veth — the one in `h1`'s namespace. Egress from `h1` toward `s1` picks up 50 ms; the reverse direction is unshaped. Similarly `delay_a_to_b="100ms"` on the s1↔s2 link delays only the s1 → s2 direction. So one-way `h1 → h3` accumulates 50 ms (h1→s1) + 100 ms (s1→s2) + 0 ms (s2→h3) = 150 ms. The reverse h3 → h1 is unshaped, so the ping RTT from h1 to h3 is ~150 ms with sub-ms jitter.
+`delay_a_to_b` adds delay to packets leaving the first endpoint passed to `add_link()`. Here it adds 50 ms from `h1` to `s1` and 100 ms from `s1` to `s2`. The reverse directions have no configured delay.
 
 ## Step 3: the P4 program
 
@@ -391,7 +391,7 @@ Waiting for 1 packet on s1 (up to 30s)...
 
 ## Step 7: measure the asymmetric link
 
-`h1 → h3` traverses two shaped links: 50 ms (h1 → s1) plus 100 ms (s1 → s2). The reverse direction is unshaped. So ping RTT ≈ 150 ms.
+The path from `h1` to `h3` adds 50 ms on the first link and 100 ms on the backbone. The reverse path adds no configured delay. Ping measures both directions, so starting from either host gives a round-trip time of about 150 ms.
 
 ```
 p4net> h1 ping h3 5 3
@@ -402,7 +402,7 @@ seq=2  time=151 ms
 5 sent, 5 received, 0% loss
 ```
 
-`h2 → h3` is unshaped on h2's side and only crosses the 100 ms backbone link, so RTT ≈ 100 ms. `h1 → h2` is shaped only on h1's egress, so RTT ≈ 50 ms.
+Between `h2` and `h3`, only the 100 ms backbone delay contributes to the RTT. Between `h1` and `h2`, only the 50 ms delay on `h1`'s egress contributes.
 
 ## Step 8: visualize
 

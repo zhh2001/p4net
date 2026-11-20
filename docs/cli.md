@@ -95,7 +95,9 @@ List each switch's gRPC address, BMv2 process PID, and log file path.
 
 ### `pingall [count] [timeout]`
 
-Run IPv4 ping between hosts with a configured primary IPv4 address, in both directions. The matrix includes all hosts, with the row as source and column as destination. `count` defaults to `1` and `timeout` to `2.0` seconds. Both follow the [ping argument rules](#ping--count-timeout). Cells show `1` for success, `X` for failure, `-` for the same host, and `?` for an untested pair.
+Run IPv4 ping between hosts with a configured primary IPv4 address, in both directions. The matrix includes all hosts, with the row as source and column as destination. `count` defaults to `1` and `timeout` to `2.0` seconds. Both follow the [ping argument rules](#ping--count-timeout).
+
+Cells show `1` when at least one probe received a reply, `X` when none did, `-` for the same host, and `?` for an untested pair. To measure packet loss between two hosts, run [`<host> ping`](#ping--count-timeout) with multiple probes.
 
 The shell reports progress in batches when there are at least three eligible hosts or when each pair uses multiple probes. Press `Ctrl-C` to show the results collected so far. Pending pairs appear as `?`, and the success summary counts only completed pairs.
 

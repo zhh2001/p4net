@@ -1,14 +1,14 @@
 ---
-description: Two hosts with per-direction link delay. Demonstrates `delay_a_to_b` / `delay_b_to_a` and the resulting asymmetric one-way RTT.
+description: Two hosts with different one-way delays. See how `delay_a_to_b` and `delay_b_to_a` contribute to ping round-trip time.
 ---
 
 # Asymmetric link
 
-Two hosts on a single switch, each link carrying delay in only one direction. The opposite direction is unshaped, so the resulting ping RTT is the sum of the two shaped one-ways.
+Two hosts share one switch. Each link adds delay in only one direction.
 
 ## What you'll see
 
-`h1 ping h2 5 3` reports RTTs of approximately 220 ms with sub-ms jitter — measured RTT in the integration test was `min/avg/max/mdev = 220.981/221.288/222.048/0.396 ms`.
+`h1 ping h2 5 3` and `h2 ping h1 5 3` both report round-trip times (RTT) around 220 ms.
 
 ## Topology
 
@@ -18,16 +18,16 @@ Two hosts on a single switch, each link carrying delay in only one direction. Th
 --8<-- "examples/asymmetric_link/topology.py"
 ```
 
-The h1↔s1 link has `delay_a_to_b="200ms"` — applied to the `a` side (h1's namespace). The h2↔s1 link has `delay_b_to_a="20ms"` — applied to the `b` side (s1's root-namespace veth toward h2).
+The `h1`–`s1` link uses `delay_a_to_b="200ms"` on egress from `h1`. The `h2`–`s1` link uses `delay_b_to_a="20ms"` on egress from `s1` toward `h2`.
 
-| Direction         | Path                  | Shaped delay |
-| ----------------- | --------------------- | ------------ |
-| h1 → s1           | h1's egress veth      | 200 ms       |
-| s1 → h2           | s1's egress veth      | 20 ms        |
-| h2 → s1           | (none)                | 0 ms         |
-| s1 → h1           | (none)                | 0 ms         |
+| Direction | Added delay |
+| --------- | ----------- |
+| h1 → s1   | 200 ms      |
+| s1 → h2   | 20 ms       |
+| h2 → s1   | 0 ms        |
+| s1 → h1   | 0 ms        |
 
-End-to-end one-way h1→h2: 200 + 20 = 220 ms. Reverse h2→h1: 0 ms. Ping RTT (h1→h2 echo + h2→h1 reply): 220 ms.
+Traffic from `h1` to `h2` gets 220 ms of added delay. The reverse path has no configured delay. A ping measures the request and reply together, so it includes both paths regardless of which host sends the request.
 
 ## P4 program
 
@@ -70,6 +70,6 @@ qdisc netem 8001: root ... delay 200ms
 
 ## Variations to try
 
-- Set `loss_pct_a_to_b=50.0` instead of delay and observe a 50% packet-loss matrix in `pingall`.
-- Set `delay_a_to_b="200ms"` and `delay_b_to_a="200ms"` to recover symmetric 400 ms RTT.
+- On the `h1`–`s1` link, replace `delay_a_to_b="200ms"` with `loss_pct_a_to_b=50.0` to give packets a 50% chance of being dropped in that direction. Run `h1 ping h2 10 1` to see the measured loss across ten probes. In `pingall 10 1`, each matrix cell shows whether that host pair got at least one reply.
+- Add `delay_b_to_a="200ms"` to the `h1`–`s1` link and remove `delay_b_to_a="20ms"` from the `h2`–`s1` link. This adds 200 ms in each direction, for a ping RTT of about 400 ms.
 - Combine asymmetric delay with symmetric bandwidth shaping (`bandwidth="1mbit"`) to model a typical residential link.

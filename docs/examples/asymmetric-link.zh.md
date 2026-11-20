@@ -1,14 +1,14 @@
 ---
-description: 两台主机的链路按方向整形。演示 `delay_a_to_b` / `delay_b_to_a` 以及由此产生的非对称单向 RTT。
+description: 两台主机之间的单向时延不同。演示 `delay_a_to_b` 和 `delay_b_to_a` 如何影响 ping 的往返时延。
 ---
 
 # 非对称链路
 
-一台交换机上的两台主机，每条链路只在单一方向上加延迟，反向不整形。最终的 ping RTT 等于两条单向延迟之和。
+两台主机通过一台交换机连接，每段链路只在一个方向上增加时延。
 
 ## 你将看到什么
 
-`h1 ping h2 5 3` 显示的 RTT 约为 220 ms，抖动在亚毫秒级别。集成测试中实测的 RTT 是 `min/avg/max/mdev = 220.981/221.288/222.048/0.396 ms`。
+`h1 ping h2 5 3` 和 `h2 ping h1 5 3` 显示的往返时延（RTT）都约为 220 ms。
 
 ## 拓扑
 
@@ -18,16 +18,16 @@ description: 两台主机的链路按方向整形。演示 `delay_a_to_b` / `del
 --8<-- "examples/asymmetric_link/topology.py"
 ```
 
-h1↔s1 链路上的 `delay_a_to_b="200ms"` 应用在 a 侧（`h1` 命名空间）。h2↔s1 链路上的 `delay_b_to_a="20ms"` 应用在 b 侧（root 命名空间里 s1 朝向 h2 的 veth）。
+`h1` 和 `s1` 之间的 `delay_a_to_b="200ms"` 作用于 `h1` 的出口。`h2` 和 `s1` 之间的 `delay_b_to_a="20ms"` 作用于 `s1` 朝向 `h2` 的出口。
 
-| 方向              | 路径                  | 整形延迟 |
-| ----------------- | --------------------- | -------- |
-| h1 → s1           | h1 出向 veth          | 200ms    |
-| s1 → h2           | s1 出向 veth          | 20ms     |
-| h2 → s1           | （无）                | 0ms      |
-| s1 → h1           | （无）                | 0ms      |
+| 方向    | 附加时延 |
+| ------- | -------- |
+| h1 → s1 | 200 ms   |
+| s1 → h2 | 20 ms    |
+| h2 → s1 | 0 ms     |
+| s1 → h1 | 0 ms     |
 
-端到端单向 h1→h2：200 + 20 = 220ms。反向 h2→h1：0ms。ping RTT（h1→h2 echo + h2→h1 reply）：220ms。
+从 `h1` 到 `h2` 共增加 220 ms 时延，反向没有配置额外时延。无论从哪台主机发起 ping，请求和应答都分别经过这两个方向。
 
 ## P4 程序
 
@@ -70,6 +70,6 @@ qdisc netem 8001: root ... delay 200ms
 
 ## 可尝试的变体
 
-- 改用 `loss_pct_a_to_b=50.0` 替代延迟，观察 `pingall` 矩阵呈 50% 丢包。
-- 把 `delay_a_to_b="200ms"` 与 `delay_b_to_a="200ms"` 同时设上，恢复对称 400ms RTT。
+- 把 `h1` 到 `s1` 链路上的 `delay_a_to_b="200ms"` 换成 `loss_pct_a_to_b=50.0`，让这个方向的报文有 50% 的概率被丢弃。运行 `h1 ping h2 10 1`，查看 10 次探测的实测丢包率。`pingall 10 1` 矩阵只显示每个主机对是否至少收到一次应答。
+- 给 `h1` 和 `s1` 之间的链路加上 `delay_b_to_a="200ms"`，再去掉 `h2` 和 `s1` 之间的 `delay_b_to_a="20ms"`。此时两个方向各增加 200 ms 时延，ping 的 RTT 约为 400 ms。
 - 用非对称延迟搭配对称带宽整形（`bandwidth="1mbit"`）模拟典型的家用宽带链路。

@@ -1,9 +1,9 @@
 """Two hosts plus one switch with asymmetric link delays.
 
-The h1↔s1 link adds 200 ms egress delay at h1 (h1→s1 direction); the
-h2↔s1 link adds 20 ms egress delay at s1 (s1→h2 direction). End-to-end
-one-way h1→h2 delay is therefore ~220 ms; reverse h2→h1 is ~0 ms; ping
-RTT from h1 to h2 is ~220 ms.
+The h1→s1 link adds 200 ms on egress from h1 and the s1→h2 link adds
+20 ms on egress from s1. Traffic from h1 to h2 gets 220 ms of added
+delay, with no configured delay in the reverse direction. Ping RTT is
+about 220 ms from either host.
 
 Run with:
 

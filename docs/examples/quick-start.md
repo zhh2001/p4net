@@ -63,4 +63,4 @@ h2     1    -
 
 - Add a third host on port 3. Without table programming, packets to port 3 hit the implicit drop (since the port-swap covers only 1 ↔ 2).
 - Replace the conditional with a single `mark_to_drop(std)` and watch `pingall` produce all `X` cells.
-- Set a `Link(..., loss_pct=20.0)` and observe the success rate drop in `pingall 10 1`.
+- Add `loss_pct=20.0` to the `add_link()` call for `h1` and `s1`. Compare the loss summaries from `h1 ping h2 10 1` before and after the change.
