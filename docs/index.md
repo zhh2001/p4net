@@ -1,68 +1,62 @@
 ---
-description: p4net is a Python framework for running real BMv2 dataplanes inside Linux network namespaces, controlled via P4Runtime, with a Mininet-shaped declarative API.
+description: Run P4 network experiments on Linux with Python, BMv2 software switches, and P4Runtime.
 ---
 
 # p4net
 
-> Mininet-style P4 SDN sandbox in Python.
+p4net is a Python framework for running P4 network experiments on Linux. Use it for teaching labs, P4Runtime controller prototypes, and tests of P4 forwarding behavior.
 
-## What it is
+p4net compiles P4 programs with `p4c` and connects nodes with virtual Ethernet (`veth`) pairs. Each host gets its own Linux network namespace. BMv2 software switches run in the same namespace as the p4net process, normally the system's root network namespace.
 
-p4net brings up real `simple_switch_grpc` (BMv2) dataplanes inside Linux network namespaces and wires them with `veth` pairs and `tc netem` impairment, then drives them through P4Runtime — exactly the way an operational P4 controller would talk to real hardware. The Python API is shaped like Mininet's: declare a `Topology` of `Host`, `P4Switch`, and `Link` objects, hand it to a `Network`, get a running playground back.
-
-The framework is geared at P4 development and education: classroom labs, controller prototypes, regression harnesses for forwarding logic, and quick experiments where spinning up a multi-host topology in a few seconds matters more than emulating a specific switch ASIC. There is no Docker, no OpenFlow, no Open vSwitch — the toolchain is `p4c`, `simple_switch_grpc`, and the kernel's namespace primitives.
-
-## What's in the box
-
-- **Topology DSL** — `Host`, `P4Switch`, `Link`, `Topology` with static validation (interface name length, IP collisions, asymmetric vs symmetric impairment conflicts).
-- **p4c-driven compilation** with a content-addressed cache at `~/.cache/p4net/compiler/` — recompile when source, includes, or compiler settings actually change.
-- **BMv2 lifecycle management** — start, wait-for-ready, stop, gRPC port allocation, atexit / signal cleanup safety nets.
-- **P4Runtime gRPC client** — table programming, indirect counter reads, multicast group management, CPU-port packet I/O over the StreamChannel.
-- **Per-direction link impairment** via `tc netem` — `bandwidth`, `delay`, `jitter`, `loss_pct` either symmetric, split into `*_a_to_b` / `*_b_to_a`, or layered as a symmetric base plus a per-direction `*_extra`.
-- **IPv4 and IPv6 host addressing** with per-interface sysctl gating (link-local addresses are suppressed on interfaces that don't ask for IPv6).
-- **Interactive CLI** — `p4net <topology.py>` opens a shell with table dumps, ping matrices, packet send/listen, topology visualization.
-- **Topology visualization** via `Topology.to_graphviz()` and `Topology.render_graphviz()` (DOT, PNG, SVG, PDF).
-- **Unified `p4net.*` logger hierarchy** with documented level conventions and CLI verbosity flags (`-v` / `-vv`); see [Logging](logging.md).
+p4net controls BMv2 switches through P4Runtime, a protocol also supported by compatible hardware switches. Throughput and latency measured in p4net reflect the software forwarding and Linux environment of the experiment. See [Known Limitations](known-limitations.md).
 
 ## Install
 
-Follow the [installation guide](getting-started/installation.md) to set up p4c, BMv2 and the p4net CLI. Then run your first topology in [Quick Start](getting-started/quickstart.md).
+Follow the [installation guide](getting-started/installation.md) to set up p4c, BMv2, and the p4net CLI. Then run your first topology in [Quick Start](getting-started/quickstart.md).
 
-## 30-second example
+## What you can do
+
+- **Build topologies in Python.** Connect IPv4 and IPv6 hosts to switches. Set bandwidth, delay, jitter, or packet loss separately for each link direction.
+- **Program switches.** Use the sync or async P4Runtime client to install table entries, read indirect counters, manage multicast groups, receive PacketIn, and send PacketOut.
+- **Inspect a running network.** Use the [interactive CLI](cli.md) to run host commands, check connectivity, and inspect switch tables.
+- **Export topology diagrams.** Save the topology as DOT or use Graphviz to render it as SVG, PNG, or PDF.
+
+## Python example
+
+[Install p4net in a virtual environment](getting-started/installation.md#project-environments). In the project directory, save the [P4 program from Quick Start](getting-started/quickstart.md#create-two-files) as `port_swap.p4` and the script below as `demo.py`.
 
 ```python
 from pathlib import Path
+
 from p4net import Network
 from p4net.topo import Topology
 
 topo = Topology()
-h1 = topo.add_host("h1", ip="10.0.0.1/24", mac="00:00:00:00:00:01")
-h2 = topo.add_host("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
-s1 = topo.add_switch("s1", p4_src=Path("port_swap.p4"))
+h1 = topo.add_host("h1", ip="10.0.0.1/24")
+h2 = topo.add_host("h2", ip="10.0.0.2/24")
+s1 = topo.add_switch("s1", p4_src=Path(__file__).with_name("port_swap.p4"))
 topo.add_link(h1, s1, port_b=1)
 topo.add_link(h2, s1, port_b=2)
 
 with Network(topo) as net:
-    h1, h2 = net.host("h1"), net.host("h2")
-    h1.exec(["ip", "neigh", "replace", "10.0.0.2",
-             "lladdr", "00:00:00:00:00:02",
-             "dev", "h1-eth0", "nud", "permanent"])
-    print(h1.ping(h2))   # True
+    print(net.ping("h1", "h2"))
 ```
 
-The `port_swap.p4` source is in [`examples/quick_start/`](examples/quick-start.md).
+Run the script from the project directory with the virtual environment's Python.
 
-## Where to next
+```sh
+sudo .venv/bin/python demo.py
+```
 
-- **[Quick Start](getting-started/quickstart.md)** — the same example walked through end to end, with the P4 source.
-- **[Tutorial](tutorial.md)** — a longer walk through dual-stack forwarding, runtime table programming, asymmetric link impairment, and CPU-port packet I/O.
-- **[Architecture](architecture.md)** — what each package does and the design decisions behind the layout.
-- **[Examples](examples/index.md)** — nine runnable topologies covering IPv4 and IPv6 forwarding, in-band network telemetry, and concurrent switch programming.
-- **[CLI Reference](cli.md)** — every shell command with synopses and example output.
-- **[API Reference](api/network.md)** — auto-generated from the Python docstrings.
+The script prints `True` when `h1` receives a reply from `h2`. The network shuts down when the `with` block ends.
+
+## Guides and reference
+
+- [Tutorial](tutorial.md) walks through dual-stack forwarding, table programming, directional link delay, and CPU-port packet I/O.
+- [Examples](examples/index.md) contains nine runnable topologies, including in-band telemetry and concurrent switch configuration.
+- [Architecture](architecture.md) shows how the Python packages fit together.
+- [API Reference](api/network.md) documents the Python interfaces.
 
 ## Project status
 
-p4net **v1.10.0** is a stable release. Public interfaces follow the [API stability rules](api-stability.md), including the deprecation cycle for stable and provisional APIs.
-
-This release adds live output for multi-probe ping, host commands, and packet listening, along with progress for ping matrices. Press `Ctrl-C` to cancel an interactive command while keeping the topology running. See the [Changelog](changelog.md) for release details, [Known Limitations](known-limitations.md) for current boundaries, and the [Roadmap](roadmap.md) for future plans.
+p4net **v1.10.0** is a stable release. See the [changelog](changelog.md), [API stability policy](api-stability.md), and [roadmap](roadmap.md).

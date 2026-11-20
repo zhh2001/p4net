@@ -1,68 +1,62 @@
 ---
-description: p4net 是一个 Python 框架，用 Linux 网络命名空间承载真实的 BMv2 数据平面，通过 P4Runtime 控制，提供类似 Mininet 的声明式 API。
+description: 在 Linux 上用 Python、BMv2 软件交换机和 P4Runtime 运行 P4 网络实验。
 ---
 
 # p4net
 
-> Python 实现的 Mininet 风格 P4 SDN 沙盒。
+p4net 是一个在 Linux 上运行 P4 网络实验的 Python 框架，可用于教学实验、开发 P4Runtime 控制器原型，以及验证 P4 程序的转发逻辑。
 
-## 它是什么
+p4net 用 `p4c` 编译 P4 程序，用 `veth` 接口对连接节点。每台主机有独立的 Linux 网络命名空间。BMv2 软件交换机与 p4net 进程位于同一个命名空间，通常是系统的根网络命名空间。
 
-p4net 在 Linux 网络命名空间中拉起真实的 `simple_switch_grpc`（BMv2）数据平面，用 `veth` 对将主机和交换机相连，用 `tc netem` 注入链路损伤，然后通过 P4Runtime 进行控制——这与真实硬件 P4 控制器的工作方式完全一致。Python API 的形态参考 Mininet：声明一个由 `Host`、`P4Switch`、`Link` 组成的 `Topology`，交给 `Network`，就能拿到一个运行中的实验环境。
-
-该框架面向 P4 开发与教学场景：课堂实验、控制器原型、转发逻辑回归测试，以及任何更看重「几秒钟就能起一个多主机拓扑」而非「精确模拟某款交换机 ASIC」的实验。工具链由 `p4c`、`simple_switch_grpc` 和内核命名空间原语组成；不依赖 Docker、OpenFlow，也不需要 Open vSwitch。
-
-## 包含哪些组件
-
-- **拓扑 DSL** —— `Host`、`P4Switch`、`Link`、`Topology`，构造期即做静态校验（接口名长度、IP 冲突、对称与非对称损伤的相互排斥关系）。
-- **基于 p4c 的编译**，配套位于 `~/.cache/p4net/compiler/` 的内容寻址缓存——源码、引用文件或编译设置变化时重新编译。
-- **BMv2 生命周期管理** —— 启动、就绪等待、停止、gRPC 端口分配，以及 atexit / signal 兜底清理。
-- **P4Runtime gRPC 客户端** —— 表项编程、间接计数器读取、组播组管理，以及通过 StreamChannel 进行的 CPU 端口数据包 I/O。
-- **基于 `tc netem` 的逐方向链路损伤** —— `bandwidth`、`delay`、`jitter`、`loss_pct` 既可对称配置，也可拆成 `*_a_to_b` / `*_b_to_a` 两个方向，或者在对称基础上叠加 `*_extra`。
-- **IPv4 与 IPv6 主机寻址**，每个接口具备独立的 sysctl 门控（未显式启用 IPv6 的接口不会自动生成 link-local 地址）。
-- **交互式 CLI** —— `p4net <topology.py>` 启动一个 Shell，提供表内容转储、ping 矩阵、数据包发送/监听、拓扑可视化等命令。
-- **拓扑可视化**，由 `Topology.to_graphviz()` 与 `Topology.render_graphviz()` 提供，输出 DOT、PNG、SVG、PDF 等格式。
-- **统一的 `p4net.*` logger 层次**，附带级别约定与 CLI 详细度开关（`-v` / `-vv`）；参见[日志](logging.md)。
+p4net 通过 P4Runtime 控制 BMv2 交换机，支持 P4Runtime 的硬件交换机也使用同一套控制协议。实验测得的吞吐量和时延反映的是 BMv2 软件转发和 Linux 实验环境。详见[已知限制](known-limitations.md)。
 
 ## 安装
 
 按[安装指南](getting-started/installation.md)配置 p4c、BMv2 和 p4net 命令行，再跟随[快速上手](getting-started/quickstart.md)运行第一个拓扑。
 
-## 30 秒示例
+## 能做什么
+
+- **用 Python 搭建拓扑。** 为主机配置 IPv4、IPv6 地址并连接交换机，按链路方向设置带宽、时延、抖动或丢包率。
+- **配置交换机。** 使用同步或异步 P4Runtime 客户端下发表项、读取间接计数器、管理组播组、接收 PacketIn 和发送 PacketOut。
+- **检查运行中的网络。** 在[交互式命令行](cli.md)里执行主机命令、检查连通性和查看交换机表项。
+- **导出拓扑图。** 将拓扑保存为 DOT 文件，或通过 Graphviz 生成 SVG、PNG 或 PDF。
+
+## Python 示例
+
+先[在虚拟环境中安装 p4net](getting-started/installation.md#project-environments)。在项目目录下，把[快速上手中的 P4 程序](getting-started/quickstart.md#创建两个文件)保存为 `port_swap.p4`，再把下面的代码保存为 `demo.py`。
 
 ```python
 from pathlib import Path
+
 from p4net import Network
 from p4net.topo import Topology
 
 topo = Topology()
-h1 = topo.add_host("h1", ip="10.0.0.1/24", mac="00:00:00:00:00:01")
-h2 = topo.add_host("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
-s1 = topo.add_switch("s1", p4_src=Path("port_swap.p4"))
+h1 = topo.add_host("h1", ip="10.0.0.1/24")
+h2 = topo.add_host("h2", ip="10.0.0.2/24")
+s1 = topo.add_switch("s1", p4_src=Path(__file__).with_name("port_swap.p4"))
 topo.add_link(h1, s1, port_b=1)
 topo.add_link(h2, s1, port_b=2)
 
 with Network(topo) as net:
-    h1, h2 = net.host("h1"), net.host("h2")
-    h1.exec(["ip", "neigh", "replace", "10.0.0.2",
-             "lladdr", "00:00:00:00:00:02",
-             "dev", "h1-eth0", "nud", "permanent"])
-    print(h1.ping(h2))   # True
+    print(net.ping("h1", "h2"))
 ```
 
-配套的 `port_swap.p4` 源码位于 [`examples/quick_start/`](examples/quick-start.md)。
+在项目目录下，用虚拟环境中的 Python 运行脚本。
 
-## 接下来读什么
+```sh
+sudo .venv/bin/python demo.py
+```
 
-- **[快速上手](getting-started/quickstart.md)** —— 上面这个示例的逐步说明，附带 P4 程序源码。
-- **[教程](tutorial.md)** —— 一个更长的讲解，覆盖双栈转发、运行时表项编程、非对称链路损伤、CPU 端口数据包 I/O。
-- **[架构](architecture.md)** —— 各包的职责与背后设计取舍。
-- **[示例](examples/index.md)** —— 九个可运行的拓扑，涵盖 IPv4 和 IPv6 转发、带内网络遥测及多交换机并发配置。
-- **[CLI 参考](cli.md)** —— 每条 Shell 命令的说明与示例输出。
-- **[API 参考](api/network.md)** —— 由 Python docstring 自动生成。
+`h1` 收到 `h2` 的应答后，脚本会打印 `True`。`with` 代码块结束时，网络会自动关闭。
+
+## 指南与参考
+
+- [教程](tutorial.md)演示双栈转发、运行时表项配置、按方向设置链路时延，以及通过 CPU 端口收发数据包。
+- [示例](examples/index.md)收录九个可运行的拓扑，包括带内网络遥测和多交换机并发配置。
+- [架构](architecture.md)说明各个 Python 包的职责和调用关系。
+- [API 参考](api/network.md)列出 Python 接口及用法。
 
 ## 项目状态
 
-p4net **v1.10.0** 为稳定版本。公共接口遵循 [API 稳定性约定](api-stability.md)，稳定和暂定接口按各自的弃用周期处理变更。
-
-本版本为多次 ping、主机命令和收包监听加入实时输出，并为 ping 矩阵加入进度显示。按 `Ctrl-C` 可取消当前命令，拓扑继续运行。发布详情见[变更日志](changelog.md)，当前边界见[已知限制](known-limitations.md)，后续计划见[路线图](roadmap.md)。
+p4net **v1.10.0** 为稳定版本。参见[变更日志](changelog.md)、[API 稳定性约定](api-stability.md)和[路线图](roadmap.md)。
