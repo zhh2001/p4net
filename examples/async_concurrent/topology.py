@@ -1,4 +1,4 @@
-"""Three-switch full-mesh topology demonstrating the v1.6 async client.
+"""Three-switch full-mesh topology demonstrating concurrent table writes.
 
 Topology::
 
@@ -13,12 +13,10 @@ Topology::
 Three hosts each on their own /24, on different switches. Switches are
 fully meshed (s1-s2, s2-s3, s3-s1). Each switch loads the same P4 binary
 (``concurrent.p4``) and gets a per-switch ipv4_lpm table populated from
-Python via the v1.6 ``AsyncP4RuntimeClient``.
+Python via ``AsyncP4RuntimeClient``.
 
-``setup(net)`` drives all six concurrent inserts (2 cross-subnet routes
-per switch) via ``asyncio.gather`` against three switches' async clients
-in parallel — visibly faster than the sequential equivalent on a
-multi-switch topology.
+``setup(net)`` uses ``asyncio.gather`` to install nine entries concurrently,
+three per switch. It prints the time taken by the batch of inserts.
 
 Run as root:
 

@@ -11,4 +11,4 @@ then run the command in the example's README from the repository root.
 - `ipv6_lpm/` — IPv6 LPM forwarding programmed at runtime; demonstrates 128-bit field decoding in `<switch> table dump`.
 - `int/` — in-band network telemetry: the switch inserts a 14-byte INT shim header (switch ID, ingress timestamp, egress port, queue depth, original etherType) into every forwarded packet; a raw-socket listener decodes it on the receiver.
 - `int_multi_hop/` — multi-hop INT: two switches in series each insert their own metadata shim; receiver decodes the full hop-by-hop path. Demonstrates production-style telemetry topology and the register API for per-switch parameterization.
-- `async_concurrent/` — three-switch mesh whose forwarding tables are programmed concurrently via `AsyncP4RuntimeClient` and `asyncio.gather`. Demonstrates the v1.6 async API and the speedup pattern for multi-switch operations.
+- `async_concurrent/` — three-switch mesh whose IPv4 forwarding entries are installed concurrently with `AsyncP4RuntimeClient` and `asyncio.gather()`.

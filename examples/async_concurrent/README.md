@@ -1,10 +1,7 @@
 # Async concurrent multi-switch table programming
 
-Three-switch full-mesh topology where every switch's IPv4 LPM table is
-populated **concurrently** via the v1.6 ``AsyncP4RuntimeClient``. The
-visible payoff is timing: programming three switches in parallel beats
-programming them sequentially by roughly the gRPC round-trip multiple,
-minus event-loop overhead.
+Three switches form a full mesh. The example uses `AsyncP4RuntimeClient`
+and `asyncio.gather()` to populate their IPv4 LPM tables concurrently.
 
 ## What this demonstrates
 
@@ -70,10 +67,10 @@ The full source is in [`topology.py`](topology.py).
 sudo p4net examples/async_concurrent/topology.py
 ```
 
-The example prints a timing line from inside `setup(net)`:
+On startup, the example prints a line like this.
 
 ```
-async setup: 9 table entries installed concurrently in 4.27 ms
+async setup: 9 table entries installed concurrently in 4.04 ms
 ```
 
 Then in the `p4net>` shell:
@@ -85,23 +82,18 @@ pingall
 The matrix reports `6/6 succeeded`, covering both directions between
 each pair of hosts.
 
-## Sample timing
+## Timing the inserts
 
-Captured on the integration test rig (i5-13500H, WSL2, BMv2 1.15):
-
-| Approach   | 9 inserts (3 switches × 3 routes) |
-| ---------- | --------------------------------- |
-| Concurrent | ~5 ms                             |
-| Sequential | ~20 ms                            |
-| Speedup    | ~4× (with sub-millisecond async event-loop overhead) |
-
-Real BMv2 numbers vary run-to-run; expect a 2–5× speedup at this
-problem size, growing with the number of switches.
+The timer starts after the clients connect and stops after all nine
+insert calls return. To compare serial and concurrent writes, reuse
+the same connected clients and clear the tables between trials. Time
+a fresh set of the same nine inserts each time. For the serial trial,
+await each insert before starting the next.
 
 ## When to use async
 
-- **Concurrent operations across switches** — the canonical case. N
-  switches in parallel beats N sequential RPCs.
+- **Concurrent operations across switches** — use `asyncio.gather()`
+  to overlap independent RPCs.
 - **Multi-Network workflows in one Python process** — the sync
   client's gRPC threads tickle Python's multi-threaded-fork pathology
   (see [Known Limitations](https://zhh2001.github.io/p4net/known-limitations/));
@@ -113,11 +105,10 @@ problem size, growing with the number of switches.
 - **Highly responsive CLI tools** — when concurrent reads of multiple
   switches matter.
 
-## When NOT to use async
+## When to use the synchronous client
 
-- **Single-switch single-operation workflows** where simplicity matters
-  more. The sync client at `switch.client` is just as fast against one
-  switch and doesn't require an event loop.
+- **One operation at a time** in a synchronous script. Use
+  `switch.client` to call the synchronous API.
 - **Direct mappings to the v1.0 sync API** in existing code. The sync
   client is the v1.0 baseline; the async client is also Stable since
   1.7.0 — pick whichever fits your codebase.

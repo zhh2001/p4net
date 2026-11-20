@@ -1,10 +1,10 @@
 ---
-description: 三交换机网格示例，借助 v1.6 异步客户端并发下发转发表项。演示跨交换机的 asyncio.gather 模式。
+description: 三台交换机组成网格，通过 AsyncP4RuntimeClient 和 asyncio.gather 并发下发 IPv4 转发表项。
 ---
 
 # 异步并发多交换机
 
-三交换机全网格拓扑，每台交换机的 IPv4 LPM 表通过 v1.6 `AsyncP4RuntimeClient` **并发**下发。可见的收益是耗时：三台交换机并行下发比串行快了大约 gRPC RTT 倍数（减去事件循环开销）。
+三台交换机两两相连。示例用 `AsyncP4RuntimeClient` 和 `asyncio.gather()` 并发下发各交换机的 IPv4 LPM 表项。
 
 ## 拓扑
 
@@ -32,7 +32,7 @@ description: 三交换机网格示例，借助 v1.6 异步客户端并发下发�
 sudo p4net examples/async_concurrent/topology.py
 ```
 
-`setup(net)` 通过 `asyncio.run(_async_setup(net))` 并发连接三个异步客户端、并发安装九条表项，并打印一行耗时。接着在 `p4net>` shell：
+`setup(net)` 先连接三台交换机，再计时下发这批表项。九条写入操作全部返回时，计时结束。在 `p4net>` 提示符下运行 `pingall`。
 
 ```
 pingall

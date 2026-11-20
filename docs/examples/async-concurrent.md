@@ -1,10 +1,10 @@
 ---
-description: Three-switch mesh whose forwarding tables are programmed concurrently via the v1.6 async client. Demonstrates asyncio.gather across switches.
+description: A three-switch mesh with IPv4 forwarding entries installed concurrently using AsyncP4RuntimeClient and asyncio.gather.
 ---
 
 # Async concurrent multi-switch
 
-Three-switch full-mesh topology where every switch's IPv4 LPM table is populated **concurrently** via the v1.6 `AsyncP4RuntimeClient`. The visible payoff is timing: programming three switches in parallel beats sequential by roughly the gRPC round-trip multiple, minus event-loop overhead.
+Three switches form a full mesh. The example uses `AsyncP4RuntimeClient` and `asyncio.gather()` to populate their IPv4 LPM tables concurrently.
 
 ## Topology
 
@@ -32,7 +32,7 @@ Standard `ipv4_lpm` table; nothing exotic in the pipeline. The interesting bit i
 sudo p4net examples/async_concurrent/topology.py
 ```
 
-`setup(net)` calls `asyncio.run(_async_setup(net))` which connects three async clients in parallel, installs nine table entries concurrently, and prints a timing line. Then in the `p4net>` shell:
+`setup(net)` connects to the three switches before starting the timer. The timer measures the batch of nine inserts until all calls return. Run `pingall` at the `p4net>` prompt.
 
 ```
 pingall
