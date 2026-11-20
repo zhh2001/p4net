@@ -287,12 +287,16 @@ def command_output(argv: list[str]) -> str:
 
 
 def environment(args: argparse.Namespace) -> dict[str, Any]:
+    source = args.p4_source
+    source_path = (
+        source.relative_to(PROJECT).as_posix() if source.is_relative_to(PROJECT) else source.name
+    )
     return {
         "recorded_at": datetime.now().astimezone().isoformat(),
         "revision": command_output(["git", "rev-parse", "HEAD"]),
         "working_tree": command_output(["git", "status", "--short"]),
         "python": sys.version,
-        "executable": sys.executable,
+        "executable": Path(sys.executable).name,
         "platform": platform.platform(),
         "os_release": Path("/etc/os-release").read_text(),
         "cpuinfo": Path("/proc/cpuinfo").read_text(),
@@ -312,14 +316,11 @@ def environment(args: argparse.Namespace) -> dict[str, Any]:
         "p4c": command_output(["p4c", "--version"]),
         "bmv2": command_output(["simple_switch_grpc", "--version"]),
         "iproute2": command_output(["ip", "-Version"]),
-        "p4_source": str(args.p4_source),
-        "p4_sha256": hashlib.sha256(args.p4_source.read_bytes()).hexdigest(),
+        "p4_source": source_path,
+        "p4_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"),
-        "settings": {
-            key: str(value) if isinstance(value, Path) else value
-            for key, value in vars(args).items()
-        },
+        "settings": vars(args) | {"output": ".", "p4_source": source_path},
         "bmv2_log_level": "info",
         "pcap": False,
     }

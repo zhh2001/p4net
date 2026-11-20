@@ -85,6 +85,33 @@ def test_reject_invalid_measurement_settings(option: str, value: str, tmp_path: 
         benchmark.parse_args(["--output", str(tmp_path), option, value])
 
 
+@pytest.mark.parametrize(
+    ("in_checkout", "expected_source"),
+    [(True, "examples/port-swap.p4"), (False, "port-swap.p4")],
+)
+def test_environment_records_portable_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, in_checkout: bool, expected_source: str
+) -> None:
+    checkout = tmp_path / "checkout"
+    source_dir = checkout / "examples" if in_checkout else tmp_path / "external"
+    source_dir.mkdir(parents=True)
+    source = source_dir / "port-swap.p4"
+    source.write_text("// P4 source\n")
+    output = tmp_path / "results"
+    args = benchmark.parse_args(["--output", str(output), "--p4-source", str(source)])
+    monkeypatch.setattr(benchmark, "PROJECT", checkout)
+    monkeypatch.setattr(benchmark, "command_output", lambda argv: "")
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "venv/bin/python3.12"))
+
+    record = benchmark.environment(args)
+
+    assert record["executable"] == "python3.12"
+    assert record["p4_source"] == expected_source
+    assert record["settings"] == vars(args) | {"output": ".", "p4_source": expected_source}
+    assert args.p4_source == source
+    assert args.output == output
+
+
 def test_finish_worker_requests_cleanup_on_eof(tmp_path: Path) -> None:
     marker = tmp_path / "cleaned"
     code = (

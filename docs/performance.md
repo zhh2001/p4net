@@ -61,6 +61,8 @@ The output directory must be new. Trial logs and results remain there if a later
 
 `environment.json` records the system timestamp, Git revision and working-tree status, script and P4 source hashes, Python and dependency versions, p4c/BMv2 versions, Linux/OS details, CPU information and affinity, memory information, load average and measurement settings. Keep this file with the results.
 
+The report records the interpreter filename. It uses a checkout-relative P4 source path or the filename for sources outside the checkout. `settings.output` is `.` relative to the report.
+
 WSL2 results describe that WSL2 setup. Use measurements from the intended host when estimating another machine's startup time or memory needs.
 
 The baseline below was collected on 2026-10-23 from runtime checkout [`b2ebbc9`](https://github.com/zhh2001/p4net/commit/b2ebbc964041b30b66b8d089e2d157faea9f1595) (package version `1.7.0`).
@@ -81,7 +83,7 @@ The baseline below was collected on 2026-10-23 from runtime checkout [`b2ebbc9`]
 
 `summary.md` reports the median startup time, shutdown time, idle CPU percentage and mean sampled memory across the five trials for each size/cache combination. Keep the raw samples when publishing the table so variation can be inspected.
 
-All 40 trials completed, with all 300 directional ping checks passing. Each trial produced 21 resource snapshots over an actual idle window of 5.001–5.012 seconds. No trials were excluded, and each topology passed its cleanup checks.
+The **p4net 1.7.0 historical baseline** below includes all 40 trials and 300 successful directional ping checks. Each trial produced 21 resource snapshots over an actual idle window of 5.001–5.012 seconds and passed its topology cleanup checks.
 
 | Switches | Hosts | Cache | Trials | Start (s) | Stop (s) | Idle CPU (%) | PSS (MiB) | RSS sum (MiB) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -96,7 +98,9 @@ All 40 trials completed, with all 300 directional ping checks passing. Each tria
 
 Values are medians across five trials. Memory columns use each trial's mean sampled usage. CPU uses 100% per logical CPU; on this system, one CPU tick over the five-second window corresponds to about 0.2 percentage points.
 
-Startup times for the one-switch empty-cache group ranged from 0.449 to 0.795 s. The eight-switch warm-cache group ranged from 2.004 to 2.142 s, with shutdowns from 1.588 to 1.833 s. The [raw baseline archive](assets/benchmarks/2026-10-23-b2ebbc9-py312.zip) contains all trials, environment information, lifecycle ranges, logs, the exact script and P4 source, and a SHA-256 manifest.
+Startup times for the one-switch empty-cache group ranged from 0.449 to 0.795 s. The eight-switch warm-cache group ranged from 2.004 to 2.142 s, with shutdowns from 1.588 to 1.833 s.
+
+The archive contains all trials, environment metadata with portable paths, lifecycle ranges, logs, the exact script and P4 source, and a SHA-256 manifest. [Download the baseline archive](assets/benchmarks/2026-10-23-b2ebbc9-py312.zip).
 
 ## Observations
 
