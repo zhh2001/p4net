@@ -10,15 +10,11 @@ If a coordination file is present at
 timestamp to its ``ingress_timestamp_us`` to estimate when the packet
 arrived. It prints the estimated arrival times and their difference.
 
-Usage (must be run as root for AF_PACKET access):
+Once the topology reaches the `p4net>` prompt, run this from the repository root:
 
-    sudo ip netns exec h2 python3 listener.py --iface h2-eth0
+    sudo ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0 --count 3
 
-Or from the p4net interactive shell:
-
-    h2 xterm
-    # in the spawned xterm:
-    sudo python3 examples/int_multi_hop/listener.py --iface h2-eth0
+The listener exits after three INT frames.
 """
 
 from __future__ import annotations

@@ -5,19 +5,11 @@ Ethernet and IPv4 headers on every forwarded packet. The shim carries the
 switch identifier, ingress timestamp, egress port, queue depth, and the
 original etherType (so a receiver can recover the inner IPv4 header).
 
-Run as root:
+Start the topology from the repository root:
 
     sudo p4net examples/int/topology.py
 
-Then in a separate terminal on h2 (e.g. ``h2 xterm`` from the CLI):
-
-    sudo python3 /path/to/examples/int/listener.py --iface h2-eth0
-
-And from another terminal:
-
-    sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
-
-The listener prints one structured line per INT-stamped frame.
+See the example README for the capture steps.
 """
 
 from __future__ import annotations

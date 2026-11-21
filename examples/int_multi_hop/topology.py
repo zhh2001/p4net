@@ -8,7 +8,7 @@ Both switches run the same P4 program (``int_multi_hop.p4``). Each switch's
 s1 gets ``1``, s2 gets ``2``. L2 forwarding is exact-match on destination
 MAC; static ARP is seeded between the hosts.
 
-Run as root:
+Start the topology from the repository root:
 
     sudo p4net examples/int_multi_hop/topology.py
 

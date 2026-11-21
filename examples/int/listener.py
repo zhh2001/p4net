@@ -1,14 +1,10 @@
 """INT shim listener — runs inside a host namespace, prints per-frame INT data.
 
-Usage (must be run as root because AF_PACKET sockets are privileged):
+Once the topology reaches the `p4net>` prompt, run this from the repository root:
 
-    sudo ip netns exec h2 python3 listener.py --iface h2-eth0
+    sudo ip netns exec h2 python3 examples/int/listener.py --iface h2-eth0 --count 3
 
-Or from the p4net interactive shell:
-
-    h2 xterm
-    # in the spawned xterm:
-    sudo python3 examples/int/listener.py --iface h2-eth0
+The listener exits after three INT frames.
 
 The script opens a raw AF_PACKET socket, filters by EtherType 0x88B6 (the
 INT shim), and decodes the 14-byte shim that follows the Ethernet header.
