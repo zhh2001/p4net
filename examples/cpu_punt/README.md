@@ -50,6 +50,8 @@ The ping times out because `10.0.0.99` has no host. The switch punts the ARP req
 
 ### Send a PacketOut
 
+Wait until the listener finishes and the `p4net>` prompt returns.
+
 To verify delivery at `h1`, start `tcpdump` in the second terminal if it is installed. The filter matches the EtherType of the example frame.
 
 ```sh
@@ -63,6 +65,8 @@ s1 packet send 00000000000102000000009988b548656c6c6f metadata: egress_port=1
 ```
 
 The `egress_port=1` metadata selects the switch port connected to `h1`. The shell prints `ok`, and the capture shows a frame with EtherType `0x88b5` and the `Hello` payload.
+
+When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Where to read the punt logic
 
