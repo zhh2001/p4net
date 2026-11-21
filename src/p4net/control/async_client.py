@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 _PIPELINE_ACTIONS: frozenset[str] = frozenset(
     {"VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"}
 )
+_PACKET_IN_QUEUE_CAPACITY = 256
 
 
 def _parse_register_read_single(output: str, name: str, index: int) -> int:
@@ -175,7 +176,7 @@ class AsyncP4RuntimeClient:
         self._arbitration_event = asyncio.Event()
         self._arbitration = None
         self._stream_error = None
-        self._packet_in_queue = asyncio.Queue()
+        self._packet_in_queue = asyncio.Queue(maxsize=_PACKET_IN_QUEUE_CAPACITY)
 
         if self._election_id is None:
             millis = time.time_ns() // 1_000_000
@@ -341,7 +342,7 @@ class AsyncP4RuntimeClient:
                 meta = self._info_index.decode_packet_in_metadata(packet.metadata)
             except Exception as exc:
                 logger.debug("async decode_packet_in_metadata raised: %r", exc)
-        # Buffer for expect_packet_in callers.
+        # Buffer independently of callback delivery.
         if self._packet_in_queue is not None:
             with self._suppress_queue_full():
                 self._packet_in_queue.put_nowait((payload, meta))
@@ -745,7 +746,13 @@ class AsyncP4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> tuple[bytes, dict[str, int]]:
-        """Await the next PacketIn. Raises P4RuntimeError on timeout."""
+        """Return the oldest queued PacketIn or wait when the queue is empty.
+
+        The queue holds up to 256 packets per connection. When it is full,
+        new packets go only to registered handlers.
+
+        Raises P4RuntimeError on timeout.
+        """
         self._require_connected()
         q = self._packet_in_queue
         if q is None:

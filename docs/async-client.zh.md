@@ -134,6 +134,8 @@ async def watch_packet(client: AsyncP4RuntimeClient) -> None:
 
 P4 程序需要将数据包送到 CPU 端口，具体配置见 [CPU punt 示例](examples/cpu-punt.md)。处理器由消息接收任务依次等待执行，耗时工作可交给队列或其他任务。
 
+异步客户端为每条连接缓存最多 256 条 PacketIn，供 `expect_packet_in()` 读取。队列满时，新收到的报文只交给已注册的处理器，已入队的报文按原顺序保留。
+
 ## 错误、超时与取消
 
 RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `__cause__` 中：

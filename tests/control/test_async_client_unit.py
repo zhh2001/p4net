@@ -1104,6 +1104,39 @@ async def test_on_packet_in_handler_invoked(patched_aio: dict[str, Any]) -> None
         await client.disconnect()
 
 
+async def test_packet_in_buffer_keeps_pending_packets_and_still_calls_handlers(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = await _connect(patched_aio)
+    stream = patched_aio["stream"]
+    packets = [index.to_bytes(2, "big") for index in range(258)]
+    received: list[bytes] = []
+    last_packet = asyncio.Event()
+
+    async def handler(payload: bytes, meta: dict[str, int]) -> None:
+        received.append(payload)
+        if payload == packets[-1]:
+            last_packet.set()
+
+    try:
+        await client.on_packet_in(handler)
+        for packet in packets:
+            await stream.push_packet(packet)
+        await asyncio.wait_for(last_packet.wait(), timeout=5.0)
+
+        assert received == packets
+        queue = client._packet_in_queue
+        assert queue is not None and queue.qsize() == 256
+        buffered = [await client.expect_packet_in() for _ in range(256)]
+        assert [payload for payload, _ in buffered] == packets[:256]
+
+        await stream.push_packet(b"next")
+        payload, _ = await client.expect_packet_in(timeout=1.0)
+        assert payload == b"next"
+    finally:
+        await client.disconnect()
+
+
 async def test_expect_packet_in_timeout(patched_aio: dict[str, Any]) -> None:
     client = await _connect(patched_aio)
     try:
