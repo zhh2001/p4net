@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 Side = Literal["a", "b"]
 _SIDES: tuple[Side, ...] = ("a", "b")
+_PID_ONE_NETNS = "/proc/1/ns/net"
 _MTU_MIN = 68
 _MTU_MAX = 65535
 _MAC_RE = re.compile(r"^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$")
@@ -64,7 +65,7 @@ class VethPair:
             raise ValueError("the two veth sides must have distinct names within one namespace")
         self._names: dict[Side, str] = {"a": name_a, "b": name_b}
         self._targets: dict[Side, NetworkNamespace | None] = {"a": namespace_a, "b": namespace_b}
-        self._ns: dict[Side, NetworkNamespace | None] = {"a": None, "b": None}
+        self._ns: dict[Side, NetworkNamespace | str | None] = {"a": None, "b": None}
         self._created = False
 
     @property
@@ -89,12 +90,18 @@ class VethPair:
         network namespace, and endpoints moved to PID 1's network namespace.
         """
         _validate_side(side)
-        return self._ns[side]
+        ns = self._ns[side]
+        return None if isinstance(ns, str) else ns
 
     @contextmanager
     def _netlink_for(self, side: Side) -> Iterator[Any]:
         ns = self._ns[side]
-        ipr: Any = IPRoute() if ns is None else NetNS(ns.name)
+        if ns is None:
+            ipr: Any = IPRoute()
+        elif isinstance(ns, str):
+            ipr = NetNS(ns, flags=0)
+        else:
+            ipr = NetNS(ns.name)
         try:
             yield ipr
         finally:
@@ -223,17 +230,16 @@ class VethPair:
         with self._netlink_for(side) as ipr:
             idx = self._index(ipr, ifname)
             if ns is None:
-                # Move back to the namespace of pid 1 (the host root netns).
                 ipr.link("set", index=idx, net_ns_pid=1)
+                self._ns[side] = _PID_ONE_NETNS
             else:
-                ns_path = f"/var/run/netns/{ns.name}"
-                fd = os.open(ns_path, os.O_RDONLY)
-                try:
-                    ipr.link("set", index=idx, net_ns_fd=fd)
-                finally:
-                    os.close(fd)
-        self._ns[side] = ns
-        logger.debug("moved %r to namespace %r", ifname, ns.name if ns is not None else "<root>")
+                # NetNS can handle requests in a separate process that needs
+                # to open the destination namespace itself.
+                ipr.link("set", index=idx, net_ns_fd=f"/var/run/netns/{ns.name}")
+                self._ns[side] = ns
+        logger.debug(
+            "moved %r to namespace %r", ifname, ns.name if ns is not None else _PID_ONE_NETNS
+        )
 
     def set_up(self, side: Side) -> None:
         """Bring ``side`` of the pair administratively up."""

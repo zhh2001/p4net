@@ -368,8 +368,6 @@ def test_recreate_after_manual_moves_starts_in_configured_root(
     patch_netlink: MagicMock, mocker: MockerFixture, names: tuple[str, str]
 ) -> None:
     mocker.patch("pathlib.Path.exists", return_value=False)
-    mocker.patch("p4net.runtime.link.os.open", return_value=101)
-    mocker.patch("p4net.runtime.link.os.close")
     if names[0].isascii():
         replies = [[], [], [41], [42], [91], [], [], [92], [92]]
     else:
@@ -428,10 +426,8 @@ def test_recreate_failure_uses_positions_from_current_creation(
     stale.assert_not_called()
 
 
-def test_move_updates_namespace_state(patch_netlink: MagicMock, mocker: MockerFixture) -> None:
+def test_move_updates_namespace_state(patch_netlink: MagicMock) -> None:
     patch_netlink.link_lookup.return_value = [10]
-    mocker.patch("p4net.runtime.link.os.open", return_value=99)
-    mocker.patch("p4net.runtime.link.os.close")
     v = VethPair("va", "vb")
     _force_created(v)
     target = NetworkNamespace("nsX")
@@ -439,11 +435,14 @@ def test_move_updates_namespace_state(patch_netlink: MagicMock, mocker: MockerFi
     assert v.namespace_of("a") is target
     args = patch_netlink.link.call_args
     assert args.args[0] == "set"
-    assert args.kwargs.get("net_ns_fd") == 99
+    assert args.kwargs.get("net_ns_fd") == "/var/run/netns/nsX"
     assert args.kwargs.get("index") == 10
 
 
-def test_move_to_root_uses_pid1(patch_netlink: MagicMock) -> None:
+def test_move_to_pid_one_tracks_destination(
+    patch_netlink: MagicMock, mocker: MockerFixture
+) -> None:
+    netns_factory = mocker.patch("p4net.runtime.link.NetNS", return_value=patch_netlink)
     patch_netlink.link_lookup.return_value = [10]
     v = VethPair("va", "vb")
     _force_created(v)
@@ -451,6 +450,18 @@ def test_move_to_root_uses_pid1(patch_netlink: MagicMock) -> None:
     args = patch_netlink.link.call_args
     assert args.args[0] == "set"
     assert args.kwargs.get("net_ns_pid") == 1
+    assert v.namespace_of("a") is None
+
+    v.set_up("a")
+    netns_factory.assert_called_once_with("/proc/1/ns/net", flags=0)
+    assert patch_netlink.link.call_args == call("set", index=10, state="up")
+
+    netns_factory.reset_mock()
+    target = NetworkNamespace("nsX")
+    v.move_to_namespace("a", target)
+    netns_factory.assert_called_once_with("/proc/1/ns/net", flags=0)
+    assert patch_netlink.link.call_args == call("set", index=10, net_ns_fd="/var/run/netns/nsX")
+    assert v.namespace_of("a") is target
 
 
 def test_set_up_and_down(patch_netlink: MagicMock) -> None:
@@ -574,8 +585,6 @@ def test_netns_handle_used_when_side_is_in_namespace(
 ) -> None:
     """After moving side 'a' into nsZ, follow-up ops should target NetNS('nsZ')."""
     netns_factory = mocker.patch("p4net.runtime.link.NetNS", return_value=patch_netlink)
-    mocker.patch("p4net.runtime.link.os.open", return_value=99)
-    mocker.patch("p4net.runtime.link.os.close")
     patch_netlink.link_lookup.return_value = [10]
     v = VethPair("va", "vb")
     _force_created(v)
