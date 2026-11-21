@@ -434,6 +434,8 @@ class AsyncP4RuntimeClient:
         ``COMMIT`` uses the configuration already saved on the switch and reads
         back its P4Info. The bytes arguments are only used for other actions.
         The timeout applies to each RPC.
+
+        A successful reply from a closed connection raises ``ConnectionError``.
         """
         self._require_connected()
         stub = self._stub
@@ -462,7 +464,12 @@ class AsyncP4RuntimeClient:
                 await asyncio.wait_for(stub.SetForwardingPipelineConfig(req), timeout=timeout)
                 if msg is None:
                     await self._refresh_committed_pipeline(stub, timeout=timeout)
-                elif action != "VERIFY":
+                    return
+                if self._stub is not stub or not self.is_connected:
+                    raise ConnectionError(
+                        f"Connection to {self.target!r} closed before applying pipeline reply"
+                    )
+                if action != "VERIFY":
                     self._info_index = P4InfoIndex(msg)
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError("push_pipeline cancelled") from exc
@@ -471,9 +478,9 @@ class AsyncP4RuntimeClient:
 
     async def _refresh_committed_pipeline(self, stub: Any, *, timeout: float) -> None:
         connection_closed = "COMMIT succeeded. Connection closed during P4Info refresh."
-        previous, self._info_index = self._info_index, None
         if self._stub is not stub or not self.is_connected:
             raise ConnectionError(connection_closed)
+        previous, self._info_index = self._info_index, None
         req = p4runtime_pb2.GetForwardingPipelineConfigRequest()
         req.device_id = self._device_id
         req.response_type = p4runtime_pb2.GetForwardingPipelineConfigRequest.P4INFO_AND_COOKIE

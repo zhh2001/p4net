@@ -991,6 +991,60 @@ def test_commit_failure_leaves_a_usable_or_empty_index(
         client.disconnect()
 
 
+@pytest.mark.parametrize("action", ["VERIFY_AND_COMMIT", "VERIFY", "COMMIT"])
+def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], action: str
+) -> None:
+    client, grpc_mocks, p4info_path, json_path = connected_client
+    client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+    current = client.index
+    candidate = _build_p4info()
+    candidate.tables[0].preamble.name = "Candidate.ipv4_lpm"
+    p4info_path.write_text(str(candidate))
+
+    started = threading.Event()
+    reply = threading.Event()
+
+    def hold_reply(_request: Any, *, timeout: float) -> None:
+        started.set()
+        assert reply.wait(timeout=3.0)
+
+    old_stub = grpc_mocks["stub"]
+    old_stub.SetForwardingPipelineConfig.side_effect = hold_reply
+    stream = FakeStreamCall()
+
+    def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+        stream.attach_request_iter(requests)
+        return stream
+
+    new_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+    files = {} if action == "COMMIT" else {"bmv2_json": json_path, "p4info": p4info_path}
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            pending = worker.submit(client.set_pipeline_config, action=action, **files)
+            assert started.wait(timeout=1.0)
+            client.disconnect()
+            grpc_mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
+            grpc_mocks["stub_factory"].return_value = new_stub
+            stream.responses.put(_make_arbitration_response(0, (1, 0)))
+            client.connect(timeout=1.0)
+            reply.set()
+
+            with pytest.raises(ConnectionError, match="closed"):
+                pending.result(timeout=1.0)
+            assert client.index is current
+            old_stub.GetForwardingPipelineConfig.assert_not_called()
+            new_stub.GetForwardingPipelineConfig.assert_not_called()
+            new_stub.SetForwardingPipelineConfig.assert_not_called()
+
+            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+            assert client.index.raw == candidate
+            new_stub.SetForwardingPipelineConfig.assert_called_once()
+        finally:
+            reply.set()
+            client.disconnect()
+
+
 def test_set_pipeline_config_failed_precondition_raises_pipeline_error(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
 ) -> None:

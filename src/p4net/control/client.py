@@ -442,6 +442,8 @@ class P4RuntimeClient:
         ``COMMIT`` uses the configuration already saved on the switch and reads
         back its P4Info. The file arguments are only used for other actions.
         The timeout applies to each RPC.
+
+        A successful reply from a closed connection raises ``ConnectionError``.
         """
         with self._teardown_lock:
             self._require_connected()
@@ -476,8 +478,11 @@ class P4RuntimeClient:
             if p4info_msg is None:
                 self._refresh_committed_pipeline(stub, timeout=timeout)
                 p4info_msg = self.index.raw
-            elif action != "VERIFY":
-                self._index = P4InfoIndex(p4info_msg)
+            else:
+                with self._teardown_lock:
+                    self._require_pipeline_connection(stub)
+                    if action != "VERIFY":
+                        self._index = P4InfoIndex(p4info_msg)
             logger.debug(
                 "P4Runtime pipeline request succeeded (action=%s, p4info_tables=%d)",
                 action,
@@ -487,9 +492,9 @@ class P4RuntimeClient:
     def _refresh_committed_pipeline(self, stub: Any, *, timeout: float) -> None:
         connection_closed = "COMMIT succeeded. Connection closed during P4Info refresh."
         with self._teardown_lock:
-            previous, self._index = self._index, None
             if self._stub is not stub or not self.is_connected():
                 raise ConnectionError(connection_closed)
+            previous, self._index = self._index, None
         try:
             response = self._read_pipeline_config(
                 stub, response_type="P4INFO_AND_COOKIE", timeout=timeout

@@ -1053,6 +1053,62 @@ async def test_commit_refresh_cannot_overwrite_a_later_pipeline(
         await client.disconnect()
 
 
+@pytest.mark.parametrize("action", ["VERIFY_AND_COMMIT", "VERIFY", "COMMIT"])
+async def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
+    patched_aio: dict[str, Any], mocker: MockerFixture, action: str
+) -> None:
+    client = await _connect(patched_aio)
+    current = client.info_index
+    candidate = p4info_pb2.P4Info()
+    candidate.CopyFrom(current.raw)
+    candidate.tables[0].preamble.name = "Candidate.ipv4_lpm"
+    p4info = str(candidate).encode()
+    started = asyncio.Event()
+    reply = asyncio.Event()
+
+    async def hold_reply(_request: Any) -> None:
+        started.set()
+        await reply.wait()
+
+    old_stub = patched_aio["stub"]
+    old_stub.SetForwardingPipelineConfig.side_effect = hold_reply
+    stream = _FakeStream()
+    new_stub = MagicMock(
+        StreamChannel=MagicMock(return_value=stream),
+        SetForwardingPipelineConfig=AsyncMock(),
+    )
+    config = () if action == "COMMIT" else (p4info, b"{}")
+    pending = asyncio.create_task(client.push_pipeline(*config, action=action))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        await client.disconnect()
+        mocker.patch(
+            "p4net.control.async_client.grpc.aio.insecure_channel",
+            return_value=MagicMock(close=AsyncMock()),
+        )
+        mocker.patch(
+            "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub", return_value=new_stub
+        )
+        await stream.push_arbitration()
+        await client.connect(timeout=1.0)
+        reply.set()
+
+        with pytest.raises(ConnectionError, match="closed"):
+            await asyncio.wait_for(pending, timeout=1.0)
+        assert client.info_index is current
+        old_stub.GetForwardingPipelineConfig.assert_not_called()
+        new_stub.GetForwardingPipelineConfig.assert_not_called()
+        new_stub.SetForwardingPipelineConfig.assert_not_awaited()
+
+        await client.push_pipeline(p4info, b"{}")
+        assert client.info_index.raw == candidate
+        new_stub.SetForwardingPipelineConfig.assert_awaited_once()
+    finally:
+        reply.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("empty_details", [False, True])
 @pytest.mark.parametrize(
     ("code", "expected"),
