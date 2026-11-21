@@ -26,9 +26,8 @@
  * from the ``switch_id_reg`` register, written at start-up via the v1.2
  * register API.
  *
- * 2-hop maximum. Real production INT uses a P4 header stack of MAX_HOPS
- * depth and ``push_front``; that's left as an extension exercise — see
- * the README for the recipe.
+ * Two shim slots hold the first two hops. The README describes how to
+ * extend the pipeline by appending to a fixed-capacity P4 header stack.
  *
  * Pairs with ``examples/int_multi_hop/topology.py`` (4-node linear:
  * h1 — s1 — s2 — h2).
@@ -168,11 +167,7 @@ control MyIngress(inout headers hdr, inout metadata meta,
                     hdr.int_shim_2.reserved             = 0;
                     hdr.int_shim_1.next_proto           = ETHERTYPE_INT;
                 }
-                /* Both shim slots full = 3+ hop topology; this example does
-                 * not support that. Real deployments use a header stack of
-                 * MAX_HOPS depth and push_front(1). The packet still
-                 * forwards correctly through this switch; the receiver
-                 * just won't see the third hop's metadata. */
+                /* With both slots occupied, forward the two existing shims. */
             }
         }
     }

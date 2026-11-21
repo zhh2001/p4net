@@ -40,17 +40,6 @@ Four nodes, three links, no branching. Same P4 binary loaded on both switches; p
 - **Ingress** runs `l2_forward.apply()` to select the egress port. It fills the first available shim with `standard_metadata` and the configured `switch_id`, then updates the header chain. With both slots filled, the packet is forwarded with the two existing shims.
 - **Deparser** emits every valid header in declaration order. Invalid shim headers are skipped entirely; the wire bytes never contain unused 14-byte gaps.
 
-## Multi-hop vs header stack
-
-This example uses two named header instances rather than a P4 header stack. The trade-off:
-
-| Aspect | Named instances (this example) | Header stack |
-| ------ | ------------------------------ | ------------ |
-| Max hops | 2 | Configurable at compile time |
-| Parser | Explicit transitions; easy to read | `pkt.extract(stack.next)` in a loop |
-| Ingress | Explicit `if/else if` chain | `stack.push_front(1)` |
-| Pedagogy | Clearer for 2 hops | More general |
-
 ## Per-switch parameterization
 
 The P4 program runs unchanged on both switches. Per-switch identity comes from a register written at start-up:
@@ -155,36 +144,14 @@ The listener prints three packets with two aligned hops each. The shell reports 
 - **Egress ports correspond to the path direction**, not to a fixed numbering scheme. s1's port 2 leads to s2; s2's port 2 leads to h2. Different topologies will produce different `egress_port` values.
 - **`queue_depth` is reliably 0** in this configuration, the same as in the single-switch INT example. BMv2's `deq_qdepth` would surface non-zero values only under explicit queue configuration with saturating offered load — not at one ICMP echo per second.
 
-## Extending to N hops
+## Extending to more hops
 
-Replace the two named header instances with a P4 header stack:
+Replace the two named shim headers with `int_shim_t[MAX_HOPS] shims`. Choose `MAX_HOPS` at compile time and append each new shim after the existing ones to preserve path order. See the P4 language specification on header stacks.
 
-```p4
-const bit<32> MAX_HOPS = 8;
-
-struct headers {
-    ethernet_t ethernet;
-    int_shim_t[MAX_HOPS] shims;
-    ipv4_t     ipv4;
-}
-```
-
-Then in the parser:
-
-```p4
-state parse_shim {
-    pkt.extract(hdr.shims.next);
-    transition select(hdr.shims.last.next_proto) {
-        ETHERTYPE_IPV4: parse_ipv4;
-        ETHERTYPE_INT:  parse_shim;
-        default: accept;
-    }
-}
-```
-
-And in ingress, use `hdr.shims.push_front(1)` to allocate a fresh slot at the head of the stack each hop. The deparser's `emit` on a header stack walks the stack in order; no explicit per-slot emit needed.
-
-The listener already handles arbitrary hop counts — it stops decoding when `next_proto` leaves the INT space, regardless of how many shims preceded.
+1. In the parser, set `hop_count` to zero and clear an `added_shim` flag in packet metadata. Before each INT extraction, check that `hop_count` is below `MAX_HOPS`. Extract `hdr.shims.next`, increment `hop_count`, and follow `hdr.shims.last.next_proto`. Continue for `ETHERTYPE_INT`, parse IPv4 for `ETHERTYPE_IPV4`, and reject other values in the shim chain.
+2. In ingress, after selecting the egress port, append at index `hop_count` if a slot is available. Mark the new shim valid, set `added_shim`, and fill in the switch ID, ingress timestamp, and egress port. Set `reserved` to zero and `next_proto` to `ETHERTYPE_IPV4`. For the first shim, set the Ethernet EtherType to `ETHERTYPE_INT`. For later shims, set the previous shim's `next_proto` to `ETHERTYPE_INT`. At capacity, forward with the existing shims.
+3. In egress, when `added_shim` is set, fill the new shim's `queue_depth` at index `hop_count` from `standard_metadata.deq_qdepth`, which BMv2 provides after dequeuing. Emit Ethernet, the shim stack, and IPv4 in that order.
+4. Assign a distinct `switch_id` to each switch and provide its boot timestamp to the receiver. The existing listener decodes longer shim chains through `next_proto` and aligns timestamps for the first two hop positions. To align longer or reordered paths, look up each boot timestamp by the decoded `switch_id`.
 
 ## Caveats
 
