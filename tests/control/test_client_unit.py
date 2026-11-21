@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -1288,6 +1288,90 @@ def test_priority_forbidden_for_lpm_table(
             )
     finally:
         client.disconnect()
+
+
+@pytest.mark.parametrize("change", ["reconnect", "p4info"])
+@pytest.mark.parametrize("operation", ["insert", "modify", "delete", "clear"])
+def test_table_write_keeps_the_connection_and_p4info_used_to_encode_it(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    mocker: MockerFixture,
+    operation: str,
+    change: str,
+) -> None:
+    client = _push_pipeline(connected_client)
+    _, grpc_mocks, p4info_path, json_path = connected_client
+    old_stub = grpc_mocks["stub"]
+    current_stub = old_stub
+    table = "MyIngress.ipv4_lpm"
+    key = {"hdr.ipv4.dstAddr": "10.0.1.0/24"}
+    action = "MyIngress.set_egress_port"
+    response = p4runtime_pb2.ReadResponse()
+    entry = response.entities.add().table_entry
+    entry.table_id = 2001
+    field = entry.match.add()
+    field.field_id = 1
+    field.lpm.value = b"\x0a\x00\x01\x00"
+    field.lpm.prefix_len = 24
+    old_stub.Read.return_value = iter([response])
+
+    encoding = threading.Event()
+    release = threading.Event()
+    index = client.index
+    encode = index.encode_match
+
+    def hold_encoding(table_name: str, match: Mapping[str, object]) -> list[Any]:
+        encoding.set()
+        assert release.wait(timeout=3.0)
+        return encode(table_name, match)
+
+    mocker.patch.object(index, "encode_match", side_effect=hold_encoding)
+
+    def write() -> None:
+        if operation == "clear":
+            client.clear_table(table)
+        elif operation == "delete":
+            client.delete_table_entry(table, key)
+        else:
+            getattr(client, f"{operation}_table_entry")(table, key, action, {"port": 2})
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            pending = worker.submit(write)
+            assert encoding.wait(timeout=1.0)
+            if change == "reconnect":
+                client.disconnect()
+                stream = FakeStreamCall()
+
+                def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+                    stream.attach_request_iter(requests)
+                    return stream
+
+                current_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+                grpc_mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
+                grpc_mocks["stub_factory"].return_value = current_stub
+                stream.responses.put(_make_arbitration_response(0, (1, 0)))
+                client.connect(timeout=1.0)
+            else:
+                new_info = _build_p4info()
+                new_info.tables[0].preamble.id = 4001
+                p4info_path.write_text(str(new_info))
+                client.set_pipeline_config(p4info=p4info_path, bmv2_json=json_path)
+            release.set()
+
+            error = ConnectionError if change == "reconnect" else P4RuntimeError
+            message = "closed during a table write" if change == "reconnect" else "P4Info changed"
+            with pytest.raises(error, match=message):
+                pending.result(timeout=1.0)
+            old_stub.Write.assert_not_called()
+            current_stub.Write.assert_not_called()
+
+            client.insert_table_entry(table, key, action, {"port": 3})
+            current_stub.Write.assert_called_once()
+            written = current_stub.Write.call_args.args[0].updates[0].entity.table_entry
+            assert written.table_id == (2001 if change == "reconnect" else 4001)
+        finally:
+            release.set()
+            client.disconnect()
 
 
 @pytest.mark.parametrize("operation", ["insert", "modify", "delete"])

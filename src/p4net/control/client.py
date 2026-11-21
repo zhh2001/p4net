@@ -470,7 +470,7 @@ class P4RuntimeClient:
 
         with self._pipeline_lock:
             with self._teardown_lock:
-                self._require_pipeline_connection(stub)
+                self._require_same_connection(stub, operation="a pipeline operation")
             try:
                 stub.SetForwardingPipelineConfig(req, timeout=timeout)
             except grpc.RpcError as exc:
@@ -480,7 +480,7 @@ class P4RuntimeClient:
                 p4info_msg = self.index.raw
             else:
                 with self._teardown_lock:
-                    self._require_pipeline_connection(stub)
+                    self._require_same_connection(stub, operation="a pipeline operation")
                     if action != "VERIFY":
                         self._index = P4InfoIndex(p4info_msg)
             logger.debug(
@@ -523,13 +523,13 @@ class P4RuntimeClient:
             stub = self._stub
         with self._pipeline_lock:
             with self._teardown_lock:
-                self._require_pipeline_connection(stub)
+                self._require_same_connection(stub, operation="a pipeline operation")
             try:
                 response = self._read_pipeline_config(stub, response_type="ALL", timeout=timeout)
             except grpc.RpcError as exc:
                 raise self._translate_rpc_error(exc) from exc
             with self._teardown_lock:
-                self._require_pipeline_connection(stub)
+                self._require_same_connection(stub, operation="a pipeline operation")
                 config = response.config
                 if not config.HasField("p4info"):
                     self._index = None
@@ -544,11 +544,9 @@ class P4RuntimeClient:
                 self._index = index
         return config.p4_device_config, index
 
-    def _require_pipeline_connection(self, stub: Any) -> None:
+    def _require_same_connection(self, stub: Any, *, operation: str) -> None:
         if self._stub is not stub or not self.is_connected():
-            raise ConnectionError(
-                f"Connection to {self.target!r} closed during a pipeline operation"
-            )
+            raise ConnectionError(f"Connection to {self.target!r} closed during {operation}")
 
     def _read_pipeline_config(self, stub: Any, *, response_type: str, timeout: float) -> Any:
         req = p4runtime_pb2.GetForwardingPipelineConfigRequest()
@@ -588,6 +586,8 @@ class P4RuntimeClient:
         Raises:
             DuplicateEntryError: if an entry with the same key already exists.
             EncodingError: if any field can't be encoded.
+            ConnectionError: if the connection closes during request preparation.
+            P4RuntimeError: if P4Info changes during request preparation.
         """
         self._write_entry(
             table,
@@ -661,9 +661,7 @@ class P4RuntimeClient:
         update_type: str,
         timeout: float,
     ) -> None:
-        self._require_connected_with_index()
-        index = self._index
-        assert index is not None
+        stub, index = self._table_context()
         table_id = index.table_id(table)
         requires_priority = index.table_requires_priority(table)
         if requires_priority and priority is None:
@@ -700,10 +698,7 @@ class P4RuntimeClient:
         req.election_id.low = self._election_id_low
         req.updates.add().CopyFrom(update)
 
-        try:
-            self._stub.Write(req, timeout=timeout)
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
+        self._write_table_request(stub, index, req, timeout=timeout)
         logger.debug(
             "P4Runtime %s table_entry table=%s match=%s action=%s",
             update_type,
@@ -711,6 +706,28 @@ class P4RuntimeClient:
             dict(match),
             action,
         )
+
+    def _table_context(self) -> tuple[Any, P4InfoIndex]:
+        with self._teardown_lock:
+            self._require_connected()
+            return self._stub, self.index
+
+    def _write_table_request(
+        self, stub: Any, index: P4InfoIndex, req: Any, *, timeout: float
+    ) -> None:
+        with self._teardown_lock:
+            self._require_same_connection(stub, operation="a table write")
+            if self._index is not index:
+                raise P4RuntimeError("P4Info changed during table write preparation")
+        try:
+            stub.Write(req, timeout=timeout)
+        except grpc.RpcError as exc:
+            raise self._translate_rpc_error(exc) from exc
+        except ValueError:
+            # gRPC can report a closed channel if teardown wins after the check.
+            with self._teardown_lock:
+                self._require_same_connection(stub, operation="a table write")
+            raise
 
     def list_table_entries(
         self,
@@ -727,33 +744,45 @@ class P4RuntimeClient:
         ``modify_table_entry``, and ``delete_table_entry`` because
         ``encode_value`` accepts shorter ``bytes`` inputs.
         """
-        self._require_connected_with_index()
+        stub, index = self._table_context()
+        return self._read_table_entries(stub, index, table, timeout=timeout)
+
+    def _read_table_entries(
+        self, stub: Any, index: P4InfoIndex, table: str | None, *, timeout: float
+    ) -> list[dict[str, Any]]:
         req = p4runtime_pb2.ReadRequest()
         req.device_id = self._device_id
         entity = req.entities.add()
         if table is not None:
-            entity.table_entry.table_id = self.index.table_id(table)
+            entity.table_entry.table_id = index.table_id(table)
         else:
             entity.table_entry.table_id = 0
+        with self._teardown_lock:
+            self._require_same_connection(stub, operation="a table read")
         try:
-            response_iter = self._stub.Read(req, timeout=timeout)
+            response_iter = stub.Read(req, timeout=timeout)
             entries: list[dict[str, Any]] = []
             for resp in response_iter:
                 for ent in resp.entities:
                     if ent.HasField("table_entry"):
-                        entries.append(self._decode_table_entry(ent.table_entry))
+                        entries.append(self._decode_table_entry(ent.table_entry, index=index))
             return entries
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc) from exc
+        except ValueError:
+            with self._teardown_lock:
+                self._require_same_connection(stub, operation="a table read")
+            raise
 
     def clear_table(self, table: str, *, timeout: float = 10.0) -> int:
-        """Delete every entry from `table`. Returns the count deleted."""
-        self._require_connected_with_index()
-        entries = self.list_table_entries(table, timeout=timeout)
+        """Read and delete all entries from `table` on the same connection.
+
+        Return the number of deleted entries.
+        """
+        stub, index = self._table_context()
+        entries = self._read_table_entries(stub, index, table, timeout=timeout)
         if not entries:
             return 0
-        index = self._index
-        assert index is not None
         table_id = index.table_id(table)
         req = p4runtime_pb2.WriteRequest()
         req.device_id = self._device_id
@@ -774,15 +803,14 @@ class P4RuntimeClient:
             update = req.updates.add()
             update.type = p4runtime_pb2.Update.Type.Value("DELETE")
             update.entity.table_entry.CopyFrom(te)
-        try:
-            self._stub.Write(req, timeout=timeout)
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
+        self._write_table_request(stub, index, req, timeout=timeout)
         return len(entries)
 
-    def _decode_table_entry(self, entry: Any) -> dict[str, Any]:
-        index = self._index
-        assert index is not None
+    def _decode_table_entry(
+        self, entry: Any, *, index: P4InfoIndex | None = None
+    ) -> dict[str, Any]:
+        if index is None:
+            index = self.index
         table_name = index.table_name(int(entry.table_id))
         table = index.raw.tables[0]
         for t in index.raw.tables:
