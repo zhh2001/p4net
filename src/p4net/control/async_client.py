@@ -184,7 +184,10 @@ class AsyncP4RuntimeClient:
         try:
             await self._connect(timeout=timeout)
         except BaseException as exc:
-            attempt.set_result(exc)
+            try:
+                await self._teardown()
+            finally:
+                attempt.set_result(exc)
             raise
         else:
             attempt.set_result(None)
@@ -221,28 +224,21 @@ class AsyncP4RuntimeClient:
 
         try:
             await asyncio.wait_for(self._arbitration_event.wait(), timeout=timeout)
-        except asyncio.CancelledError:
-            await self._teardown()
-            raise
         except asyncio.TimeoutError as exc:
-            await self._teardown()
             raise ConnectionError(
                 f"P4Runtime async arbitration timed out after {timeout}s for {self.target!r}"
             ) from exc
         if self._stream_error is not None:
             err = self._stream_error
-            await self._teardown()
             if isinstance(err, ConnectionError):
                 raise err
             raise P4RuntimeError(f"async stream error: {err!r}") from err
         if self._arbitration is None:
-            await self._teardown()
             raise ConnectionError("no arbitration response received")
         status_code = int(self._arbitration.status.code)
         if status_code != 0 and self._election_id != (0, 0):
             # Explicit secondary (election_id=(0,0)) is allowed and stays connected.
             # Any other non-primary status is a failure.
-            await self._teardown()
             raise NotPrimaryError(
                 f"async client is not primary for device {self._device_id} "
                 f"(status code {status_code})"

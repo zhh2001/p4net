@@ -184,6 +184,62 @@ async def test_connect_then_disconnect_clean(patched_aio: dict[str, Any]) -> Non
     assert not client.is_connected
 
 
+@pytest.mark.parametrize("step", ["stub", "stream"])
+async def test_connect_initialization_failure_closes_channel_and_allows_retry(
+    patched_aio: dict[str, Any], mocker: MockerFixture, step: str
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0)
+    failed_channel = patched_aio["channel"]
+    retry_channel = MagicMock(name="retry-channel", close=AsyncMock(return_value=None))
+    mocker.patch(
+        "p4net.control.async_client.grpc.aio.insecure_channel",
+        side_effect=[failed_channel, retry_channel],
+    )
+    stub = patched_aio["stub"]
+    stub_factory = mocker.patch(
+        "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub", return_value=stub
+    )
+    failing_call = stub_factory if step == "stub" else stub.StreamChannel
+    original_side_effect = failing_call.side_effect
+    failure = RuntimeError(f"{step} initialization failed")
+    failing_call.side_effect = failure
+
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            async with client:
+                pytest.fail("connection unexpectedly succeeded")
+        assert raised.value is failure
+        failed_channel.close.assert_awaited_once()
+        assert client._channel is None
+        assert client._stream_task is None
+        assert not client.is_connected
+
+        failing_call.side_effect = original_side_effect
+        await patched_aio["stream"].push_arbitration()
+        async with client:
+            assert client.is_connected and client.is_primary
+        retry_channel.close.assert_awaited_once()
+        failed_channel.close.assert_awaited_once()
+    finally:
+        await client.disconnect()
+
+
+async def test_connect_invalid_arbitration_request_releases_resources(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=-1)
+    try:
+        with pytest.raises(ValueError, match="out of range"):
+            await client.connect()
+        assert not client.is_connected
+        assert patched_aio["stream"]._cancelled
+        patched_aio["channel"].close.assert_awaited_once()
+        assert client._channel is None
+        assert client._stream_task is None
+    finally:
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("outcome", ["success", "stream-error", "disconnect", "cancel"])
 async def test_concurrent_connects_share_one_attempt(
     patched_aio: dict[str, Any], outcome: str
