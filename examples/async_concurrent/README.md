@@ -16,13 +16,15 @@ and `asyncio.gather()` to populate their IPv4 LPM tables concurrently.
 ## Topology
 
 ```
-  h1 (10.0.1.1/24)            h2 (10.0.2.1/24)            h3 (10.0.3.1/24)
-      |                           |                           |
-      | port 1                    | port 1                    | port 1
-     s1 -------- port 2 ---------- s2 -------- port 3 -------- s3
-      |                                                       |
-      |                  port 3                       port 2  |
-      +-------------------------------------------------------+
+h1 (10.0.1.1/24)               h2 (10.0.2.1/24)               h3 (10.0.3.1/24)
+        |                              |                              |
+     port 1                         port 1                         port 1
+        |                              |                              |
+       s1 (port 2) --------- (port 2) s2 (port 3) --------- (port 2) s3
+        |                                                             |
+     port 3                                                        port 3
+        |                                                             |
+        +-------------------------------------------------------------+
 ```
 
 Three hosts on three /24s, fully meshed switches. Each switch loads
