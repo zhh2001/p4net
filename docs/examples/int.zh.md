@@ -58,7 +58,7 @@ sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 ```
 
 - 报文重组时，将有效的遥测头放在以太网头和 IPv4 头之间。外层 EtherType 为 `0x88B6`，`next_proto` 保存原始 EtherType（IPv4 为 `0x0800`）。
-- LPM 表选定出端口后，入口处理从 `standard_metadata` 读取相关字段并写入遥测头。
+- LPM 表选定出端口后，入口处理插入遥测头。报文出队后，出口处理将队列中剩余的报文数写入 `queue_depth`。
 - `setup(net)` 把交换机 ID 1 写入 `MyIngress.switch_id` 寄存器。修改这个值只需调整 `setup(net)`。
 
 ## 监听器

@@ -51,13 +51,13 @@ header int_shim_t {                  // 14 B, novel
 header ipv4_t { ... }                // 20 B, standard
 ```
 
-The parser handles only inbound IPv4 (this is an ingress switch in the
-demo; it never sees INT-stamped frames at its own input). The ingress
-control:
+The parser extracts the IPv4 header from incoming IPv4 packets.
 
-1. Applies the `ipv4_lpm` table to set `std.egress_spec`.
-2. If forwarding succeeded, populates the shim from
-   `standard_metadata` and rewrites the outer `etherType` to `0x88B6`.
+1. Ingress applies the `ipv4_lpm` table to set `std.egress_spec`.
+2. When forwarding a packet, ingress adds the shim and sets the outer
+   EtherType to `0x88B6`.
+3. After the packet leaves the switch's egress queue, the egress control
+   records the number of packets still queued as `queue_depth`.
 
 The deparser emits Ethernet → shim → IPv4 in that order.
 
@@ -112,16 +112,11 @@ switch:
 [switch=1 ts=2754336us egress=2 queue=0 next_proto=0x0800] 10.0.0.1 -> 10.0.0.2
 ```
 
-(`queue=0` is expected — see caveats.)
+At this send rate, the egress queue is usually empty after each dequeue,
+so the listener typically prints `queue=0`.
 
 ## Caveats
 
-- **`queue_depth` is almost always 0** with BMv2's default queueing
-  configuration. The `standard_metadata.deq_qdepth` field is populated
-  but stays at 0 unless the switch's egress queue actually backs up,
-  which doesn't happen at this demo's traffic level. Real INT
-  deployments care about queue depth; this demo just shows where it
-  plumbs in.
 - **Single hop only.** Real INT stacks one shim per traversed switch
   and lets the egress switch strip them all. Multi-hop is left as an
   extension exercise.

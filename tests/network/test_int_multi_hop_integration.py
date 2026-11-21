@@ -17,11 +17,16 @@ from __future__ import annotations
 
 import io
 import json
+import re
+import selectors
 import socket
 import struct
+import subprocess
+import sys
 import threading
 import time
 import uuid
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -396,3 +401,106 @@ def test_env_var_overrides_coordination_path(
         assert on_disk == net.boot_timestamps
         assert set(on_disk) == {s1, s2}
         assert all(isinstance(v, int) and v > 0 for v in on_disk.values())
+
+
+@pytest.mark.parametrize(
+    ("example", "n_switches", "queued_hop"),
+    [("int", 1, 0), ("int_multi_hop", 3, 0), ("int_multi_hop", 3, 1)],
+    ids=["single-hop", "first-hop-queue", "second-hop-queue"],
+)
+def test_int_reports_queue_depth_from_each_hop(
+    example: str, n_switches: int, queued_hop: int, tmp_path: Path
+) -> None:
+    example_dir = _EXAMPLE_DIR.parent / example
+    suffix = _suffix()
+    source, target = f"h{suffix}a", f"h{suffix}b"
+    target_mac = "00:00:00:00:00:02"
+    target_ip = "10.0.0.2"
+    topology = Topology()
+    topology.add_host(source, ip="10.0.0.1/24", mac="00:00:00:00:00:01")
+    topology.add_host(target, ip=f"{target_ip}/24", mac=target_mac)
+    switches = [f"s{suffix}{side}" for side in "abc"[:n_switches]]
+    for switch in switches:
+        topology.add_switch(switch, p4_src=example_dir / f"{example}.p4")
+    topology.add_link(source, switches[0], port_b=1)
+    for left, right in pairwise(switches):
+        topology.add_link(left, right, port_a=2, port_b=1)
+    topology.add_link(switches[-1], target, port_a=2)
+
+    count = 12
+    boot_times = tmp_path / "boot-times.json"
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    if n_switches == 1:
+        table = "MyIngress.ipv4_lpm"
+        match = {"hdr.ipv4.dstAddr": f"{target_ip}/32"}
+        register = "MyIngress.switch_id"
+    else:
+        table = "MyIngress.l2_forward"
+        match = {"hdr.ethernet.dstAddr": target_mac}
+        register = "MyIngress.switch_id_reg"
+    with Network(topology, compiler=compiler, log_dir=tmp_path / "logs") as net:
+        first = net.host(source)
+        first.exec(
+            [
+                "ip",
+                "neigh",
+                "replace",
+                target_ip,
+                "lladdr",
+                target_mac,
+                "dev",
+                f"{source}-eth0",
+                "nud",
+                "permanent",
+            ]
+        )
+        for hop, switch in enumerate(switches, 1):
+            client = net.switch(switch).client
+            client.write_register(register, index=0, value=hop)
+            client.insert_table_entry(table, match, "MyIngress.set_egress_port", {"port": 2})
+
+        switch = net.switch(switches[queued_hop])
+        switch.client._run_thrift_cli(
+            "set_queue_rate 20 2", timeout=5, op_description="set queue rate"
+        )
+        listener_args = [
+            sys.executable,
+            str(example_dir / "listener.py"),
+            "--iface",
+            f"{target}-eth0",
+            "--count",
+            str(count),
+        ]
+        if n_switches > 1:
+            listener_args += ["--boot-times", str(boot_times)]
+        with net.host(target).namespace.popen(
+            listener_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        ) as listener:
+            output_stream = listener.stdout
+            assert output_stream is not None
+            with selectors.DefaultSelector() as ready:
+                ready.register(output_stream, selectors.EVENT_READ)
+                assert ready.select(timeout=5), "listener did not bind"
+                assert b"bound on" in output_stream.readline()
+            first.exec(
+                [
+                    sys.executable,
+                    "-c",
+                    "import socket\n"
+                    "with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:\n"
+                    f"    for _ in range({count}):\n"
+                    f"        sender.sendto(b'INT test', ({target_ip!r}, 45000))\n",
+                ],
+                timeout=5,
+            )
+            output, error = listener.communicate(timeout=8)
+            assert listener.wait(timeout=1) == 0, error
+
+        depths = [int(value) for value in re.findall(rb"\bqueue(?:_depth)?=(\d+)", output)]
+        reported_hops = min(n_switches, 2)
+        assert len(depths) == count * reported_hops, output
+        frames = [depths[i : i + reported_hops] for i in range(0, len(depths), reported_hops)]
+        assert any(frame[queued_hop] > 0 for frame in frames), frames
+        if reported_hops == 2:
+            other_hop = 1 - queued_hop
+            assert any(frame[queued_hop] > frame[other_hop] for frame in frames), frames

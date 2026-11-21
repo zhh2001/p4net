@@ -65,7 +65,7 @@ The path is `h1 → s1 → s2 → h2`. The `setup(net)` hook installs the L2 for
 --8<-- "examples/int_multi_hop/int_multi_hop.p4"
 ```
 
-- The program has two slots for telemetry headers, `int_shim_1` and `int_shim_2`. Each switch fills the first unused slot using `standard_metadata` and its own `switch_id`. Further switches on a longer path forward the packet with the two existing headers.
+- The program has two slots for telemetry headers, `int_shim_1` and `int_shim_2`. Each switch adds its own header in the first unused slot. After dequeue, egress writes the number of packets still queued into that header's `queue_depth`. Further switches forward the packet with the two existing headers.
 - The `next_proto` fields identify the sequence `Ethernet → shim 1 → shim 2 → IPv4`. The IPv4 checksum covers the IPv4 header.
 - At startup, the topology assigns a distinct ID to each switch with `write_register("MyIngress.switch_id_reg", index=0, value=N)`.
 

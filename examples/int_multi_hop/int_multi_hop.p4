@@ -75,11 +75,14 @@ struct headers {
     ipv4_t     ipv4;
 }
 
-struct metadata {}
+struct metadata {
+    bit<2> added_shim;
+}
 
 parser MyParser(packet_in pkt, out headers hdr, inout metadata meta,
                 inout standard_metadata_t std) {
     state start {
+        meta.added_shim = 0;
         pkt.extract(hdr.ethernet);
         transition select(hdr.ethernet.etherType) {
             ETHERTYPE_IPV4: parse_ipv4;
@@ -148,10 +151,10 @@ control MyIngress(inout headers hdr, inout metadata meta,
                 if (!hdr.int_shim_1.isValid()) {
                     /* First hop on path. */
                     hdr.int_shim_1.setValid();
+                    meta.added_shim = 1;
                     hdr.int_shim_1.switch_id            = sid;
                     hdr.int_shim_1.ingress_timestamp_us = (bit<48>) std.ingress_global_timestamp;
                     hdr.int_shim_1.egress_port          = (bit<16>) std.egress_spec;
-                    hdr.int_shim_1.queue_depth          = (bit<16>) std.deq_qdepth;
                     hdr.int_shim_1.next_proto           = hdr.ethernet.etherType;
                     hdr.int_shim_1.reserved             = 0;
                     hdr.ethernet.etherType              = ETHERTYPE_INT;
@@ -159,10 +162,10 @@ control MyIngress(inout headers hdr, inout metadata meta,
                     /* Second hop. Chain shim_1.next_proto -> 0x88B6 so the
                      * receiver sees shim_1 -> shim_2 -> IPv4. */
                     hdr.int_shim_2.setValid();
+                    meta.added_shim = 2;
                     hdr.int_shim_2.switch_id            = sid;
                     hdr.int_shim_2.ingress_timestamp_us = (bit<48>) std.ingress_global_timestamp;
                     hdr.int_shim_2.egress_port          = (bit<16>) std.egress_spec;
-                    hdr.int_shim_2.queue_depth          = (bit<16>) std.deq_qdepth;
                     hdr.int_shim_2.next_proto           = hdr.int_shim_1.next_proto;
                     hdr.int_shim_2.reserved             = 0;
                     hdr.int_shim_1.next_proto           = ETHERTYPE_INT;
@@ -175,7 +178,13 @@ control MyIngress(inout headers hdr, inout metadata meta,
 
 control MyEgress(inout headers hdr, inout metadata meta,
                  inout standard_metadata_t std) {
-    apply {}
+    apply {
+        if (meta.added_shim == 1) {
+            hdr.int_shim_1.queue_depth = (bit<16>) std.deq_qdepth;
+        } else if (meta.added_shim == 2) {
+            hdr.int_shim_2.queue_depth = (bit<16>) std.deq_qdepth;
+        }
+    }
 }
 
 control MyComputeChecksum(inout headers hdr, inout metadata meta) {

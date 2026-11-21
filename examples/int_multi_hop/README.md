@@ -38,6 +38,7 @@ Four nodes, three links, no branching. Same P4 binary loaded on both switches; p
 - **Three headers**: `ethernet_t`, `int_shim_t` (two named instances — `int_shim_1` and `int_shim_2`), and `ipv4_t`.
 - **Parser** follows `etherType` and `next_proto` to extract up to two shims before parsing IPv4.
 - **Ingress** runs `l2_forward.apply()` to select the egress port. It fills the first available shim with `standard_metadata` and the configured `switch_id`, then updates the header chain. With both slots filled, the packet is forwarded with the two existing shims.
+- **Egress** writes the dequeue depth into the shim added by this switch. Each shim records the number of packets still queued at that hop after the packet leaves the queue.
 - **Deparser** emits every valid header in declaration order. Invalid shim headers are skipped entirely; the wire bytes never contain unused 14-byte gaps.
 
 ## Per-switch parameterization
@@ -142,7 +143,7 @@ The listener prints three packets with two aligned hops each. The shell reports 
 ## What's interesting
 
 - **Egress ports correspond to the path direction**, not to a fixed numbering scheme. s1's port 2 leads to s2; s2's port 2 leads to h2. Different topologies will produce different `egress_port` values.
-- **`queue_depth` is reliably 0** in this configuration, the same as in the single-switch INT example. BMv2's `deq_qdepth` would surface non-zero values only under explicit queue configuration with saturating offered load — not at one ICMP echo per second.
+- **`queue_depth` is usually 0** at the send rate used in this example because the queues typically empty between packets.
 
 ## Extending to more hops
 
@@ -155,5 +156,4 @@ Replace the two named shim headers with `int_shim_t[MAX_HOPS] shims`. Choose `MA
 
 ## Caveats
 
-- **`queue_depth` is almost always 0.** Same as the single-switch example — BMv2's default queueing doesn't surface meaningful values.
 - **No checksum recomputation for the inserted shims.** The IPv4 checksum field covers only the IPv4 header itself; ethernet has no cryptographic protection. The shim layer is between them and unprotected, which matches how real INT works (the INT spec assumes link-layer integrity).

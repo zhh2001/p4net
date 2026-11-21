@@ -128,7 +128,6 @@ control MyIngress(inout headers hdr, inout metadata meta,
                 hdr.int_shim.switch_id            = sid;
                 hdr.int_shim.ingress_timestamp_us = (bit<48>) std.ingress_global_timestamp;
                 hdr.int_shim.egress_port          = (bit<16>) std.egress_spec;
-                hdr.int_shim.queue_depth          = (bit<16>) std.deq_qdepth;
                 hdr.int_shim.next_proto           = hdr.ethernet.etherType;
                 hdr.int_shim.reserved             = 0;
                 hdr.ethernet.etherType            = ETHERTYPE_INT;
@@ -138,7 +137,13 @@ control MyIngress(inout headers hdr, inout metadata meta,
 }
 
 control MyEgress(inout headers hdr, inout metadata meta,
-                 inout standard_metadata_t std) { apply {} }
+                 inout standard_metadata_t std) {
+    apply {
+        if (hdr.int_shim.isValid()) {
+            hdr.int_shim.queue_depth = (bit<16>) std.deq_qdepth;
+        }
+    }
+}
 
 control MyComputeChecksum(inout headers hdr, inout metadata meta) { apply {} }
 
