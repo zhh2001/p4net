@@ -8,7 +8,11 @@ class P4NetError(Exception):
 
 
 class PrivilegeError(P4NetError):
-    """Raised when the operation requires root or CAP_NET_ADMIN and the caller has neither."""
+    """Exception type for insufficient privileges.
+
+    When creating a network namespace, P4Net propagates the permission error
+    from `pyroute2`.
+    """
 
 
 class NamespaceError(P4NetError):
