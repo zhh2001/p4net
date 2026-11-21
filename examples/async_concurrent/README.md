@@ -97,16 +97,16 @@ await each insert before starting the next.
 
 - **Concurrent operations across switches** — use `asyncio.gather()`
   to overlap independent RPCs.
-- **Multi-Network workflows in one Python process** — the sync
-  client's gRPC threads tickle Python's multi-threaded-fork pathology
-  (see [Known Limitations](https://zhh2001.github.io/p4net/known-limitations/));
-  the async client uses `grpc.aio` which doesn't spawn background
-  threads, so this trap doesn't apply.
 - **Async PacketIn handlers** — register an async callback with
   `client.on_packet_in(...)` and propagate naturally through your
   async pipeline.
 - **Highly responsive CLI tools** — when concurrent reads of multiple
   switches matter.
+
+`grpc.aio` uses background threads. If your experiment forks worker
+processes, start them before creating gRPC clients, then create and
+connect the clients inside each worker. See
+[gRPC and worker processes](https://zhh2001.github.io/p4net/known-limitations/#1-grpc-connections-and-process-creation).
 
 ## When to use the synchronous client
 
