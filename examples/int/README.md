@@ -99,8 +99,8 @@ The on-the-wire shim layout is **unchanged** from v1.1.0; only the P4-level fiel
 ## Variations to try
 
 - Change the `switch_id` register write in `setup(net)` from `value=1` to something else and confirm the listener reports the new value without any P4 recompile.
-- Pipe the listener's output to a file and post-process offline to compute per-flow latency from `ingress_timestamp_us` deltas across consecutive packets.
-- Add a per-link `loss_pct` or `delay` to the h1↔s1 link and watch the timestamps reflect the delay (subject to `clock_realtime` granularity inside BMv2).
+- Run the ping command with `-i 1` and `-i 0.2` in separate trials. Subtract consecutive `ts` values (`ingress_timestamp_us`) in each trial to measure the interval between packet arrivals at `s1` in microseconds.
+- Set `delay_a_to_b="100ms"` on the `h1` to `s1` link, restart the topology, and repeat with the same send interval. The fixed delay shifts arrivals by about the same amount, so the gaps between them stay close to the send interval.
 
 ## Next steps
 
