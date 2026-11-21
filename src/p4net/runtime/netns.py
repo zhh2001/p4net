@@ -127,10 +127,8 @@ class NetworkNamespace:
     ) -> NSProcess:
         """Spawn a long-running process inside this namespace.
 
-        Returns an `NSProcess` wrapping a regular `subprocess.Popen` of
-        `ip netns exec <name> <argv>`. The wrapper exposes a
-        `subprocess.Popen`-compatible surface (`pid`, `poll`, `wait`,
-        `terminate`, `kill`, `close`).
+        Returns an `NSProcess` wrapping the `subprocess.Popen` handle for
+        `ip netns exec <name> <argv>`.
         """
         full_argv = ["ip", "netns", "exec", self._name, *argv]
         kwargs: dict[str, Any] = {}
@@ -171,15 +169,11 @@ class NetworkNamespace:
 
 
 class NSProcess:
-    """A process running inside a `NetworkNamespace`.
+    """A process started by `NetworkNamespace.popen()`.
 
-    Wraps a regular `subprocess.Popen` returned by `NetworkNamespace.popen`.
-    The forwarded API (`pid`, `poll`, `wait`, `communicate`, `send_signal`,
-    `terminate`, `kill`) mirrors
-    `subprocess.Popen`. `close()` is preserved as a no-op so callers from
-    earlier phases keep working unchanged: there is no namespace-side
-    handle to release because the wrapped process is a regular child of
-    `ip netns exec`.
+    Wraps a `subprocess.Popen` handle for `ip netns exec`. Use it as a context
+    manager to stop a running child and wait for it when leaving the `with`
+    block.
     """
 
     def __init__(self, popen: Any) -> None:
@@ -247,12 +241,11 @@ class NSProcess:
         self._popen.kill()
 
     def close(self) -> None:
-        """Idempotent no-op preserved for API stability.
+        """Mark the wrapper as closed in `repr()`.
 
-        Earlier phases needed this method to release a `pyroute2.NSPopen`
-        helper; with a regular `subprocess.Popen` there is nothing to
-        release, but the method is kept so callers compiled against the
-        old API don't break. Calling `close` more than once is safe.
+        Repeated calls are safe. Use `terminate()` or `kill()` to signal
+        the child and `wait()` to collect its exit status. Close captured
+        output pipes through `stdout` and `stderr`.
         """
         self._closed = True
 
