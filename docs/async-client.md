@@ -138,7 +138,7 @@ The P4 program must send packets to the CPU port; see the [CPU punt example](exa
 
 The async client buffers up to 256 PacketIn messages per connection for `expect_packet_in()`. When the queue is full, new arrivals only go to registered handlers. The queue keeps the packets already waiting in arrival order.
 
-If the connection closes while `expect_packet_in()` is waiting for a packet, the call raises `ConnectionError`.
+On both clients, `expect_packet_in()` raises `ConnectionError` if the connection closes while the call is waiting for a packet.
 
 ## Errors, timeouts, and cancellation
 

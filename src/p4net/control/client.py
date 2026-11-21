@@ -48,6 +48,24 @@ _SENTINEL = object()
 _PIPELINE_ACTIONS: frozenset[str] = frozenset(
     {"VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"}
 )
+_PacketIn = tuple[bytes, dict[str, int]]
+
+
+@dataclass(frozen=True)
+class _PacketInClosed:
+    cause: BaseException | None
+
+
+class _PacketInWaiter:
+    def __init__(self) -> None:
+        self.result: queue.Queue[_PacketIn | _PacketInClosed] = queue.Queue(maxsize=1)
+
+    def __call__(self, payload: bytes, metadata: dict[str, int]) -> None:
+        self.notify((payload, metadata))
+
+    def notify(self, result: _PacketIn | _PacketInClosed) -> None:
+        with contextlib.suppress(queue.Full):
+            self.result.put_nowait(result)
 
 
 @dataclass(frozen=True)
@@ -318,6 +336,11 @@ class P4RuntimeClient:
                 )
             self._stream_event.set()
         self._connected = False
+        with self._packet_in_lock:
+            closed = _PacketInClosed(self._stream_error)
+            for handler in self._packet_in_handlers:
+                if isinstance(handler, _PacketInWaiter):
+                    handler.notify(closed)
         if self._outgoing is not None:
             with contextlib.suppress(queue.Full):
                 self._outgoing.put_nowait(_SENTINEL)
@@ -366,7 +389,7 @@ class P4RuntimeClient:
                         self._arbitration = resp.arbitration
                         self._stream_event.set()
                 if resp.HasField("packet"):
-                    self._dispatch_packet_in(resp.packet)
+                    self._dispatch_packet_in(resp.packet, stream_call)
                 # Future: digest / idle-notification / etc.
         except Exception as exc:
             with self._teardown_lock:
@@ -382,7 +405,7 @@ class P4RuntimeClient:
                     self._stream_event.set()
                     self._teardown(expected_stream=stream_call)
 
-    def _dispatch_packet_in(self, packet: Any) -> None:
+    def _dispatch_packet_in(self, packet: Any, stream_call: Any) -> None:
         """Decode a PacketIn and fan out to registered handlers."""
         payload = bytes(packet.payload)
         metadata: dict[str, int] = {}
@@ -391,8 +414,11 @@ class P4RuntimeClient:
                 metadata = self._index.decode_packet_in_metadata(packet.metadata)
             except Exception as exc:
                 logger.debug("decode_packet_in_metadata raised: %r", exc)
-        with self._packet_in_lock:
-            handlers = list(self._packet_in_handlers)
+        with self._teardown_lock:
+            if self._closed or stream_call is not self._stream_call:
+                return
+            with self._packet_in_lock:
+                handlers = list(self._packet_in_handlers)
         for h in handlers:
             try:
                 h(payload, metadata)
@@ -1110,22 +1136,26 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> tuple[bytes, dict[str, int]]:
-        """Block until the next PacketIn arrives. Raises ``P4RuntimeError`` on timeout."""
-        self._require_connected()
-        q: queue.Queue[tuple[bytes, dict[str, int]]] = queue.Queue(maxsize=1)
+        """Wait for the next PacketIn on the current connection.
 
-        def _push(payload: bytes, meta: dict[str, int]) -> None:
-            with contextlib.suppress(queue.Full):
-                q.put_nowait((payload, meta))
-
-        deregister = self.on_packet_in(_push)
+        Raises ConnectionError if the connection closes during the wait,
+        or P4RuntimeError on timeout.
+        """
+        waiter = _PacketInWaiter()
+        with self._teardown_lock:
+            self._require_connected()
+            deregister = self.on_packet_in(waiter)
         try:
-            try:
-                return q.get(timeout=timeout)
-            except queue.Empty as exc:
-                raise P4RuntimeError(f"no PacketIn within {timeout}s on {self._target!r}") from exc
+            result = waiter.result.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise P4RuntimeError(f"no PacketIn within {timeout}s on {self._target!r}") from exc
         finally:
             deregister()
+        if isinstance(result, _PacketInClosed):
+            raise ConnectionError(
+                f"Connection to {self.target!r} closed while waiting for PacketIn"
+            ) from result.cause
+        return result
 
     # Internals ----------------------------------------------------------
 

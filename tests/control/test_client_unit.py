@@ -617,6 +617,69 @@ def test_disconnect_wakes_pending_connect(patched_grpc: dict[str, Any]) -> None:
             client.disconnect()
 
 
+@pytest.mark.parametrize("ending", ["disconnect", "eof", "rpc-error"])
+def test_connection_close_wakes_packet_in_waiters(
+    patched_grpc: dict[str, Any], mocker: MockerFixture, ending: str
+) -> None:
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    stream = patched_grpc["stream"]
+    stream.responses.put(_make_arbitration_response(1, (1, 0)))
+    client.connect(timeout=2.0)
+    consumer = client._stream_thread
+    assert consumer is not None
+    registrations: queue.Queue[None] = queue.Queue()
+    register = client.on_packet_in
+
+    def signal_registration(handler: Any) -> Any:
+        unsubscribe = register(handler)
+        registrations.put_nowait(None)
+        return unsubscribe
+
+    mocker.patch.object(client, "on_packet_in", side_effect=signal_registration)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        try:
+            waiters = [pool.submit(client.expect_packet_in, timeout=2.0) for _ in range(2)]
+            for _ in waiters:
+                registrations.get(timeout=1.0)
+            error = _grpc_error(grpc.StatusCode.UNAVAILABLE, "server stopped")
+            if ending == "disconnect":
+                client.disconnect()
+            else:
+                stream.responses.put(error if ending == "rpc-error" else StopIteration)
+
+            for waiter in waiters:
+                with pytest.raises(ConnectionError, match="closed while waiting") as result:
+                    waiter.result(timeout=0.5)
+                if ending == "rpc-error":
+                    assert result.value.__cause__ is error
+            assert client._packet_in_handlers == []
+            consumer.join(timeout=1.0)
+            assert not consumer.is_alive()
+            patched_grpc["channel"].close.assert_called_once()
+
+            replacement = FakeStreamCall()
+
+            def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+                replacement.attach_request_iter(requests)
+                return replacement
+
+            patched_grpc["stub"].StreamChannel.side_effect = open_stream
+            replacement.responses.put(_make_arbitration_response(1, (1, 0)))
+            client.connect(timeout=2.0)
+            waiters = [pool.submit(client.expect_packet_in, timeout=2.0) for _ in range(2)]
+            for _ in waiters:
+                registrations.get(timeout=1.0)
+            packet = p4runtime_pb2.StreamMessageResponse()
+            packet.packet.payload = b"new connection"
+            replacement.responses.put(packet)
+            assert [waiter.result(timeout=1.0) for waiter in waiters] == [
+                (b"new connection", {}),
+                (b"new connection", {}),
+            ]
+        finally:
+            client.disconnect()
+
+
 def test_packet_handler_can_disconnect(patched_grpc: dict[str, Any]) -> None:
     stream: FakeStreamCall = patched_grpc["stream"]
     stream.responses.put(_make_arbitration_response(1, (1, 0)))

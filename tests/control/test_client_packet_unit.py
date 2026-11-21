@@ -130,8 +130,20 @@ def test_on_packet_in_invokes_handler() -> None:
     c = _connected_client()
     received: list[tuple[bytes, dict[str, int]]] = []
     c.on_packet_in(lambda payload, meta: received.append((payload, meta)))
-    c._dispatch_packet_in(_wrap_packet(b"hi", [(1, b"\x05"), (2, b"\x00")]))  # type: ignore[attr-defined]
+    c._dispatch_packet_in(_wrap_packet(b"hi", [(1, b"\x05"), (2, b"\x00")]), c._stream_call)
     assert received == [(b"hi", {"ingress_port": 5, "_pad0": 0})]
+
+
+def test_dispatch_drops_packets_from_an_old_connection() -> None:
+    client = _connected_client()
+    current_stream = MagicMock(name="current-stream")
+    client._stream_call = current_stream
+    received: list[bytes] = []
+    client.on_packet_in(lambda payload, _metadata: received.append(payload))
+
+    client._dispatch_packet_in(_wrap_packet(b"stale", []), MagicMock(name="old-stream"))
+    client._dispatch_packet_in(_wrap_packet(b"current", []), current_stream)
+    assert received == [b"current"]
 
 
 def test_multiple_handlers_invoked_in_order() -> None:
@@ -140,7 +152,7 @@ def test_multiple_handlers_invoked_in_order() -> None:
     c.on_packet_in(lambda p, m: seen.append("a"))
     c.on_packet_in(lambda p, m: seen.append("b"))
     c.on_packet_in(lambda p, m: seen.append("c"))
-    c._dispatch_packet_in(_wrap_packet(b"x", [(1, b"\x01")]))  # type: ignore[attr-defined]
+    c._dispatch_packet_in(_wrap_packet(b"x", [(1, b"\x01")]), c._stream_call)
     assert seen == ["a", "b", "c"]
 
 
@@ -153,7 +165,7 @@ def test_handler_exception_isolated() -> None:
 
     c.on_packet_in(bad)
     c.on_packet_in(lambda p, m: seen.append("ok"))
-    c._dispatch_packet_in(_wrap_packet(b"x", [(1, b"\x01")]))  # type: ignore[attr-defined]
+    c._dispatch_packet_in(_wrap_packet(b"x", [(1, b"\x01")]), c._stream_call)
     assert seen == ["ok"]
 
 
@@ -161,9 +173,9 @@ def test_deregister_stops_invocation() -> None:
     c = _connected_client()
     seen: list[bytes] = []
     deregister = c.on_packet_in(lambda p, m: seen.append(p))
-    c._dispatch_packet_in(_wrap_packet(b"first", [(1, b"\x01")]))  # type: ignore[attr-defined]
+    c._dispatch_packet_in(_wrap_packet(b"first", [(1, b"\x01")]), c._stream_call)
     deregister()
-    c._dispatch_packet_in(_wrap_packet(b"second", [(1, b"\x01")]))  # type: ignore[attr-defined]
+    c._dispatch_packet_in(_wrap_packet(b"second", [(1, b"\x01")]), c._stream_call)
     assert seen == [b"first"]
 
 
@@ -185,7 +197,7 @@ def test_expect_packet_in_returns_when_ready() -> None:
     # Use a thread to simulate the consumer dispatching after a small delay.
     def deliver() -> None:
         time.sleep(0.05)
-        c._dispatch_packet_in(_wrap_packet(b"ping", [(1, b"\x07")]))  # type: ignore[attr-defined]
+        c._dispatch_packet_in(_wrap_packet(b"ping", [(1, b"\x07")]), c._stream_call)
 
     t = threading.Thread(target=deliver, daemon=True)
     t.start()
