@@ -111,7 +111,38 @@ Enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Timing the inserts
 
-The timer starts after the clients connect and stops after all nine insert calls return. To compare serial and concurrent writes, reuse the same connected clients and clear the tables between trials. Time a fresh set of the same nine inserts each time. For the serial trial, await each insert before starting the next.
+The example times the nine concurrent inserts. To compare them with serial inserts, replace the block from `writes = []` through the `concurrent_ms` assignment in `_async_setup` with the following code. Keep it inside the existing `try` block.
+
+```python
+        table = "MyIngress.ipv4_lpm"
+        action = "MyIngress.set_egress_port"
+        writes = [
+            (client, {"hdr.ipv4.dstAddr": cidr}, port)
+            for sw, client in zip(switches, clients, strict=True)
+            for cidr, port in _ROUTES[sw.name]
+        ]
+
+        t0 = _time.perf_counter()
+        for client, match, port in writes:
+            await client.insert_table_entry(table, match, action, {"port": port})
+        serial_ms = (_time.perf_counter() - t0) * 1000.0
+
+        for client, match, _ in writes:
+            await client.delete_table_entry(table, match)
+
+        t0 = _time.perf_counter()
+        await _run_batch(
+            *(
+                client.insert_table_entry(table, match, action, {"port": port})
+                for client, match, port in writes
+            )
+        )
+        concurrent_ms = (_time.perf_counter() - t0) * 1000.0
+
+        print(f"serial setup: {len(writes)} table entries installed in {serial_ms:.2f} ms")
+```
+
+Start a fresh topology with the command above so the first trial begins with empty LPM tables. Each delete uses the same switch and match key as the corresponding insert, leaving the tables empty for the second trial. Both trials reuse the same three connections and time only the insert batches. Startup prints the serial time followed by the existing concurrent timing summary.
 
 ## When to use async
 
