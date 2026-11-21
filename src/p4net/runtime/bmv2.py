@@ -1,30 +1,13 @@
-"""Process lifecycle wrapper for `simple_switch_grpc`.
+"""Manage the lifecycle of a `simple_switch_grpc` process.
 
-Architectural choices baked into this module:
+`BMv2Switch.start()` launches BMv2 in the caller's network namespace,
+where the interfaces named in `port_to_iface` must already exist. BMv2
+loads `bmv2_json` at startup. The JSON path and BMv2 options appear
+before `--`. The gRPC and CPU-port options follow the separator.
 
-1. **Root namespace**, not per-switch namespaces. Each BMv2 process runs in
-   the host's root network namespace; only host endpoints get their own
-   `NetworkNamespace`. This is the Mininet pattern and avoids
-   gRPC-port-reachability headaches that per-switch namespaces would create.
-   We therefore use `subprocess.Popen` directly here, NOT `NSProcess`.
-2. **The wrapper does NOT create veth interfaces.** Every interface name in
-   `port_to_iface` must already exist in the root namespace by the time
-   `start()` is called; phase 6 wires veths up before instantiating
-   `BMv2Switch`. We do not validate interface existence; the kernel will.
-3. **The wrapper does NOT push P4Runtime config.** Phase 5 wires up the
-   P4Runtime client. The `bmv2_json` argument is loaded by
-   `simple_switch_grpc` at startup, so the data plane has a pipeline
-   immediately even before any gRPC client connects.
-
-Invocation: built and verified against `simple_switch_grpc 1.15`. The full
-command line is:
-``simple_switch_grpc --device-id N -i 1@iface1 ... --thrift-port T
---log-console --log-flush -L <level> [--pcap <dir>] <bmv2_json>
--- --grpc-server-addr <host>:<port> [--cpu-port C]``.
-Flags before the ``--`` go to the BMv2 simple_switch core (and that's where
-the JSON config path lives, per the binary's own usage string ``[options]
-<path to JSON config file>``); flags after ``--`` are simple_switch_grpc
-target-specific.
+`Network` creates the links before starting the switches. It waits for
+each BMv2 process to own its gRPC and Thrift listeners before connecting
+the P4Runtime clients and installing the pipelines.
 """
 
 from __future__ import annotations
