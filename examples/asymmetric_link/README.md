@@ -22,18 +22,27 @@ The `h1 → h2` path has 220 ms of added delay and the reverse path has none. A 
 
 ## Running
 
+Start the topology from the repository root.
+
 ```sh
 sudo p4net examples/asymmetric_link/topology.py
 ```
 
 ## Things to try in the shell
 
-```
+At the `p4net>` prompt, ping in both directions.
+
+```text
 h1 ping h2 5 3
 h2 ping h1 5 3
-h1 cmd tc qdisc show
 ```
 
 Both ping commands report round-trip times of about 220 ms.
 
-The `tc qdisc show` output confirms which side carries the netem queue.
+Check the netem queue on `h1-eth0` to see the delay from `h1` to `s1`.
+
+```text
+h1 cmd tc qdisc show dev h1-eth0
+```
+
+The output shows `delay 200ms`. Enter `exit` at the `p4net>` prompt to stop the topology.
