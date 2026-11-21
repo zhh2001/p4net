@@ -72,11 +72,11 @@ The console script loads a Python file that defines a module-level `topology: To
 
 ## Documentation
 
-**Full documentation: <https://zhh2001.github.io/p4net/>**
+[English documentation](https://zhh2001.github.io/p4net/) | [中文文档](https://zhh2001.github.io/p4net/zh/)
 
-The English site is the authoritative reference; a Chinese translation layer is being added incrementally. Pages on the site cover installation, a tutorial, an architecture overview, the CLI reference, the auto-generated API reference, troubleshooting, a glossary, and per-example walk-throughs.
+Both editions cover installation, tutorials, the CLI, and runnable examples.
 
-The source for these pages lives under [`docs/`](https://github.com/zhh2001/p4net/tree/main/docs) and is built with MkDocs Material.
+The source for these pages lives under [`docs/`](https://github.com/zhh2001/p4net/tree/main/docs).
 
 ## License
 
