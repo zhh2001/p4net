@@ -68,6 +68,8 @@ The output should contain a `MyIngress.ipv4_lpm` entry with action parameters `{
 
 `net.switch("s1").async_client` lazily creates and caches an unconnected client with the sync client's current P4Info index. Call `await client.connect()` before using it. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
 
+Concurrent `connect()` calls on the same client share one attempt. The first call supplies the arbitration timeout. Cancelling a waiting call leaves the attempt running. Cancelling the first call cleans up the attempt and propagates `asyncio.CancelledError` to the remaining callers.
+
 Without an explicit `election_id`, the async client generates one from the current millisecond timestamp at its first connection. The sync client created by `Network` also uses a timestamp, so do not rely on construction order to assign primary status. Construct a client with an explicit election ID, as in the complete example, when you need to choose which client writes. Election IDs are compared as `(high, low)` pairs.
 
 For a backup client that only reads, construct it with `election_id=(0, 0)`. This value permits a backup connection. With other election IDs, an unsuccessful initial arbitration makes `connect()` raise `NotPrimaryError` and close the connection.
@@ -159,7 +161,7 @@ Cancellation and timeout results depend on the operation. The timeout column ref
 
 | Operation | Calling task cancelled | Timeout |
 | --- | --- | --- |
-| `connect()` | Cleans up, then propagates `asyncio.CancelledError` | Arbitration timeout raises `ConnectionError` |
+| `connect()` | `asyncio.CancelledError`. Cancelling the first call also cleans up the shared attempt. | Arbitration timeout raises `ConnectionError` for the shared attempt |
 | `push_pipeline()`, table writes | `AsyncOperationCancelledError` | `asyncio.TimeoutError` |
 | Iterating `list_table_entries()` | `asyncio.CancelledError` | `P4RuntimeError`, caused by RPC status `DEADLINE_EXCEEDED` |
 | `read_counter()` | `AsyncOperationCancelledError` | `P4RuntimeError`, caused by RPC status `DEADLINE_EXCEEDED` |

@@ -117,6 +117,7 @@ class AsyncP4RuntimeClient:
         self._outgoing: asyncio.Queue[Any] | None = None
         self._stream_call: Any = None
         self._stream_task: asyncio.Task[None] | None = None
+        self._connect_attempt: asyncio.Future[BaseException | None] | None = None
         self._arbitration_event: asyncio.Event | None = None
         self._arbitration: Any = None
         self._stream_error: BaseException | None = None
@@ -168,9 +169,29 @@ class AsyncP4RuntimeClient:
     # ----------------------------------------------------------------- lifecycle
 
     async def connect(self, *, timeout: float = 10.0) -> None:
-        """Connect and await arbitration, releasing resources if setup is cancelled."""
+        """Connect and await arbitration. Concurrent callers share the first attempt."""
         if self._connected:
             return
+        attempt = self._connect_attempt
+        if attempt is not None:
+            failure = await asyncio.shield(attempt)
+            if failure is not None:
+                raise failure
+            return
+
+        attempt = asyncio.get_running_loop().create_future()
+        self._connect_attempt = attempt
+        try:
+            await self._connect(timeout=timeout)
+        except BaseException as exc:
+            attempt.set_result(exc)
+            raise
+        else:
+            attempt.set_result(None)
+        finally:
+            self._connect_attempt = None
+
+    async def _connect(self, *, timeout: float) -> None:
         if self._channel is not None:
             await self._teardown()
         self._closed = False

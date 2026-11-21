@@ -184,6 +184,85 @@ async def test_connect_then_disconnect_clean(patched_aio: dict[str, Any]) -> Non
     assert not client.is_connected
 
 
+@pytest.mark.parametrize("outcome", ["success", "stream-error", "disconnect", "cancel"])
+async def test_concurrent_connects_share_one_attempt(
+    patched_aio: dict[str, Any], outcome: str
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0)
+    stream = patched_aio["stream"]
+    attempts = [asyncio.create_task(client.connect(timeout=2.0))]
+    try:
+        await asyncio.wait_for(stream.read_started.wait(), timeout=1.0)
+        attempts.append(asyncio.create_task(client.connect(timeout=0.0)))
+        await asyncio.sleep(0)
+        error = grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), "server stopped")
+        if outcome == "success":
+            await stream.push_arbitration()
+        elif outcome == "stream-error":
+            await stream.finish(error)
+        elif outcome == "disconnect":
+            await client.disconnect()
+        else:
+            attempts[0].cancel()
+
+        results = await asyncio.wait_for(asyncio.gather(*attempts, return_exceptions=True), 3.0)
+        patched_aio["stub"].StreamChannel.assert_called_once()
+        if outcome == "success":
+            assert results == [None, None]
+        else:
+            assert not client.is_connected
+            patched_aio["channel"].close.assert_awaited_once()
+            if outcome == "stream-error":
+                assert all(
+                    isinstance(result, P4RuntimeError) and result.__cause__ is error
+                    for result in results
+                )
+            elif outcome == "disconnect":
+                assert all(isinstance(result, ConnectionError) for result in results)
+            else:
+                assert all(isinstance(result, asyncio.CancelledError) for result in results)
+
+            retry_stream = _FakeStream()
+            patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+            await retry_stream.push_arbitration()
+            await client.connect(timeout=1.0)
+            assert patched_aio["stub"].StreamChannel.call_count == 2
+        assert client.is_connected and client.is_primary
+    finally:
+        for attempt in attempts:
+            attempt.cancel()
+        await asyncio.gather(*attempts, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_cancelling_connect_waiter_keeps_active_connection_attempt(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0)
+    stream = patched_aio["stream"]
+    attempt = asyncio.create_task(client.connect(timeout=2.0))
+    waiter = None
+    try:
+        await asyncio.wait_for(stream.read_started.wait(), timeout=1.0)
+        waiter = asyncio.create_task(client.connect())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert not attempt.done()
+        await stream.push_arbitration()
+        await asyncio.wait_for(attempt, timeout=1.0)
+        patched_aio["stub"].StreamChannel.assert_called_once()
+        assert client.is_connected
+    finally:
+        attempt.cancel()
+        await asyncio.gather(attempt, return_exceptions=True)
+        if waiter is not None:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+        await client.disconnect()
+
+
 async def test_disconnect_wakes_pending_connect(patched_aio: dict[str, Any]) -> None:
     client = AsyncP4RuntimeClient(grpc_address=("127.0.0.1", 50051), device_id=0)
     task = asyncio.create_task(client.connect(timeout=30.0))
