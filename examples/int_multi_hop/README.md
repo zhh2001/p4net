@@ -39,7 +39,7 @@ Four nodes, three links, no branching. Same P4 binary loaded on both switches; p
 - **Parser** follows `etherType` and `next_proto` to extract up to two shims before parsing IPv4.
 - **Ingress** runs `l2_forward.apply()` to select the egress port. It fills the first available shim with `standard_metadata` and the configured `switch_id`, then updates the header chain. With both slots filled, the packet is forwarded with the two existing shims.
 - **Egress** writes the dequeue depth into the shim added by this switch. Each shim records the number of packets still queued at that hop after the packet leaves the queue.
-- **Deparser** emits every valid header in declaration order. Invalid shim headers are skipped entirely; the wire bytes never contain unused 14-byte gaps.
+- **Deparser** calls `pkt.emit` for Ethernet, `int_shim_1`, `int_shim_2`, and IPv4 in that order. Each call appends only a valid header. After the first hop, IPv4 follows `int_shim_1` directly because `int_shim_2` is still invalid.
 
 The IPv4 checksum covers only the IPv4 header. Both switches preserve that header and its checksum when they insert the INT shims.
 
