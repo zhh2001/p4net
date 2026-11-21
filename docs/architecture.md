@@ -38,7 +38,7 @@ This package provides the Linux and process operations used by the orchestrator:
 - `apply_netem()` uses `tc qdisc replace` to set egress delay, jitter, loss, and rate. `clear_qdisc()` removes the root qdisc and accepts an already absent qdisc.
 - `BMv2Switch` starts `simple_switch_grpc`, builds its arguments, and manages its log file and shutdown. `wait_until_ready()` checks that the child is alive and owns both its gRPC and Thrift listeners. A listener owned by another process is a startup error.
 - `NSProcess` wraps a process started inside a namespace. It provides `pid`, `poll()`, `wait()`, `terminate()`, and `kill()`. `close()` is retained as a no-op for compatibility.
-- `disable_ipv6()` and `enable_ipv6()` write per-interface sysctl settings in a host namespace or the root namespace.
+- `disable_ipv6()` and `enable_ipv6()` configure IPv6 sysctls for an interface in the selected namespace. Passing `None` uses the caller's network namespace.
 
 These objects manage individual resources. `Network` determines their creation and cleanup order. See the [runtime API](api/runtime.md).
 
@@ -48,7 +48,7 @@ BMv2 startup timeouts must be finite positive integers or floats, excluding `boo
 
 For non-ASCII interface names, `VethPair` creates temporary ASCII names and assigns the requested names after udev has processed the devices. When udev is active, `udevadm` must be on `PATH`; creation waits up to five seconds for its rules to finish. Waiting or naming failures remove the pair by interface index.
 
-`VethPair(..., namespace_a=..., namespace_b=...)` places the endpoints in their target namespaces during creation; `None` selects root. Host endpoints move under temporary names and receive their requested names in the same kernel request. A failed placement removes the pair through an endpoint whose location is known.
+`VethPair(..., namespace_a=..., namespace_b=...)` places each endpoint in its configured namespace at creation. With `None`, the endpoint stays in the caller's network namespace. Host endpoints move under temporary names and receive their requested names in the same kernel request. A failed placement removes the pair through an endpoint whose location is known.
 
 Destroying a pair clears its current namespace positions and retains its creation targets. Recreating the same object uses the constructor's namespace settings. Moving an endpoint does not change where it will be created next time.
 
@@ -76,7 +76,7 @@ Node names must be unique across hosts and switches. Node keys in `hosts` and `s
 
 `Topology.from_dict()` also restores interface names as stored. `Topology.validate()` rejects a missing, `None` or empty `iface_name`, identifying the link, endpoint and node. Valid custom names are preserved.
 
-Interface names must be unique within each final namespace. Each host has its own namespace; all switches share root. Different namespaces may reuse a name, including both ends of one link, regardless of link declaration order. Validation rejects duplicates within one namespace and the reserved loopback name `lo` before compilation or resource creation.
+Interface names must be unique within each final namespace. Each host has its own namespace. All switches share the namespace of the process running P4Net. Different namespaces may reuse a name, including both ends of one link, regardless of link declaration order. Validation rejects duplicates within one namespace and the reserved loopback name `lo` before compilation or resource creation.
 
 Topology and runtime code use the same interface-name checks. Names must be UTF-8 strings of at most 15 bytes, cannot be `.` or `..`, and cannot contain whitespace, `/`, `:` or NUL. Invalid names report a `TopologyError` during topology validation or a `ValueError` when constructing a `VethPair`. For example, `界界界界界` uses 15 bytes and passes name validation; adding another `界` exceeds the limit.
 
@@ -151,9 +151,9 @@ See the [CLI guide](cli.md) and [CLI API](api/cli.md).
 
 ## Design principles
 
-### BMv2 in the root namespace, hosts in private namespaces
+### Network namespaces for hosts and switches
 
-Each host has its own network namespace. BMv2 runs in the root network namespace and attaches to the root-side veth interfaces. Switch-to-switch links keep both ends in that namespace.
+Each host has its own network namespace. BMv2 shares the network namespace of the process running P4Net, normally the system's root network namespace. The switch-side veth interfaces stay in that namespace, including both ends of switch-to-switch links.
 
 The control clients reach the switch through `127.0.0.1:<grpc_port>`. The switch forwards experiment traffic through its attached interfaces. This separates the host network stacks while keeping control-plane connections local. Topology validation catches service-port collisions within a description; BMv2 startup also detects listeners owned by other processes.
 
