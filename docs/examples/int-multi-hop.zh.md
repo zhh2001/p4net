@@ -66,7 +66,7 @@ packet (2 hop(s), final proto 0x0800): 10.0.0.1 -> 10.0.0.2
 ```
 
 - 程序为遥测头预留 `int_shim_1` 和 `int_shim_2` 两个位置。每台交换机在第一个空位写入自己的遥测头。报文出队后，出口处理将队列中剩余的报文数写入本跳的 `queue_depth`。路径上后续的交换机直接转发带这两个遥测头的报文。
-- `next_proto` 标明各报头的顺序：以太网头、遥测头 1、遥测头 2、IPv4 头。IPv4 校验和只覆盖 IPv4 头。
+- 报文经过两跳后，以太网头的 `etherType` 为 `0x88B6`，表示后面是第一个遥测头。第一个遥测头的 `next_proto` 同样为 `0x88B6`，指向第二个遥测头。第二个遥测头的 `next_proto` 为 `0x0800`，表示后面是 IPv4 头。IPv4 校验和只覆盖 IPv4 头。
 - 拓扑启动时通过 `write_register("MyIngress.switch_id_reg", index=0, value=N)` 为两台交换机分别设置 ID。
 
 ## 监听器
