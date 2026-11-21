@@ -112,16 +112,21 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 
 This overlaps the time spent waiting for RPC responses across switches. Total time depends on the number of requests and the switches' processing speed.
 
-Both `on_packet_in()` and its returned unsubscribe function require `await`. This function registers a handler and removes it after waiting for one PacketIn:
+Both `on_packet_in()` and the unsubscribe function it returns require `await`. This example waits up to five seconds for the first PacketIn delivered to the new handler and unsubscribes when the wait ends.
 
 ```python
 async def watch_packet(client: AsyncP4RuntimeClient) -> None:
+    loop = asyncio.get_running_loop()
+    first_packet: asyncio.Future[tuple[bytes, dict[str, int]]] = loop.create_future()
+
     async def handle_packet(payload: bytes, metadata: dict[str, int]) -> None:
-        print("PacketIn:", len(payload), metadata)
+        if not first_packet.done():
+            first_packet.set_result((payload, metadata))
 
     unsubscribe = await client.on_packet_in(handle_packet)
     try:
-        await client.expect_packet_in(timeout=5.0)
+        payload, metadata = await asyncio.wait_for(first_packet, timeout=5.0)
+        print("PacketIn:", len(payload), metadata)
     finally:
         await unsubscribe()
 ```

@@ -112,16 +112,21 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 
 这样可以让多个交换机的 RPC 同时等待响应，实际耗时取决于请求量和交换机处理速度。
 
-`on_packet_in()` 和它返回的注销函数都需要 `await`。下面的函数注册处理器，等到一个 PacketIn 后注销：
+`on_packet_in()` 和它返回的注销函数都需要 `await`。下面的示例等待新注册的处理器收到第一条 PacketIn，超时时间为 5 秒。等待结束时注销处理器。
 
 ```python
 async def watch_packet(client: AsyncP4RuntimeClient) -> None:
+    loop = asyncio.get_running_loop()
+    first_packet: asyncio.Future[tuple[bytes, dict[str, int]]] = loop.create_future()
+
     async def handle_packet(payload: bytes, metadata: dict[str, int]) -> None:
-        print("PacketIn:", len(payload), metadata)
+        if not first_packet.done():
+            first_packet.set_result((payload, metadata))
 
     unsubscribe = await client.on_packet_in(handle_packet)
     try:
-        await client.expect_packet_in(timeout=5.0)
+        payload, metadata = await asyncio.wait_for(first_packet, timeout=5.0)
+        print("PacketIn:", len(payload), metadata)
     finally:
         await unsubscribe()
 ```
