@@ -1,22 +1,17 @@
 # l3_forwarding
 
-Two hosts on a `/24` connected by a single BMv2 switch running an IPv4 LPM
-forwarding pipeline. Forwarding entries are installed at runtime from
-Python via P4Runtime, not baked into the data plane.
+Two hosts on a `/24` connected by a single BMv2 switch running an IPv4 LPM forwarding pipeline. Forwarding entries are installed at runtime from Python via P4Runtime, not baked into the data plane.
 
 ## What it shows
 
-- A minimal but realistic LPM forwarding pipeline (`ipv4_lpm.p4`) that
-  matches `hdr.ipv4.dstAddr` and sets the egress port.
+- A minimal but realistic LPM forwarding pipeline (`ipv4_lpm.p4`) that matches `hdr.ipv4.dstAddr` and sets the egress port.
 - Runtime control-plane programming via `s1.client.insert_table_entry(...)`.
-- Static ARP seeding so ICMP unicast does not have to resolve neighbours
-  at test time.
+- Static ARP seeding so ICMP unicast does not have to resolve neighbours at test time.
 
 ## Files
 
-- `ipv4_lpm.p4` — P4 program. Same source as `tests/fixtures/p4/simple_routing.p4`.
-- `topology.py` — Topology, plus a `setup(net)` function that pre-seeds
-  ARP and installs two `/32` LPM entries.
+- `ipv4_lpm.p4` — selects the egress port by longest-prefix match on the IPv4 destination and counts packets by egress port.
+- `topology.py` — Topology, plus a `setup(net)` function that pre-seeds ARP and installs two `/32` LPM entries.
 
 ## Prerequisites
 
@@ -43,5 +38,4 @@ h1 ping h2
 h1 cmd ip -br addr
 ```
 
-Use `Ctrl-D` (or `exit`) to quit. The orchestrator tears the namespaces
-and the BMv2 process down on exit.
+Use `Ctrl-D` (or `exit`) to quit. The orchestrator tears the namespaces and the BMv2 process down on exit.

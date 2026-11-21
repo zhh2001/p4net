@@ -1,9 +1,6 @@
 # dual_stack
 
-Two hosts on a single switch, each carrying both IPv4 and IPv6 addresses.
-The pipeline is the same port-swap L2 forwarder used by `quick_start`:
-the data plane treats v4 and v6 identically, and static ARP / ND is
-pre-seeded so the controller doesn't have to resolve neighbours.
+Two hosts on a single switch, each carrying both IPv4 and IPv6 addresses. The pipeline is the same port-swap L2 forwarder used by `quick_start`: the data plane treats v4 and v6 identically, and static ARP / ND is pre-seeded so the controller doesn't have to resolve neighbours.
 
 ## What it shows
 
@@ -13,7 +10,7 @@ pre-seeded so the controller doesn't have to resolve neighbours.
 
 ## Files
 
-- `dual_stack.p4` — port-swap pipeline (verbatim from `tests/fixtures/p4/two_port_swap.p4`).
+- `dual_stack.p4` — forwards Ethernet frames between switch ports 1 and 2 for both IPv4 and IPv6 traffic.
 - `topology.py` — two hosts, one switch, dual-stack addressing, ARP / ND in `setup`.
 
 ## Prerequisites
