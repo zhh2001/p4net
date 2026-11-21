@@ -2,13 +2,15 @@
 
 Topology::
 
-    h1 (10.0.1.1/24)            h2 (10.0.2.1/24)            h3 (10.0.3.1/24)
-        |                           |                           |
-        | port 1                    | port 1                    | port 1
-       s1 -------- port 2 ---------- s2 -------- port 3 -------- s3
-        |                                                       |
-        |                  port 3                       port 2  |
-        +-------------------------------------------------------+
+    h1 (10.0.1.1/24)               h2 (10.0.2.1/24)               h3 (10.0.3.1/24)
+            |                              |                              |
+         port 1                         port 1                         port 1
+            |                              |                              |
+           s1 (port 2) --------- (port 2) s2 (port 3) --------- (port 2) s3
+            |                                                             |
+         port 3                                                        port 3
+            |                                                             |
+            +-------------------------------------------------------------+
 
 Three hosts each on their own /24, on different switches. Switches are
 fully meshed (s1-s2, s2-s3, s3-s1). Each switch loads the same P4 binary
