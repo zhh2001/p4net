@@ -7,8 +7,8 @@ BMv2 switch running a port-2-port swap, and `pingall` returning
 ## Prerequisites
 
 - Linux kernel >= 5.4.
-- Root or `CAP_NET_ADMIN` (needed to create network namespaces and
-  manage veth pairs).
+- Root privileges to run the example, including creating network namespaces
+  and configuring links.
 - `p4c` and `simple_switch_grpc` on `PATH`. The standard p4lang
   packages on Ubuntu 24.04 install them under `/usr/local/bin`.
 - [p4net CLI installed with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli).

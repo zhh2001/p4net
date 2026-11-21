@@ -24,7 +24,7 @@ Status: 1.10.1, stable. Public APIs follow the [API stability rules](https://zhh
 - Linux kernel >= 5.4.
 - Python 3.10+.
 - BMv2 and p4c installed system-wide.
-- Root or `CAP_NET_ADMIN` to manage namespaces and veth devices.
+- Root privileges to run a network, including creating network namespaces and configuring links.
 
 ## Installation
 
