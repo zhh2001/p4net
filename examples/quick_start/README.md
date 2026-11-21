@@ -6,7 +6,7 @@ Two hosts connect to ports 1 and 2 of a BMv2 switch. The P4 program forwards fra
 
 - Linux kernel >= 5.4.
 - Root privileges to run the example, including creating network namespaces and configuring links.
-- `p4c` and `simple_switch_grpc` on `PATH`. The standard p4lang packages on Ubuntu 24.04 install them under `/usr/local/bin`.
+- `p4c`, `simple_switch_grpc`, and the other [required external tools](https://zhh2001.github.io/p4net/getting-started/installation/#required-external-tools) available on `PATH`.
 - [p4net CLI installed with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli).
 
 ## Run
