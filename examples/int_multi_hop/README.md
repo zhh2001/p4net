@@ -41,6 +41,8 @@ Four nodes, three links, no branching. Same P4 binary loaded on both switches; p
 - **Egress** writes the dequeue depth into the shim added by this switch. Each shim records the number of packets still queued at that hop after the packet leaves the queue.
 - **Deparser** emits every valid header in declaration order. Invalid shim headers are skipped entirely; the wire bytes never contain unused 14-byte gaps.
 
+The IPv4 checksum covers only the IPv4 header. Both switches preserve that header and its checksum when they insert the INT shims.
+
 ## Per-switch parameterization
 
 The P4 program runs unchanged on both switches. Per-switch identity comes from a register written at start-up:
@@ -155,7 +157,3 @@ Replace the two named shim headers with `int_shim_t[MAX_HOPS] shims`. Choose `MA
 2. In ingress, after selecting the egress port, append at index `hop_count` if a slot is available. Mark the new shim valid, set `added_shim`, and fill in the switch ID, ingress timestamp, and egress port. Set `reserved` to zero and `next_proto` to `ETHERTYPE_IPV4`. For the first shim, set the Ethernet EtherType to `ETHERTYPE_INT`. For later shims, set the previous shim's `next_proto` to `ETHERTYPE_INT`. At capacity, forward with the existing shims.
 3. In egress, when `added_shim` is set, fill the new shim's `queue_depth` at index `hop_count` from `standard_metadata.deq_qdepth`, which BMv2 provides after dequeuing. Emit Ethernet, the shim stack, and IPv4 in that order.
 4. Assign a distinct `switch_id` to each switch and provide its boot timestamp to the receiver. The existing listener decodes longer shim chains through `next_proto` and aligns timestamps for the first two hop positions. To align longer or reordered paths, look up each boot timestamp by the decoded `switch_id`.
-
-## Caveats
-
-- **No checksum recomputation for the inserted shims.** The IPv4 checksum field covers only the IPv4 header itself; ethernet has no cryptographic protection. The shim layer is between them and unprotected, which matches how real INT works (the INT spec assumes link-layer integrity).
