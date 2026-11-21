@@ -427,7 +427,10 @@ class AsyncP4RuntimeClient:
         action: str = "VERIFY_AND_COMMIT",
         timeout: float = 10.0,
     ) -> None:
-        """Push a compiled pipeline (raw bytes)."""
+        """Push a compiled pipeline (raw bytes).
+
+        ``VERIFY`` validates the candidate and retains the current P4Info index.
+        """
         self._require_connected()
         if action not in _PIPELINE_ACTIONS:
             raise P4RuntimeError(f"invalid pipeline action {action!r}")
@@ -446,7 +449,8 @@ class AsyncP4RuntimeClient:
             raise AsyncOperationCancelledError("push_pipeline cancelled") from exc
         except grpc.aio.AioRpcError as exc:
             raise self._translate_rpc_error(exc, pipeline=True) from exc
-        self._info_index = P4InfoIndex(msg)
+        if action != "VERIFY":
+            self._info_index = P4InfoIndex(msg)
 
     # ----------------------------------------------------------------- tables
 

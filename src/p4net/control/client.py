@@ -435,7 +435,10 @@ class P4RuntimeClient:
         action: str = "VERIFY_AND_COMMIT",
         timeout: float = 10.0,
     ) -> None:
-        """Push a compiled pipeline to the device."""
+        """Push a compiled pipeline to the device.
+
+        ``VERIFY`` validates the candidate and retains the current P4Info index.
+        """
         self._require_connected()
         if action not in _PIPELINE_ACTIONS:
             raise P4RuntimeError(
@@ -459,9 +462,10 @@ class P4RuntimeClient:
             self._stub.SetForwardingPipelineConfig(req, timeout=timeout)
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc, pipeline=True) from exc
-        self._index = P4InfoIndex(p4info_msg)
+        if action != "VERIFY":
+            self._index = P4InfoIndex(p4info_msg)
         logger.debug(
-            "P4Runtime pipeline pushed (action=%s, p4info_tables=%d)",
+            "P4Runtime pipeline request succeeded (action=%s, p4info_tables=%d)",
             action,
             len(p4info_msg.tables),
         )

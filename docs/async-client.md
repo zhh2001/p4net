@@ -92,7 +92,7 @@ For a backup client that only reads, construct it with `election_id=(0, 0)`. Thi
 
 The async client currently has no `get_pipeline_config()`, `clear_table()`, `reset_counter()`, or multicast group operations. See the [control-plane API](api/control.md) for full signatures.
 
-When installing a pipeline yourself, pass text-format P4Info bytes to `push_pipeline()`, rather than a binary protobuf. The client replaces its P4Info index only after a successful response, retaining the previous index after failure or cancellation. Register operations use `simple_switch_CLI`; install that tool and pass `thrift_address` when constructing the client.
+When installing a pipeline yourself, pass text-format P4Info bytes to `push_pipeline()`, rather than a binary protobuf. On both clients, `action="VERIFY"` checks the candidate pipeline and keeps the current P4Info index. A failed or cancelled `push_pipeline()` also keeps the current index. Register operations use `simple_switch_CLI`; install that tool and pass `thrift_address` when constructing the client.
 
 ## Concurrent operations and PacketIn
 

@@ -835,6 +835,36 @@ def test_set_pipeline_config_builds_request(
         client.disconnect()
 
 
+@pytest.mark.parametrize("installed", [False, True])
+def test_verify_pipeline_keeps_the_current_index(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], installed: bool
+) -> None:
+    client, grpc_mocks, p4info_path, json_path = connected_client
+    rpc = grpc_mocks["stub"].SetForwardingPipelineConfig
+    candidate = _build_p4info()
+    candidate.tables[0].preamble.name = "Candidate.ipv4_lpm"
+    candidate_path = p4info_path.with_name("candidate.p4info.txtpb")
+    candidate_path.write_text(str(candidate))
+    try:
+        if installed:
+            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+        index = client.index if installed else None
+
+        client.set_pipeline_config(bmv2_json=json_path, p4info=candidate_path, action="VERIFY")
+
+        sent = rpc.call_args.args[0]
+        assert sent.action == p4runtime_pb2.SetForwardingPipelineConfigRequest.VERIFY
+        assert sent.config.p4info == candidate
+        assert sent.config.p4_device_config == json_path.read_bytes()
+        if installed:
+            assert client.index is index
+        else:
+            with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                _ = client.index
+    finally:
+        client.disconnect()
+
+
 def test_set_pipeline_config_failed_precondition_raises_pipeline_error(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
 ) -> None:

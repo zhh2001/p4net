@@ -876,6 +876,38 @@ async def test_async_context_manager(patched_aio: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("installed", [False, True])
+async def test_verify_pipeline_keeps_the_current_index(
+    patched_aio: dict[str, Any], installed: bool
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0)
+    rpc = patched_aio["stub"].SetForwardingPipelineConfig
+    active = _make_p4info_index().raw
+    candidate = p4info_pb2.P4Info()
+    candidate.CopyFrom(active)
+    candidate.tables[0].preamble.name = "Candidate.ipv4_lpm"
+    await patched_aio["stream"].push_arbitration()
+    try:
+        await client.connect()
+        if installed:
+            await client.push_pipeline(str(active).encode(), b"{}")
+        index = client.info_index if installed else None
+
+        await client.push_pipeline(str(candidate).encode(), b"{}", action="VERIFY")
+
+        sent = rpc.await_args.args[0]
+        assert sent.action == p4runtime_pb2.SetForwardingPipelineConfigRequest.VERIFY
+        assert sent.config.p4info == candidate
+        assert sent.config.p4_device_config == b"{}"
+        if installed:
+            assert client.info_index is index
+        else:
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
+    finally:
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("empty_details", [False, True])
 @pytest.mark.parametrize(
     ("code", "expected"),

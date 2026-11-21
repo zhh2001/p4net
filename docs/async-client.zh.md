@@ -92,7 +92,7 @@ sudo "$(command -v python)" async_demo.py
 
 异步客户端目前没有 `get_pipeline_config()`、`clear_table()`、`reset_counter()` 或组播组操作。完整签名见[控制平面 API](api/control.md)。
 
-自行下发流水线时，`push_pipeline()` 的第一个参数需要文本格式的 P4Info，不是二进制 protobuf。成功响应后才会替换客户端的 P4Info 索引，失败或取消时保留原索引。寄存器读写通过 `simple_switch_CLI` 执行，需要安装该工具，并在构造客户端时传入 `thrift_address`。
+自行下发流水线时，`push_pipeline()` 的第一个参数需要文本格式的 P4Info，不是二进制 protobuf。同步和异步客户端都可以用 `action="VERIFY"` 验证候选流水线，验证后保留当前 P4Info 索引。`push_pipeline()` 失败或取消时也会保留当前索引。寄存器读写通过 `simple_switch_CLI` 执行，需要安装该工具，并在构造客户端时传入 `thrift_address`。
 
 ## 并发操作与 PacketIn
 
