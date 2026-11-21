@@ -31,10 +31,14 @@ sudo p4net examples/dual_stack/topology.py
 
 ## Things to try in the shell
 
-```
-hosts                    # both v4 and v6 columns now populated
-pingall                  # IPv4 mesh (v6 is not pinged automatically)
-h1 ping h2               # IPv4
-h1 ping6 h2              # IPv6
+Run these commands at the `p4net>` prompt.
+
+```text
+hosts
+pingall
+h1 ping h2
+h1 ping6 h2
 h1 cmd ip -6 addr show
 ```
+
+`hosts` lists both addresses for each host. `pingall` checks IPv4 connectivity across the topology. Use `h1 ping h2` and `h1 ping6 h2` to test IPv4 and IPv6 between the two hosts. The last command shows the IPv6 addresses configured on `h1`.
