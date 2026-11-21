@@ -1,8 +1,7 @@
-"""`Topology`: a builder for `Host`/`P4Switch`/`Link` descriptions.
+"""Build in-memory topology descriptions from hosts, P4 switches, and links.
 
-A `Topology` is pure data: it does not touch namespaces, devices, or processes.
-The runtime layer (added in a later phase) will consume a validated `Topology`
-and bring it up.
+By default, `Network.start()` validates the `Topology` before compiling the
+P4 programs, creating network namespaces and links, and starting the switches.
 """
 
 from __future__ import annotations
