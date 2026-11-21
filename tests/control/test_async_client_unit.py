@@ -401,6 +401,88 @@ async def test_stream_end_releases_resources_and_can_reconnect(
         await client.disconnect()
 
 
+@pytest.mark.parametrize("ending", ["eof", "rpc-error", "late-response"])
+async def test_old_stream_cannot_close_reconnected_client(
+    patched_aio: dict[str, Any], mocker: MockerFixture, ending: str
+) -> None:
+    client = await _connect(patched_aio)
+    old_stream = patched_aio["stream"]
+    old_task = client._stream_task
+    assert old_task is not None
+    # Let the old response iterator return after the callback has finished.
+    old_cancel = mocker.patch.object(old_stream, "cancel")
+    disconnected = asyncio.Event()
+    release_handler = asyncio.Event()
+    seen: list[bytes] = []
+
+    async def disconnect_from_handler(payload: bytes, _metadata: dict[str, int]) -> None:
+        if payload == b"old connection":
+            await client.disconnect()
+            disconnected.set()
+            await release_handler.wait()
+
+    async def record(payload: bytes, _metadata: dict[str, int]) -> None:
+        seen.append(payload)
+
+    await client.on_packet_in(disconnect_from_handler)
+    await client.on_packet_in(record)
+    retry_channel = MagicMock(name="retry-channel", close=AsyncMock(return_value=None))
+    retry_stream = _FakeStream()
+    mocker.patch("p4net.control.async_client.grpc.aio.insecure_channel", return_value=retry_channel)
+    patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+    try:
+        await old_stream.push_packet(b"old connection")
+        await asyncio.wait_for(disconnected.wait(), timeout=1.0)
+        old_cancel.assert_called_once()
+        patched_aio["channel"].close.assert_awaited_once()
+        await retry_stream.push_arbitration()
+        await client.connect(timeout=1.0)
+
+        if ending == "late-response":
+            await old_stream.push_arbitration(code=code_pb2.ALREADY_EXISTS)
+            await old_stream.push_packet(b"old response after reconnect")
+        error = grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), "old stream stopped")
+        await old_stream.finish(error if ending == "rpc-error" else None)
+        release_handler.set()
+        await asyncio.wait_for(asyncio.shield(old_task), timeout=1.0)
+
+        retry_channel.close.assert_not_awaited()
+        assert client._channel is retry_channel
+        assert client.is_connected and client.is_primary
+        assert client._stream_error is None
+        await retry_stream.push_packet(b"new connection")
+        assert await client.expect_packet_in(timeout=1.0) == (b"new connection", {})
+        assert seen == [b"new connection"]
+    finally:
+        release_handler.set()
+        old_task.cancel()
+        await asyncio.gather(old_task, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_old_request_iterator_cannot_drain_new_connection(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = await _connect(patched_aio)
+    stream_factory = patched_aio["stub"].StreamChannel
+    old_requests = stream_factory.call_args.args[0]
+    try:
+        assert (await anext(old_requests)).HasField("arbitration")
+        await client.disconnect()
+        retry_stream = _FakeStream()
+        stream_factory.side_effect = lambda _requests: retry_stream
+        await retry_stream.push_arbitration()
+        await client.connect(timeout=1.0)
+
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(old_requests), timeout=1.0)
+        new_requests = stream_factory.call_args.args[0]
+        assert (await asyncio.wait_for(anext(new_requests), timeout=1.0)).HasField("arbitration")
+    finally:
+        await old_requests.aclose()
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("arbitrated", [False, True])
 async def test_stream_end_during_connect_fails_promptly(
     patched_aio: dict[str, Any], arbitrated: bool

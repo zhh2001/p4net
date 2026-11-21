@@ -201,7 +201,7 @@ class AsyncP4RuntimeClient:
         self._loop = asyncio.get_running_loop()
         self._channel = grpc.aio.insecure_channel(self.target)
         self._stub = p4runtime_pb2_grpc.P4RuntimeStub(self._channel)
-        self._outgoing = asyncio.Queue()
+        outgoing = self._outgoing = asyncio.Queue()
         self._arbitration_event = asyncio.Event()
         self._arbitration = None
         self._stream_error = None
@@ -211,16 +211,17 @@ class AsyncP4RuntimeClient:
             millis = time.time_ns() // 1_000_000
             self._election_id = (int(millis), 0)
 
-        self._stream_call = self._stub.StreamChannel(self._request_generator())
+        requests = self._request_generator(outgoing)
+        stream_call = self._stream_call = self._stub.StreamChannel(requests)
         self._stream_task = asyncio.create_task(
-            self._stream_consumer(), name=f"p4rt-async-stream-{self._host}:{self._port}"
+            self._stream_consumer(stream_call), name=f"p4rt-async-stream-{self._host}:{self._port}"
         )
 
         req = p4runtime_pb2.StreamMessageRequest()
         req.arbitration.device_id = self._device_id
         req.arbitration.election_id.high = self._election_id[0]
         req.arbitration.election_id.low = self._election_id[1]
-        await self._outgoing.put(req)
+        await outgoing.put(req)
 
         try:
             await asyncio.wait_for(self._arbitration_event.wait(), timeout=timeout)
@@ -254,8 +255,10 @@ class AsyncP4RuntimeClient:
     async def disconnect(self) -> None:
         await self._teardown()
 
-    async def _teardown(self) -> None:
+    async def _teardown(self, *, expected_stream: Any = None) -> None:
         async with self._teardown_lock:
+            if expected_stream is not None and not self._stream_is_current(expected_stream):
+                return
             self._closed = True
             was_connected = self._connected
             self._connected = False
@@ -320,48 +323,41 @@ class AsyncP4RuntimeClient:
 
     # ----------------------------------------------------------------- stream
 
-    async def _request_generator(self) -> AsyncIterator[Any]:
-        assert self._outgoing is not None
+    async def _request_generator(self, outgoing: asyncio.Queue[Any]) -> AsyncIterator[Any]:
         while True:
-            msg = await self._outgoing.get()
+            msg = await outgoing.get()
             if msg is None:
                 return
             yield msg
 
-    async def _stream_consumer(self) -> None:
+    def _stream_is_current(self, stream_call: Any) -> bool:
+        return not self._closed and stream_call is self._stream_call
+
+    async def _stream_consumer(self, stream_call: Any) -> None:
+        error: Exception | None = None
         try:
-            assert self._stream_call is not None
-            async for resp in self._stream_call:
+            async for resp in stream_call:
+                if not self._stream_is_current(stream_call):
+                    return
                 if resp.HasField("arbitration"):
                     self._arbitration = resp.arbitration
                     self._is_primary = int(resp.arbitration.status.code) == 0
                     assert self._arbitration_event is not None
                     self._arbitration_event.set()
                 elif resp.HasField("packet"):
-                    await self._dispatch_packet_in(resp.packet)
-        except asyncio.CancelledError:
-            raise
-        except grpc.aio.AioRpcError as exc:
-            if not self._closed:
-                self._stream_error = exc
-                if self._arbitration_event is not None:
-                    self._arbitration_event.set()
+                    await self._dispatch_packet_in(resp.packet, stream_call)
         except Exception as exc:
-            if not self._closed:
-                self._stream_error = exc
-                if self._arbitration_event is not None:
-                    self._arbitration_event.set()
+            error = exc
         finally:
-            if not self._closed:
-                if self._stream_error is None:
-                    self._stream_error = ConnectionError(
-                        f"P4Runtime async stream ended for {self.target!r}"
-                    )
+            if self._stream_is_current(stream_call):
+                if error is None:
+                    error = ConnectionError(f"P4Runtime async stream ended for {self.target!r}")
+                self._stream_error = error
                 if self._arbitration_event is not None:
                     self._arbitration_event.set()
-                await self._teardown()
+                await self._teardown(expected_stream=stream_call)
 
-    async def _dispatch_packet_in(self, packet: Any) -> None:
+    async def _dispatch_packet_in(self, packet: Any, stream_call: Any) -> None:
         payload = bytes(packet.payload)
         meta: dict[str, int] = {}
         if self._info_index is not None:
@@ -377,6 +373,8 @@ class AsyncP4RuntimeClient:
         async with self._handlers_lock:
             handlers = list(self._packet_handlers)
         for h in handlers:
+            if not self._stream_is_current(stream_call):
+                return
             try:
                 await h(payload, meta)
             except Exception as exc:

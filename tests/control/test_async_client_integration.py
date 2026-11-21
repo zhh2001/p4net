@@ -248,7 +248,7 @@ async def test_network_astop_during_async_connect(tmp_path: Path, mocker: Mocker
     client = net.switch(switch).async_client
     started = asyncio.Event()
 
-    async def hold_arbitration() -> None:
+    async def hold_arbitration(_stream_call: Any) -> None:
         started.set()
         await asyncio.Event().wait()
 
@@ -363,10 +363,10 @@ async def test_cancelled_connect_releases_resources_and_can_retry(
     allow_arbitration = asyncio.Event()
     real_consumer = client._stream_consumer
 
-    async def hold_arbitration() -> None:
+    async def hold_arbitration(stream_call: Any) -> None:
         consumer_started.set()
         await allow_arbitration.wait()
-        await real_consumer()
+        await real_consumer(stream_call)
 
     mocker.patch.object(client, "_stream_consumer", new=hold_arbitration)
     attempt = asyncio.create_task(client.connect())
