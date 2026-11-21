@@ -38,27 +38,40 @@ forward those packets using the IPv4 destination address.
 ## The async setup function
 
 ```python
-async def _async_setup(net: Network) -> dict:
+async def _async_setup(net: Network) -> dict[str, Any]:
+    """Concurrent table programming across all three switches.
+
+    Returns a dict with timing measurements so the example can be
+    instrumented from the shell or a test harness.
+    """
     switches = [net.switch(n) for n in ("s1", "s2", "s3")]
     clients = [sw.async_client for sw in switches]
 
-    # 1. Connect all three clients in parallel.
+    # Connect all clients concurrently.
     await asyncio.gather(*(c.connect() for c in clients))
 
-    # 2. Install every route (9 entries total: 3 subnets × 3 switches).
+    # Build the full set of insert coroutines, then gather them.
     tasks = []
-    for sw, client in zip(switches, clients):
+    for sw, client in zip(switches, clients, strict=True):
         for cidr, port in _ROUTES[sw.name]:
-            tasks.append(client.insert_table_entry(
-                "MyIngress.ipv4_lpm",
-                {"hdr.ipv4.dstAddr": cidr},
-                "MyIngress.set_egress_port",
-                {"port": port},
-            ))
-    await asyncio.gather(*tasks)
+            tasks.append(
+                client.insert_table_entry(
+                    "MyIngress.ipv4_lpm",
+                    {"hdr.ipv4.dstAddr": cidr},
+                    "MyIngress.set_egress_port",
+                    {"port": port},
+                )
+            )
+    import time as _time
 
-    # 3. Close the async connections after the writes complete.
+    t0 = _time.perf_counter()
+    await asyncio.gather(*tasks)
+    t1 = _time.perf_counter()
+    concurrent_ms = (t1 - t0) * 1000.0
+
+    # Disconnect (Network.stop would do this anyway).
     await asyncio.gather(*(c.disconnect() for c in clients))
+    return {"concurrent_ms": concurrent_ms, "inserts": len(tasks)}
 ```
 
 The full source is in [`topology.py`](topology.py).
