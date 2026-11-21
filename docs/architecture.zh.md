@@ -37,7 +37,7 @@ flowchart TB
 - `VethPair` 通过 `pyroute2` 创建接口，将任一端移入命名空间，并配置地址、MAC、MTU 和接口状态。
 - `apply_netem()` 使用 `tc qdisc replace` 配置出方向的时延、抖动、丢包和速率。`clear_qdisc()` 删除根 qdisc，未配置 qdisc 时可重复调用。
 - `BMv2Switch` 启动 `simple_switch_grpc`，构造参数，管理日志文件和进程退出。`wait_until_ready()` 检查子进程仍在运行，且同时持有 gRPC 和 Thrift 监听套接字。监听套接字属于其他进程时，启动失败。
-- `NSProcess` 封装命名空间内启动的进程，提供 `pid`、`poll()`、`wait()`、`terminate()` 和 `kill()`。`close()` 为兼容旧调用而保留，不执行操作。
+- `NSProcess` 封装由 `NetworkNamespace.popen()` 启动的子进程。`close()` 只更新 `repr()` 显示的状态。通过 `with` 使用 `NSProcess` 时，退出代码块会停止仍在运行的子进程并等待其退出。
 - `disable_ipv6()` 和 `enable_ipv6()` 修改指定网络命名空间中接口的 IPv6 sysctl 配置。传入 `None` 时使用调用进程所在的网络命名空间。
 
 这些对象分别管理单个资源，创建和回收的顺序由 `Network` 决定。详见[运行时 API](api/runtime.md)。

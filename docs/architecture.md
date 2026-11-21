@@ -37,7 +37,7 @@ This package provides the Linux and process operations used by the orchestrator:
 - `VethPair` creates interfaces, moves either end into a namespace, and configures addresses, MAC, MTU, and link state through `pyroute2`.
 - `apply_netem()` uses `tc qdisc replace` to set egress delay, jitter, loss, and rate. `clear_qdisc()` removes the root qdisc and accepts an already absent qdisc.
 - `BMv2Switch` starts `simple_switch_grpc`, builds its arguments, and manages its log file and shutdown. `wait_until_ready()` checks that the child is alive and owns both its gRPC and Thrift listeners. A listener owned by another process is a startup error.
-- `NSProcess` wraps a process started inside a namespace. It provides `pid`, `poll()`, `wait()`, `terminate()`, and `kill()`. `close()` is retained as a no-op for compatibility.
+- `NSProcess` wraps a child process started by `NetworkNamespace.popen()`. `close()` marks the wrapper as closed in `repr()`. When used in a `with` block, `NSProcess` stops a running child and waits for it on exit.
 - `disable_ipv6()` and `enable_ipv6()` configure IPv6 sysctls for an interface in the selected namespace. Passing `None` uses the caller's network namespace.
 
 These objects manage individual resources. `Network` determines their creation and cleanup order. See the [runtime API](api/runtime.md).
