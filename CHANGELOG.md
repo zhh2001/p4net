@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-21
+
+### Added
+
+- Added Python 3.14 and 3.15 to the package classifiers and CI matrix for Ubuntu 22.04 and 24.04.
+
+### Changed
+
+- Updated the P4Net project overview and revised the English and Chinese quick start, CLI reference, and example walkthroughs.
+- Clarified when Linux assigns IPv6 link-local addresses and how the multi-hop INT example estimates delay between switches.
+
+### Fixed
+
+- Restored IPv4 connectivity among all three hosts in the async multi-switch example.
+- Removed machine-specific absolute paths from benchmark exports and the published benchmark snapshot.
+
 ## [1.10.0] - 2026-11-20
 
 ### Added

@@ -81,4 +81,4 @@ The script prints `True` when `h1` receives a reply from `h2`. The network shuts
 
 ## Project status
 
-P4Net **v1.10.0** is a stable release. See the [changelog](changelog.md), [API stability policy](api-stability.md), and [roadmap](roadmap.md).
+P4Net **v1.10.1** is a stable release. See the [changelog](changelog.md), [API stability policy](api-stability.md), and [roadmap](roadmap.md).

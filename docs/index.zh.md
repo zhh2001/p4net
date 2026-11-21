@@ -81,4 +81,4 @@ sudo .venv/bin/python demo.py
 
 ## 项目状态
 
-P4Net **v1.10.0** 为稳定版本。参见[变更日志](changelog.md)、[API 稳定性约定](api-stability.md)和[路线图](roadmap.md)。
+P4Net **v1.10.1** 为稳定版本。参见[变更日志](changelog.md)、[API 稳定性约定](api-stability.md)和[路线图](roadmap.md)。
