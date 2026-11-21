@@ -554,10 +554,13 @@ class AsyncP4RuntimeClient:
     ) -> AsyncIterator[dict[str, Any]]:
         """Async iterator over decoded table entries.
 
-        Note: this is a regular ``def`` returning an ``AsyncIterator``.
         Use it as ``async for entry in client.list_table_entries(...)``.
+        The RPC starts when iteration begins. Create a new iterator if the
+        connection closes or P4Info changes before iteration. Each started
+        read uses the P4Info captured for its request to decode responses.
         """
         self._require_connected_with_index()
+        stub = self._stub
         idx = self.info_index
         req = p4runtime_pb2.ReadRequest()
         req.device_id = self._device_id
@@ -568,11 +571,19 @@ class AsyncP4RuntimeClient:
             entity.table_entry.table_id = 0
 
         async def _gen() -> AsyncIterator[dict[str, Any]]:
+            if not self.is_connected or self._stub is not stub:
+                raise ConnectionError(
+                    f"Connection to {self.target!r} closed before reading table entries"
+                )
+            if self._info_index is not idx:
+                raise P4RuntimeError(
+                    "P4Info changed before reading table entries; create a new iterator"
+                )
             try:
-                async for resp in self._stub.Read(req, timeout=timeout):
+                async for resp in stub.Read(req, timeout=timeout):
                     for ent in resp.entities:
                         if ent.HasField("table_entry"):
-                            yield self._decode_table_entry(ent.table_entry)
+                            yield self._decode_table_entry(ent.table_entry, idx)
             except asyncio.CancelledError:
                 raise
             except grpc.aio.AioRpcError as exc:
@@ -580,8 +591,8 @@ class AsyncP4RuntimeClient:
 
         return _gen()
 
-    def _decode_table_entry(self, entry: Any) -> dict[str, Any]:
-        idx = self.info_index
+    @staticmethod
+    def _decode_table_entry(entry: Any, idx: P4InfoIndex) -> dict[str, Any]:
         table_name = idx.table_name(int(entry.table_id))
         table = None
         for t in idx.raw.tables:

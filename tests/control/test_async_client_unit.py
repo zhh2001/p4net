@@ -1324,6 +1324,94 @@ async def test_list_table_entries_yields_decoded(
         await client.disconnect()
 
 
+@pytest.mark.parametrize("reconnect", [False, True])
+async def test_unstarted_read_iterator_is_bound_to_its_connection(
+    patched_aio: dict[str, Any], mocker: MockerFixture, reconnect: bool
+) -> None:
+    client = await _connect(patched_aio)
+    read = client.list_table_entries("MyIngress.ipv4_lpm")
+    old_stub = patched_aio["stub"]
+    old_stub.Read.assert_not_called()
+
+    async def respond() -> AsyncIterator[Any]:
+        response = p4runtime_pb2.ReadResponse()
+        response.entities.add().table_entry.table_id = 2001
+        yield response
+
+    retry_stream = _FakeStream()
+    retry_stub = MagicMock(StreamChannel=MagicMock(return_value=retry_stream))
+    retry_stub.Read.side_effect = lambda _request, timeout: respond()
+    try:
+        await client.disconnect()
+        if reconnect:
+            mocker.patch(
+                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
+                return_value=retry_stub,
+            )
+            await retry_stream.push_arbitration()
+            await client.connect()
+
+        with pytest.raises(ConnectionError, match="closed before reading table entries"):
+            await anext(read)
+        old_stub.Read.assert_not_called()
+        retry_stub.Read.assert_not_called()
+        if reconnect:
+            fresh_entries = [entry async for entry in client.list_table_entries()]
+            assert [entry["table"] for entry in fresh_entries] == ["MyIngress.ipv4_lpm"]
+            retry_stub.Read.assert_called_once()
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("started", [False, True])
+async def test_read_iterator_uses_the_p4info_for_its_request(
+    patched_aio: dict[str, Any], started: bool
+) -> None:
+    client = await _connect(patched_aio)
+    old_table = "MyIngress.ipv4_lpm"
+    new_table = "NextIngress.ipv4_lpm"
+    old_action = "MyIngress.set_egress_port"
+    new_action = "NextIngress.set_egress_port"
+    new_info = p4info_pb2.P4Info()
+    new_info.CopyFrom(client.info_index.raw)
+    new_info.tables[0].preamble.name = new_table
+    new_info.actions[0].preamble.name = new_action
+
+    async def respond() -> AsyncIterator[Any]:
+        for _ in range(2):
+            response = p4runtime_pb2.ReadResponse()
+            row = response.entities.add().table_entry
+            row.table_id = 2001
+            row.action.action.action_id = 1001
+            yield response
+
+    rpc = patched_aio["stub"].Read
+    rpc.side_effect = lambda _request, timeout: respond()
+    read = client.list_table_entries(old_table)
+    try:
+        if started:
+            assert (await anext(read))["table"] == old_table
+        await client.push_pipeline(str(new_info).encode(), b"{}")
+
+        if started:
+            remaining = [entry async for entry in read]
+            assert [(entry["table"], entry["action"]) for entry in remaining] == [
+                (old_table, old_action)
+            ]
+            rpc.assert_called_once()
+        else:
+            with pytest.raises(P4RuntimeError, match="P4Info changed before reading"):
+                await anext(read)
+            rpc.assert_not_called()
+
+        fresh = [entry async for entry in client.list_table_entries(new_table)]
+        assert [(entry["table"], entry["action"]) for entry in fresh] == [
+            (new_table, new_action)
+        ] * 2
+    finally:
+        await client.disconnect()
+
+
 async def test_reads_across_clients_progress_concurrently() -> None:
     started: set[int] = set()
     all_started = asyncio.Event()
