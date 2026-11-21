@@ -51,7 +51,7 @@ The deparser emits Ethernet → shim → IPv4 in that order. `setup(net)` sets t
 | Bytes | Field |
 | ----- | ----- |
 | `0`   | `switch_id` |
-| `1..6` | `ingress_timestamp_us` (48-bit big-endian; BMv2 reports microseconds) |
+| `1..6` | `ingress_timestamp_us` (48-bit big-endian timestamp in microseconds) |
 | `7..8` | `egress_port` |
 | `9..10` | `queue_depth` |
 | `11..12` | `next_proto` |
@@ -93,10 +93,6 @@ The listener prints one line per ICMP request. The requests reach `h2` as INT fr
 At this send rate, the egress queue is usually empty after each dequeue, so the listener typically prints `queue=0`.
 
 The listener exits after three frames. Enter `exit` at the `p4net>` prompt to stop the topology.
-
-## Compatibility
-
-The on-the-wire shim layout is **unchanged** from v1.1.0; only the P4-level field name was renamed from `ingress_timestamp_ns` to `ingress_timestamp_us` in v1.2.0 to correctly reflect BMv2's microsecond-resolution `standard_metadata.ingress_global_timestamp`. A v1.1.0 packet capture decodes identically against the v1.2.0 listener.
 
 ## Variations to try
 
