@@ -75,5 +75,20 @@ At the traffic rate used here, the egress queue is typically empty, so `queue_de
 
 ## Variations to try
 
-- Compare the `ingress_timestamp_us` values to measure the interval between packets arriving at the switch.
-- Follow the [two-switch INT example](int-multi-hop.md) to read a telemetry header from each hop.
+If you stopped the topology, start it again. Before each trial, start the listener with `--count 3` and wait for `waiting for INT frames`.
+
+For the first trial, send three requests one second apart.
+
+```sh
+sudo ip netns exec h1 ping -c 3 -i 1 -W 1 10.0.0.2
+```
+
+Restart the listener, then send three requests 0.2 seconds apart.
+
+```sh
+sudo ip netns exec h1 ping -c 3 -i 0.2 -W 1 10.0.0.2
+```
+
+For each trial, subtract each `ts` value from the next one. The result is the interval between arrivals at the switch in microseconds. Expect gaps close to 1,000,000 µs in the first trial and 200,000 µs in the second.
+
+Follow the [two-switch INT example](int-multi-hop.md) to read a telemetry header from each hop.
