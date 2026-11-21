@@ -34,6 +34,8 @@ The matrix reports `6/6 succeeded`, covering both directions between each pair o
 
 When finished, enter `exit` at the `p4net>` prompt to stop the topology.
 
+To measure serial and concurrent writes for the same nine entries, follow the [timing exercise in the example README](https://github.com/zhh2001/p4net/blob/main/examples/async_concurrent/README.md#timing-the-inserts).
+
 ## Topology
 
 `examples/async_concurrent/topology.py`:

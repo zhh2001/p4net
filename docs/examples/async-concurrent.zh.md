@@ -34,6 +34,8 @@ h3     1    1    -
 
 完成后，在 `p4net>` 提示符下输入 `exit` 停止拓扑。
 
+要比较同一组九条表项串行与并发写入的耗时，可参照示例 README 中的[计时练习](https://github.com/zhh2001/p4net/blob/main/examples/async_concurrent/README.md#timing-the-inserts)。
+
 ## 拓扑
 
 `examples/async_concurrent/topology.py`：
