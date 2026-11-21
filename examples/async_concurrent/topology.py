@@ -32,6 +32,7 @@ Then in the shell::
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,18 @@ _ROUTES: dict[str, list[tuple[str, int]]] = {
 }
 
 
+async def _run_batch(*operations: Coroutine[Any, Any, None]) -> None:
+    """Cancel and await unfinished operations if the batch fails."""
+    tasks = [asyncio.create_task(operation) for operation in operations]
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 async def _async_setup(net: Network) -> dict[str, Any]:
     """Concurrent table programming across all three switches.
 
@@ -78,31 +91,37 @@ async def _async_setup(net: Network) -> dict[str, Any]:
     switches = [net.switch(n) for n in ("s1", "s2", "s3")]
     clients = [sw.async_client for sw in switches]
 
-    # Connect all clients concurrently.
-    await asyncio.gather(*(c.connect() for c in clients))
-
-    # Build the full set of insert coroutines, then gather them.
-    tasks = []
-    for sw, client in zip(switches, clients, strict=True):
-        for cidr, port in _ROUTES[sw.name]:
-            tasks.append(
-                client.insert_table_entry(
-                    "MyIngress.ipv4_lpm",
-                    {"hdr.ipv4.dstAddr": cidr},
-                    "MyIngress.set_egress_port",
-                    {"port": port},
-                )
-            )
     import time as _time
 
-    t0 = _time.perf_counter()
-    await asyncio.gather(*tasks)
-    t1 = _time.perf_counter()
-    concurrent_ms = (t1 - t0) * 1000.0
+    try:
+        # Connect all clients concurrently.
+        await _run_batch(*(c.connect() for c in clients))
 
-    # Close the clients before asyncio.run() shuts down their event loop.
-    await asyncio.gather(*(c.disconnect() for c in clients))
-    return {"concurrent_ms": concurrent_ms, "inserts": len(tasks)}
+        writes = []
+        for sw, client in zip(switches, clients, strict=True):
+            for cidr, port in _ROUTES[sw.name]:
+                writes.append(
+                    client.insert_table_entry(
+                        "MyIngress.ipv4_lpm",
+                        {"hdr.ipv4.dstAddr": cidr},
+                        "MyIngress.set_egress_port",
+                        {"port": port},
+                    )
+                )
+
+        t0 = _time.perf_counter()
+        await _run_batch(*writes)
+        concurrent_ms = (_time.perf_counter() - t0) * 1000.0
+    finally:
+        # Close every client before asyncio.run() shuts down their event loop.
+        disconnect_results = await asyncio.gather(
+            *(c.disconnect() for c in clients), return_exceptions=True
+        )
+
+    for result in disconnect_results:
+        if isinstance(result, BaseException):
+            raise result
+    return {"concurrent_ms": concurrent_ms, "inserts": len(writes)}
 
 
 def setup(net: Network) -> None:
