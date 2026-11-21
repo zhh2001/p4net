@@ -1,11 +1,11 @@
 # dual_stack
 
-Two hosts on a single switch, each carrying both IPv4 and IPv6 addresses. The pipeline is the same port-swap L2 forwarder used by `quick_start`: the data plane treats v4 and v6 identically, and static ARP / ND is pre-seeded so the controller doesn't have to resolve neighbours.
+Two hosts with IPv4 and IPv6 addresses share a switch. The switch forwards frames between its two ports, as in `quick_start`. The `setup(net)` function installs static IPv4 and IPv6 neighbor entries on both hosts. Each host uses its peer's configured MAC address from the first ping.
 
 ## What it shows
 
 - Per-interface IPv6 enable via `Host.ip6`.
-- IPv6 ND seeding via `ip -6 neigh replace`.
+- Static IPv4 and IPv6 neighbor entries via `ip neigh replace` and `ip -6 neigh replace`.
 - Mixed-traffic ping (IPv4 and IPv6) over the same pipeline.
 
 ## Files
