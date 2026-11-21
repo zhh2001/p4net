@@ -52,27 +52,29 @@ s2_rt.client.write_register("MyIngress.switch_id_reg", index=0, value=2)
 
 ## Run it
 
-In one terminal:
+From the repository root, start the topology in the first terminal.
 
 ```bash
 sudo p4net examples/int_multi_hop/topology.py
 ```
 
-`setup(net)` installs the L2 forwarding tables on both switches, pre-seeds static ARP on both hosts, and writes each switch's identity register. Drop into the `p4net>` shell.
+`setup(net)` installs the L2 forwarding tables, pre-seeds static ARP, and writes the switch IDs before the shell opens.
 
-In a second terminal (or `h2 xterm` from the shell):
+Once the `p4net>` prompt appears, start the listener from a second terminal in the repository root.
 
 ```bash
-sudo ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0
+sudo ip netns exec h2 python3 examples/int_multi_hop/listener.py --iface h2-eth0 --count 3
 ```
 
-From a third terminal:
+When the listener prints `boot times loaded`, send three ICMP requests from a third terminal.
 
 ```bash
 sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 ```
 
-The listener prints one block per packet. With two switches on the path, every block has two `hop` lines.
+The listener prints two `hop` lines per packet. The requests reach `h2` as INT frames, so `ping` reports `100% packet loss`.
+
+The listener exits after three frames. Enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Sample output
 

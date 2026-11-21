@@ -61,27 +61,27 @@ When `next_proto == 0x0800`, the listener also peeks 12 bytes into the inner IPv
 
 ## Run it
 
-In one terminal:
+From the repository root, start the topology in the first terminal.
 
 ```bash
 sudo p4net examples/int/topology.py
 ```
 
-`setup(net)` installs the LPM entries and pre-seeds static ARP. Drop into the shell.
+`setup(net)` installs the LPM entries and pre-seeds static ARP before the shell opens.
 
-In a second terminal (or from the p4net shell via `h2 xterm`):
+Once the `p4net>` prompt appears, start the listener from a second terminal in the repository root.
 
 ```bash
-sudo ip netns exec h2 python3 examples/int/listener.py --iface h2-eth0
+sudo ip netns exec h2 python3 examples/int/listener.py --iface h2-eth0 --count 3
 ```
 
-In a third terminal:
+When the listener prints `waiting for INT frames`, send three ICMP requests from a third terminal.
 
 ```bash
 sudo ip netns exec h1 ping -c 3 -W 1 10.0.0.2
 ```
 
-The listener prints one line per ICMP echo request that crossed the switch:
+The listener prints one line per ICMP request. The requests reach `h2` as INT frames, so `ping` reports `100% packet loss`.
 
 ```
 [listener] bound on h2-eth0, waiting for INT frames
@@ -91,6 +91,8 @@ The listener prints one line per ICMP echo request that crossed the switch:
 ```
 
 At this send rate, the egress queue is usually empty after each dequeue, so the listener typically prints `queue=0`.
+
+The listener exits after three frames. Enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Compatibility
 
