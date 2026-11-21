@@ -1,18 +1,13 @@
 # Multi-hop INT (in-band network telemetry)
 
-Two switches in series, each inserting its own 14-byte INT shim header into every forwarded IPv4 packet. The receiver decodes the full hop-by-hop metadata chain to reconstruct the packet's journey across the topology.
+Two switches in series each insert a 14-byte INT shim between the Ethernet and IPv4 headers. The receiver decodes both shims in the order the packet visited the switches. The P4 program has two shim slots and records up to two hops.
 
-This is the "production-style" INT example. For the simpler single-switch introduction, see [`examples/int/`](../int/) — same shim format, one switch, easier to read.
+The [single-switch INT example](../int/) introduces the same shim format.
 
 ## What this demonstrates
 
-- **Hop-by-hop metadata accumulation.** Every switch on the packet's path inserts its own INT shim. After traversing N switches the packet carries an N-shim stack between Ethernet and IPv4.
-- **Shim chaining via `next_proto`.** Each shim's `next_proto` field names the next header in order. The parser and listener walk the chain via `etherType → shim_1.next_proto → shim_2.next_proto → ipv4`. No P4 header stack required for the 2-hop case.
-- **Per-switch identity from a register.** The same P4 program runs on both switches; each switch's `switch_id` comes from the v1.2 register API, written at start-up in `setup(net)`.
-
-## Why this is the realistic example
-
-Single-switch INT (see `examples/int/`) shows the *mechanism* — how a P4 deparser injects a header outside the standard ethertype range. But real INT deployments do something more interesting: every transit device on a path inserts its own metadata, so the egress switch (or the receiver) can reconstruct what every hop saw. Multi-hop INT is the shape of telemetry that's been productized.
+- **Shim chaining via `next_proto`.** Each shim's `next_proto` field identifies the next header. The parser and listener follow the chain `Ethernet → shim 1 → shim 2 → IPv4`.
+- **Per-switch identity from a register.** Both switches run the same P4 program. `setup(net)` writes a distinct `switch_id` to each switch's register.
 
 ## Topology
 
@@ -41,8 +36,8 @@ Four nodes, three links, no branching. Same P4 binary loaded on both switches; p
 `int_multi_hop.p4`:
 
 - **Three headers**: `ethernet_t`, `int_shim_t` (two named instances — `int_shim_1` and `int_shim_2`), and `ipv4_t`.
-- **Parser** does recursive descent on `etherType` / `next_proto`, validating shim headers as it encounters them. At the IPv4 boundary it transitions to `parse_ipv4` and stops.
-- **Ingress** runs `l2_forward.apply()` to set `std.egress_spec`. If forwarding succeeded, it picks the first unfilled shim slot (`int_shim_1` then `int_shim_2`) and populates it from `standard_metadata` plus the configured `switch_id`. It then re-stitches the `next_proto` chain so the receiver sees `eth → shim_1 → shim_2 → ipv4`.
+- **Parser** follows `etherType` and `next_proto` to extract up to two shims before parsing IPv4.
+- **Ingress** runs `l2_forward.apply()` to select the egress port. It fills the first available shim with `standard_metadata` and the configured `switch_id`, then updates the header chain. With both slots filled, the packet is forwarded with the two existing shims.
 - **Deparser** emits every valid header in declaration order. Invalid shim headers are skipped entirely; the wire bytes never contain unused 14-byte gaps.
 
 ## Multi-hop vs header stack
@@ -51,12 +46,10 @@ This example uses two named header instances rather than a P4 header stack. The 
 
 | Aspect | Named instances (this example) | Header stack |
 | ------ | ------------------------------ | ------------ |
-| Max hops | Fixed at 2 (or whatever N you write out) | Configurable at compile time |
+| Max hops | 2 | Configurable at compile time |
 | Parser | Explicit transitions; easy to read | `pkt.extract(stack.next)` in a loop |
 | Ingress | Explicit `if/else if` chain | `stack.push_front(1)` |
 | Pedagogy | Clearer for 2 hops | More general |
-
-For a real deployment with variable hop counts, replace `int_shim_1` and `int_shim_2` with `int_shim_t[MAX_HOPS] shims`, use `shims.push_front(1)` in ingress, and loop the parser through up to `MAX_HOPS` extractions. The "Extending to N hops" section below has the full recipe.
 
 ## Per-switch parameterization
 
@@ -66,8 +59,6 @@ The P4 program runs unchanged on both switches. Per-switch identity comes from a
 s1_rt.client.write_register("MyIngress.switch_id_reg", index=0, value=1)
 s2_rt.client.write_register("MyIngress.switch_id_reg", index=0, value=2)
 ```
-
-This is the textbook P4 pattern for multi-switch deployments: one binary, one P4Info, multiple switch identities. The v1.2 register API makes this a single `write_register` call per switch.
 
 ## Run it
 
@@ -197,6 +188,5 @@ The listener already handles arbitrary hop counts — it stops decoding when `ne
 
 ## Caveats
 
-- **Two hops only with the current pipeline.** A packet entering a third switch on the path would find both shim slots already valid and would forward without further annotation. The receiver sees only the first two hops; deeper paths require the header-stack rewrite above.
 - **`queue_depth` is almost always 0.** Same as the single-switch example — BMv2's default queueing doesn't surface meaningful values.
 - **No checksum recomputation for the inserted shims.** The IPv4 checksum field covers only the IPv4 header itself; ethernet has no cryptographic protection. The shim layer is between them and unprotected, which matches how real INT works (the INT spec assumes link-layer integrity).
