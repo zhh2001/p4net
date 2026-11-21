@@ -4,7 +4,7 @@ description: p4net 仓库中的九个可运行拓扑，涵盖转发、非对称�
 
 # 示例
 
-仓库的 `examples/` 目录收录了九个可运行的拓扑。先[通过 pipx 安装 CLI](../getting-started/installation.md#install-cli)，再从仓库根目录运行快速上手示例。
+仓库的 `examples/` 目录收录了九个可运行的拓扑。先[安装 P4 编译器、BMv2 等外部工具](../getting-started/installation.md#required-external-tools)，再[通过 pipx 安装 CLI](../getting-started/installation.md#install-cli)。完成后，从仓库根目录运行快速上手示例。
 
 ```sh
 sudo p4net examples/quick_start/quick_start.py

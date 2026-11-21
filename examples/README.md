@@ -1,7 +1,6 @@
 # Examples
 
-Each subdirectory contains a self-contained p4net topology. [Install the CLI with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli),
-then run the command in the example's README from the repository root.
+Each subdirectory contains a self-contained P4Net topology. [Install the external tools](https://zhh2001.github.io/p4net/getting-started/installation/#required-external-tools) and [install the CLI with pipx](https://zhh2001.github.io/p4net/getting-started/installation/#install-cli). Then run the command in the example's README from the repository root.
 
 - `quick_start/` — minimal two-host network using a hardcoded port-swap pipeline.
 - `l3_forwarding/` — two hosts with runtime-programmed `ipv4_lpm` forwarding and pre-seeded static ARP.
