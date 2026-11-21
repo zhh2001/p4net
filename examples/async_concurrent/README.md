@@ -4,7 +4,6 @@ Three switches form a full mesh. The example uses `AsyncP4RuntimeClient` and `as
 
 ## What this demonstrates
 
-- `AsyncP4RuntimeClient` from `p4net.control` — the async parallel to the sync `P4RuntimeClient` shipped since v1.0.
 - The `RunningSwitch.async_client` lazy property — every running switch exposes a pre-configured async client; consumers don't have to construct one by hand.
 - `asyncio.gather` patterns: connect three clients in parallel, install all entries in parallel, disconnect in parallel.
 
@@ -144,18 +143,14 @@ The example times the nine concurrent inserts. To compare them with serial inser
 
 Start a fresh topology with the command above so the first trial begins with empty LPM tables. Each delete uses the same switch and match key as the corresponding insert, leaving the tables empty for the second trial. Both trials reuse the same three connections and time only the insert batches. Startup prints the serial time followed by the existing concurrent timing summary.
 
-## When to use async
+## Choosing a client
 
-- **Concurrent operations across switches** — use `asyncio.gather()` to overlap independent RPCs.
-- **Async PacketIn handlers** — register an async callback with `client.on_packet_in(...)` and propagate naturally through your async pipeline.
-- **Highly responsive CLI tools** — when concurrent reads of multiple switches matter.
+- Use `switch.client` in synchronous scripts that make one request at a time.
+- Use `switch.async_client` to overlap independent requests across switches in an `asyncio` event loop or to handle PacketIn with async callbacks.
+
+For supported operations and compatibility, see the [differences between the clients](https://zhh2001.github.io/p4net/async-client/#differences-from-the-sync-api) and [API stability](https://zhh2001.github.io/p4net/api-stability/#p4netcontrol).
 
 `grpc.aio` uses background threads. If your experiment forks worker processes, start them before creating gRPC clients, then create and connect the clients inside each worker. See [gRPC and worker processes](https://zhh2001.github.io/p4net/known-limitations/#1-grpc-connections-and-process-creation).
-
-## When to use the synchronous client
-
-- **One operation at a time** in a synchronous script. Use `switch.client` to call the synchronous API.
-- **Direct mappings to the v1.0 sync API** in existing code. The sync client is the v1.0 baseline; the async client is also Stable since 1.7.0 — pick whichever fits your codebase.
 
 ## Mastership note
 
