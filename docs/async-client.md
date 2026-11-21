@@ -68,7 +68,7 @@ The output should contain a `MyIngress.ipv4_lpm` entry with action parameters `{
 
 `net.switch("s1").async_client` lazily creates and caches an unconnected client with the sync client's current P4Info index. Call `await client.connect()` before using it. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
 
-Concurrent `connect()` calls on the same client share one attempt. The first call supplies the arbitration timeout. Cancelling a waiting call leaves the attempt running. Cancelling the first call cleans up the attempt and propagates `asyncio.CancelledError` to the remaining callers.
+Concurrent `connect()` calls on a single instance share one connection attempt in both clients. The first call sets the arbitration timeout. With the async client, cancelling a waiting call leaves the attempt running. Cancelling the first call cleans up the attempt and propagates `asyncio.CancelledError` to the remaining callers.
 
 Without an explicit `election_id`, the async client generates one from the current millisecond timestamp at its first connection. The sync client created by `Network` also uses a timestamp, so do not rely on construction order to assign primary status. Construct a client with an explicit election ID, as in the complete example, when you need to choose which client writes. Election IDs are compared as `(high, low)` pairs.
 

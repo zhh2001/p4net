@@ -13,6 +13,7 @@ import logging
 import queue
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -135,6 +136,7 @@ class P4RuntimeClient:
         self._outgoing: queue.Queue[Any] | None = None
         self._stream_call: Any = None
         self._stream_thread: threading.Thread | None = None
+        self._connect_attempt: Future[None] | None = None
         self._stream_event = threading.Event()
         self._arbitration: Any = None
         self._stream_error: BaseException | None = None
@@ -183,24 +185,55 @@ class P4RuntimeClient:
     # Lifecycle ----------------------------------------------------------
 
     def connect(self, *, timeout: float = 10.0) -> None:
-        """Open the gRPC channel, start the StreamChannel, do master arbitration."""
-        if self._channel is not None and not self._connected:
-            self._teardown()
+        """Connect and await arbitration using the first concurrent caller's timeout.
+
+        During arbitration, a call from a PacketIn handler raises ``ConnectionError``
+        because the receiver thread must keep reading the stream.
+        """
+        attempt: Future[None] | None = None
+        stream_call = None
         failed_thread = None
         try:
             with self._teardown_lock:
                 if self._connected:
                     return
-                try:
-                    stream_call, stream_event = self._start_stream_locked()
-                except BaseException:
-                    failed_thread = self._close_stream_locked()
-                    raise
-        finally:
-            self._join_stream_thread(failed_thread)
+                pending = self._connect_attempt
+                if pending is None:
+                    attempt = self._connect_attempt = Future()
+                    try:
+                        stream_call, stream_event = self._start_stream_locked()
+                    except BaseException:
+                        failed_thread = self._close_stream_locked()
+                        raise
+                elif self._stream_thread is threading.current_thread():
+                    raise ConnectionError("cannot wait for arbitration from a PacketIn handler")
 
+            if pending is not None:
+                pending.result()
+                return
+            assert attempt is not None
+            self._await_arbitration(stream_call, stream_event, attempt=attempt, timeout=timeout)
+        except BaseException as exc:
+            if attempt is not None:
+                try:
+                    if stream_call is not None:
+                        self._teardown(expected_stream=stream_call)
+                    self._join_stream_thread(failed_thread)
+                finally:
+                    with self._teardown_lock:
+                        self._connect_attempt = None
+                        attempt.set_exception(exc)
+            raise
+
+    def _await_arbitration(
+        self,
+        stream_call: Any,
+        stream_event: threading.Event,
+        *,
+        attempt: Future[None],
+        timeout: float,
+    ) -> None:
         if not stream_event.wait(timeout):
-            self._teardown(expected_stream=stream_call)
             raise ConnectionError(
                 f"P4Runtime arbitration timed out after {timeout}s for {self._target!r}"
             )
@@ -209,15 +242,16 @@ class P4RuntimeClient:
             arbitration = self._arbitration
             active = stream_call is self._stream_call and not self._closed
             if active and err is None and arbitration is not None and arbitration.status.code == 0:
-                self._connected = True
                 logger.debug(
                     "P4Runtime client %r connected, election_id=(%d, %d)",
                     self._target,
                     self._election_id_high,
                     self._election_id_low,
                 )
+                self._connected = True
+                self._connect_attempt = None
+                attempt.set_result(None)
                 return
-        self._teardown(expected_stream=stream_call)
         if err is not None:
             if isinstance(err, grpc.RpcError):
                 raise self._translate_rpc_error(err) from err

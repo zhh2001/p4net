@@ -5,7 +5,7 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -250,6 +250,116 @@ def test_connect_invalid_arbitration_request_releases_resources(
         assert not consumer.is_alive()
     finally:
         client.disconnect()
+
+
+@pytest.mark.parametrize("outcome", ["success", "stream-error", "disconnect", "timeout"])
+def test_concurrent_connects_share_one_attempt(
+    patched_grpc: dict[str, Any], mocker: MockerFixture, outcome: str
+) -> None:
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    stream = patched_grpc["stream"]
+    replacement = FakeStreamCall()
+    retry_channel = MagicMock(name="retry-channel")
+    channel_factory = patched_grpc["channel_factory"]
+    channel_factory.side_effect = [patched_grpc["channel"], retry_channel]
+    waiter_started = threading.Event()
+    fail_timeout = threading.Event()
+    result = Future.result
+
+    def wait_for_result(attempt: Future[None], timeout: float | None = None) -> None:
+        if attempt is getattr(client, "_connect_attempt", None):
+            waiter_started.set()
+        return result(attempt, timeout)
+
+    mocker.patch.object(Future, "result", new=wait_for_result)
+    streams = iter([stream, replacement])
+
+    def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+        current = next(streams)
+        if current is not stream:
+            waiter_started.set()
+        elif outcome == "timeout":
+
+            def wait_for_timeout(timeout: float | None = None) -> bool:
+                assert timeout == 3.0
+                assert fail_timeout.wait(3.0)
+                return False
+
+            mocker.patch.object(client._stream_event, "wait", new=wait_for_timeout)
+        current.attach_request_iter(requests)
+        return current
+
+    patched_grpc["stub"].StreamChannel.side_effect = open_stream
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        try:
+            first = workers.submit(client.connect, timeout=3.0)
+            assert stream.read_started.wait(1.0)
+            second = workers.submit(client.connect, timeout=0.0)
+            assert waiter_started.wait(1.0)
+            channel_factory.assert_called_once()
+            assert not stream._cancelled
+
+            if outcome == "success":
+                stream.responses.put(_make_arbitration_response(1, (1, 0)))
+                first.result(2.0)
+                second.result(2.0)
+            else:
+                failure = _grpc_error(grpc.StatusCode.UNAVAILABLE, "server stopped")
+                if outcome == "stream-error":
+                    stream.responses.put(failure)
+                elif outcome == "disconnect":
+                    client.disconnect()
+                else:
+                    fail_timeout.set()
+
+                for call in (first, second):
+                    error = call.exception(timeout=2.0)
+                    assert isinstance(error, ConnectionError)
+                    if outcome == "stream-error":
+                        assert error.__cause__ is failure
+                    elif outcome == "disconnect":
+                        assert "closed" in str(error)
+                    else:
+                        assert "timed out after 3.0s" in str(error)
+                assert not client.is_connected()
+                patched_grpc["channel"].close.assert_called_once()
+
+                replacement.responses.put(_make_arbitration_response(1, (1, 0)))
+                client.connect(timeout=2.0)
+                assert channel_factory.call_count == 2
+                assert client._channel is retry_channel
+            assert client.is_connected()
+        finally:
+            fail_timeout.set()
+            client.disconnect()
+
+
+def test_packet_handler_cannot_block_its_own_arbitration(patched_grpc: dict[str, Any]) -> None:
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    stream = patched_grpc["stream"]
+    errors: queue.Queue[ConnectionError] = queue.Queue()
+
+    def connect_from_handler(_payload: bytes, _metadata: dict[str, int]) -> None:
+        try:
+            client.connect()
+        except ConnectionError as error:
+            errors.put(error)
+
+    client.on_packet_in(connect_from_handler)
+    packet = p4runtime_pb2.StreamMessageResponse()
+    packet.packet.payload = b"test"
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        pending = worker.submit(client.connect, timeout=3.0)
+        try:
+            assert stream.read_started.wait(1.0)
+            stream.responses.put(packet)
+            assert "PacketIn handler" in str(errors.get(timeout=1.0))
+            stream.responses.put(_make_arbitration_response(1, (1, 0)))
+            pending.result(timeout=2.0)
+            patched_grpc["channel_factory"].assert_called_once()
+            assert client.is_connected()
+        finally:
+            client.disconnect()
 
 
 @pytest.mark.parametrize(
