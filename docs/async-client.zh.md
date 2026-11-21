@@ -86,6 +86,7 @@ sudo "$(command -v python)" async_demo.py
 | 单个计数器单元 | `CounterData`，含包数和字节数 | `int`，仅返回包数 |
 | 全部计数器单元 | `{索引: CounterData}` | `{索引: 包数}` |
 | PacketIn 处理器 | 普通函数，在接收线程中调用 | 异步函数，在事件循环中等待执行 |
+| `expect_packet_in()` | 阻塞等待调用后收到的第一条 PacketIn | 用 `await` 取出队列中最早的一条 PacketIn，队列为空时等待新报文 |
 
 异步客户端目前没有 `get_pipeline_config()`、`clear_table()`、`reset_counter()` 或组播组操作。完整签名见[控制平面 API](api/control.md)。
 

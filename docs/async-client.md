@@ -86,6 +86,7 @@ For a backup client that only reads, construct it with `election_id=(0, 0)`. Thi
 | One counter cell | `CounterData`, with packet and byte counts | `int`, containing only the packet count |
 | All counter cells | `{index: CounterData}` | `{index: packet_count}` |
 | PacketIn handlers | Regular functions, called on the receiver thread | Async functions, awaited on the event loop |
+| `expect_packet_in()` | Blocks for the first PacketIn received after the call | `await` returns the oldest queued PacketIn, or waits if the queue is empty |
 
 The async client currently has no `get_pipeline_config()`, `clear_table()`, `reset_counter()`, or multicast group operations. See the [control-plane API](api/control.md) for full signatures.
 
