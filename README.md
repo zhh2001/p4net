@@ -32,23 +32,9 @@ Follow the [installation guide](https://zhh2001.github.io/p4net/getting-started/
 
 ## Quick Start
 
-```python
-from pathlib import Path
-from p4net import Network
-from p4net.topo import Topology
+### Run the CLI example
 
-topo = Topology()
-h1 = topo.add_host("h1", ip="10.0.0.1/24", mac="00:00:00:00:00:01")
-h2 = topo.add_host("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
-s1 = topo.add_switch("s1", p4_src=Path("quick_start.p4"))
-topo.add_link(h1, s1, port_b=1)
-topo.add_link(h2, s1, port_b=2)
-
-with Network(topo) as net:
-    print(net.pingall())
-```
-
-A complete runnable version, including the matching `quick_start.p4` (a port-2-port swap that needs no runtime table programming) and a tiny static-ARP setup, lives in `examples/quick_start/`. After installing the CLI, clone the repository and run the example to open the interactive shell.
+After installing the CLI, clone the repository and start the two-host example.
 
 ```sh
 git clone https://github.com/zhh2001/p4net.git
@@ -56,7 +42,41 @@ cd p4net
 sudo p4net examples/quick_start/quick_start.py
 ```
 
-The console script loads a Python file that defines a module-level `topology: Topology` and optionally `setup(net)`. The [example README](https://github.com/zhh2001/p4net/blob/main/examples/quick_start/README.md#as-a-self-contained-script) also shows how to run the file directly with Python.
+At the `p4net>` prompt, run `pingall`. It reports `2/2 succeeded`. Enter `exit` to stop the network.
+
+The CLI loads the module-level `topology` and calls `setup(net)` if the file defines it. The [example README](https://github.com/zhh2001/p4net/blob/main/examples/quick_start/README.md#as-a-self-contained-script) also shows how to run the bundled example directly with Python.
+
+### Use the Python API
+
+Save this as `demo.py` in the repository root. The bundled P4 program forwards frames between switch ports 1 and 2.
+
+```python
+from pathlib import Path
+
+from p4net import Network
+from p4net.topo import Topology
+
+p4_src = Path(__file__).resolve().parent / "examples" / "quick_start" / "quick_start.p4"
+topo = Topology()
+h1 = topo.add_host("h1", ip="10.0.0.1/24", mac="00:00:00:00:00:01")
+h2 = topo.add_host("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
+s1 = topo.add_switch("s1", p4_src=p4_src)
+topo.add_link(h1, s1, port_b=1)
+topo.add_link(h2, s1, port_b=2)
+
+with Network(topo) as net:
+    print(net.pingall())
+```
+
+From the repository root, install p4net into a virtual environment and run the script.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install p4net
+sudo .venv/bin/python demo.py
+```
+
+The script prints `{('h1', 'h2'): True, ('h2', 'h1'): True}` and stops the network.
 
 ## Examples
 
