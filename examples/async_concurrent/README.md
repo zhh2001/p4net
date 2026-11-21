@@ -78,6 +78,8 @@ The full source is in [`topology.py`](topology.py).
 
 ## Run it
 
+From the repository root, start the topology.
+
 ```sh
 sudo p4net examples/async_concurrent/topology.py
 ```
@@ -91,14 +93,16 @@ this.
 async setup: 9 table entries installed concurrently in 4.04 ms
 ```
 
-Then in the `p4net>` shell:
+At the `p4net>` prompt, run `pingall`.
 
-```
+```text
 pingall
 ```
 
 The matrix reports `6/6 succeeded`, covering both directions between
 each pair of hosts.
+
+Enter `exit` at the `p4net>` prompt to stop the topology.
 
 ## Timing the inserts
 
