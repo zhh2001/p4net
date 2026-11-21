@@ -548,6 +548,13 @@ class P4RuntimeClient:
         if self._stub is not stub or not self.is_connected():
             raise ConnectionError(f"Connection to {self.target!r} closed during {operation}")
 
+    def _require_same_indexed_context(
+        self, stub: Any, index: P4InfoIndex, *, operation: str
+    ) -> None:
+        self._require_same_connection(stub, operation=f"a {operation}")
+        if self._index is not index:
+            raise P4RuntimeError(f"P4Info changed during {operation}")
+
     def _read_pipeline_config(self, stub: Any, *, response_type: str, timeout: float) -> Any:
         req = p4runtime_pb2.GetForwardingPipelineConfigRequest()
         req.device_id = self._device_id
@@ -661,7 +668,7 @@ class P4RuntimeClient:
         update_type: str,
         timeout: float,
     ) -> None:
-        stub, index = self._table_context()
+        stub, index = self._indexed_context()
         table_id = index.table_id(table)
         requires_priority = index.table_requires_priority(table)
         if requires_priority and priority is None:
@@ -698,7 +705,7 @@ class P4RuntimeClient:
         req.election_id.low = self._election_id_low
         req.updates.add().CopyFrom(update)
 
-        self._write_table_request(stub, index, req, timeout=timeout)
+        self._write_indexed_request(stub, index, req, timeout=timeout, operation="table write")
         logger.debug(
             "P4Runtime %s table_entry table=%s match=%s action=%s",
             update_type,
@@ -707,18 +714,16 @@ class P4RuntimeClient:
             action,
         )
 
-    def _table_context(self) -> tuple[Any, P4InfoIndex]:
+    def _indexed_context(self) -> tuple[Any, P4InfoIndex]:
         with self._teardown_lock:
             self._require_connected()
             return self._stub, self.index
 
-    def _write_table_request(
-        self, stub: Any, index: P4InfoIndex, req: Any, *, timeout: float
+    def _write_indexed_request(
+        self, stub: Any, index: P4InfoIndex, req: Any, *, timeout: float, operation: str
     ) -> None:
         with self._teardown_lock:
-            self._require_same_connection(stub, operation="a table write")
-            if self._index is not index:
-                raise P4RuntimeError("P4Info changed during table write preparation")
+            self._require_same_indexed_context(stub, index, operation=operation)
         try:
             stub.Write(req, timeout=timeout)
         except grpc.RpcError as exc:
@@ -726,7 +731,7 @@ class P4RuntimeClient:
         except ValueError:
             # gRPC can report a closed channel if teardown wins after the check.
             with self._teardown_lock:
-                self._require_same_connection(stub, operation="a table write")
+                self._require_same_connection(stub, operation=f"a {operation}")
             raise
 
     def list_table_entries(
@@ -744,7 +749,7 @@ class P4RuntimeClient:
         ``modify_table_entry``, and ``delete_table_entry`` because
         ``encode_value`` accepts shorter ``bytes`` inputs.
         """
-        stub, index = self._table_context()
+        stub, index = self._indexed_context()
         return self._read_table_entries(stub, index, table, timeout=timeout)
 
     def _read_table_entries(
@@ -779,7 +784,7 @@ class P4RuntimeClient:
 
         Return the number of deleted entries.
         """
-        stub, index = self._table_context()
+        stub, index = self._indexed_context()
         entries = self._read_table_entries(stub, index, table, timeout=timeout)
         if not entries:
             return 0
@@ -803,7 +808,7 @@ class P4RuntimeClient:
             update = req.updates.add()
             update.type = p4runtime_pb2.Update.Type.Value("DELETE")
             update.entity.table_entry.CopyFrom(te)
-        self._write_table_request(stub, index, req, timeout=timeout)
+        self._write_indexed_request(stub, index, req, timeout=timeout, operation="table write")
         return len(entries)
 
     def _decode_table_entry(
@@ -863,19 +868,31 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> CounterData | dict[int, CounterData]:
-        """Read one or all populated cells of an indirect counter."""
-        self._require_connected_with_index()
-        idx = self._index
-        assert idx is not None
-        counter_id = idx.counter_id(counter)
+        """Read one or all populated cells of an indirect counter.
+
+        The read uses the connection and P4Info selected at the start of the call.
+        """
+        stub, p4info = self._indexed_context()
+        counter_id = p4info.counter_id(counter)
+        cell = int(index) if index is not None else None
+        collected = self._read_counter_cells(stub, p4info, counter_id, cell, timeout=timeout)
+        if cell is not None:
+            return collected.get(cell, CounterData(0, 0))
+        return collected
+
+    def _read_counter_cells(
+        self, stub: Any, p4info: P4InfoIndex, counter_id: int, cell: int | None, *, timeout: float
+    ) -> dict[int, CounterData]:
         req = p4runtime_pb2.ReadRequest()
         req.device_id = self._device_id
         entity = req.entities.add()
         entity.counter_entry.counter_id = counter_id
-        if index is not None:
-            entity.counter_entry.index.index = int(index)
+        if cell is not None:
+            entity.counter_entry.index.index = cell
+        with self._teardown_lock:
+            self._require_same_indexed_context(stub, p4info, operation="counter read")
         try:
-            response_iter = self._stub.Read(req, timeout=timeout)
+            response_iter = stub.Read(req, timeout=timeout)
             collected: dict[int, CounterData] = {}
             for resp in response_iter:
                 for ent in resp.entities:
@@ -889,8 +906,12 @@ class P4RuntimeClient:
                     )
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc) from exc
-        if index is not None:
-            return collected.get(int(index), CounterData(0, 0))
+        except ValueError:
+            with self._teardown_lock:
+                self._require_same_connection(stub, operation="a counter read")
+            raise
+        with self._teardown_lock:
+            self._require_same_indexed_context(stub, p4info, operation="counter read")
         return collected
 
     def reset_counter(
@@ -903,16 +924,14 @@ class P4RuntimeClient:
         """Request zero values for one indirect counter cell or all returned cells.
 
         BMv2 applies the reset to the fields selected by the P4Info counter unit.
+        A batch reset reads and writes through the same connection.
         """
-        self._require_connected_with_index()
-        idx = self._index
-        assert idx is not None
-        counter_id = idx.counter_id(counter)
+        stub, p4info = self._indexed_context()
+        counter_id = p4info.counter_id(counter)
         targets: list[int]
         if index is None:
-            current = self.read_counter(counter, timeout=timeout)
-            assert isinstance(current, dict)
-            targets = sorted(current.keys())
+            current = self._read_counter_cells(stub, p4info, counter_id, None, timeout=timeout)
+            targets = sorted(current)
             if not targets:
                 return
         else:
@@ -931,10 +950,7 @@ class P4RuntimeClient:
             ce.index.index = int(cell_idx)
             ce.data.packet_count = 0
             ce.data.byte_count = 0
-        try:
-            self._stub.Write(req, timeout=timeout)
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
+        self._write_indexed_request(stub, p4info, req, timeout=timeout, operation="counter reset")
 
     # Registers ----------------------------------------------------------
 

@@ -1585,6 +1585,119 @@ def test_reset_counter_single_index_writes_zero(
         client.disconnect()
 
 
+@pytest.mark.parametrize("change", ["reconnect", "p4info"])
+@pytest.mark.parametrize(
+    ("operation", "pause_at_read"),
+    [
+        ("read", False),
+        ("read", True),
+        ("reset-cell", False),
+        ("reset-all", False),
+        ("reset-all", True),
+    ],
+)
+def test_counter_operations_keep_their_connection_and_p4info(
+    connected_client_with_counter: tuple[P4RuntimeClient, dict[str, Any]],
+    tmp_path: Path,
+    mocker: MockerFixture,
+    change: str,
+    operation: str,
+    pause_at_read: bool,
+) -> None:
+    client, mocks = connected_client_with_counter
+    initial_stub = current_stub = mocks["stub"]
+    counter = "MyIngress.ingress_pkts"
+    original_id = 3001
+    active_id = original_id
+    started, release = threading.Event(), threading.Event()
+
+    def response(counter_id: int) -> Iterator[Any]:
+        reply = p4runtime_pb2.ReadResponse()
+        for cell in (7, 4):
+            entry = reply.entities.add().counter_entry
+            entry.counter_id = counter_id
+            entry.index.index = cell
+            entry.data.packet_count = 13
+        return iter([reply])
+
+    def read_response(_request: Any, *, timeout: float) -> Iterator[Any]:
+        if pause_at_read:
+            started.set()
+            assert release.wait(timeout=3.0)
+        return response(original_id)
+
+    initial_stub.Read.side_effect = read_response
+    if not pause_at_read:
+        index = client.index
+        lookup = index.counter_id
+
+        def hold_lookup(name: str) -> int:
+            started.set()
+            assert release.wait(timeout=3.0)
+            return lookup(name)
+
+        mocker.patch.object(index, "counter_id", side_effect=hold_lookup)
+
+    def run() -> None:
+        if operation == "read":
+            client.read_counter(counter, 4)
+        else:
+            client.reset_counter(counter, 4 if operation == "reset-cell" else None)
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            pending = worker.submit(run)
+            assert started.wait(timeout=1.0)
+            if change == "reconnect":
+                client.disconnect()
+                stream = FakeStreamCall()
+
+                def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+                    stream.attach_request_iter(requests)
+                    return stream
+
+                current_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+                current_stub.Read.return_value = response(original_id)
+                mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
+                mocks["stub_factory"].return_value = current_stub
+                stream.responses.put(_make_arbitration_response(0, (1, 0)))
+                client.connect(timeout=1.0)
+            else:
+                active_id = 4001
+                p4info = _build_p4info_with_counter()
+                p4info.counters[0].preamble.id = active_id
+                p4info_path, json_path = tmp_path / "updated.txtpb", tmp_path / "updated.json"
+                p4info_path.write_text(str(p4info))
+                json_path.write_text("{}")
+                client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+            release.set()
+
+            error = ConnectionError if change == "reconnect" else P4RuntimeError
+            message = "closed during a counter" if change == "reconnect" else "P4Info changed"
+            with pytest.raises(error, match=message):
+                pending.result(timeout=1.0)
+            assert initial_stub.Read.call_count == int(pause_at_read)
+            initial_stub.Write.assert_not_called()
+            if change == "reconnect":
+                current_stub.Read.assert_not_called()
+                current_stub.Write.assert_not_called()
+
+            current_stub.Read.side_effect = None
+            current_stub.Read.return_value = response(active_id)
+            client.reset_counter(counter)
+            read = current_stub.Read.call_args.args[0]
+            assert read.entities[0].counter_entry.counter_id == active_id
+            current_stub.Write.assert_called_once()
+            updates = current_stub.Write.call_args.args[0].updates
+            assert [
+                (item.entity.counter_entry.counter_id, item.entity.counter_entry.index.index)
+                for item in updates
+            ] == [(active_id, 4), (active_id, 7)]
+        finally:
+            release.set()
+            client.disconnect()
+
+
 # ---------------------------------------------------------------------------
 # Multicast
 # ---------------------------------------------------------------------------
