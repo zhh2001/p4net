@@ -44,8 +44,8 @@ class VethPair:
     """A veth pair with explicit lifecycle and per-side namespace tracking.
 
     ``namespace_a`` and ``namespace_b`` select the endpoint namespaces at
-    creation. ``None`` selects root. Names may repeat across distinct
-    namespaces; the default creates both ends in root.
+    creation. An endpoint configured with ``None`` stays in the caller's
+    network namespace. Interface names may repeat across distinct namespaces.
     """
 
     def __init__(
@@ -83,7 +83,11 @@ class VethPair:
         return self._names[side]
 
     def namespace_of(self, side: Side) -> NetworkNamespace | None:
-        """Return the current namespace, or ``None`` for root or absent endpoints."""
+        """Return the tracked `NetworkNamespace` for ``side``.
+
+        ``None`` covers absent endpoints, endpoints created in the caller's
+        network namespace, and endpoints moved to PID 1's network namespace.
+        """
         _validate_side(side)
         return self._ns[side]
 
@@ -210,7 +214,10 @@ class VethPair:
         logger.debug("destroyed veth pair %r <-> %r", self._names["a"], self._names["b"])
 
     def move_to_namespace(self, side: Side, ns: NetworkNamespace | None) -> None:
-        """Move ``side`` of the pair into ``ns`` (or back to root if ``None``)."""
+        """Move ``side`` of the pair into ``ns``.
+
+        Passing ``None`` moves the endpoint into PID 1's network namespace.
+        """
         _validate_side(side)
         ifname = self._names[side]
         with self._netlink_for(side) as ipr:

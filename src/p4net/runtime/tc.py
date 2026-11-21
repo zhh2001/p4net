@@ -53,8 +53,9 @@ def apply_netem(
     jitter: str | None = None,
     loss_pct: float | None = None,
 ) -> None:
-    """Apply a netem root qdisc to `iface` inside `ns` (or root if ns is None).
+    """Apply a netem root qdisc to `iface` in `ns`.
 
+    Pass `None` as `ns` to use the caller's network namespace.
     Uses `tc qdisc replace` so calling this function repeatedly is safe.
     At least one of `rate`, `delay`, `jitter`, `loss_pct` must be set.
     `jitter` requires `delay`.
@@ -100,7 +101,11 @@ def apply_netem(
 
 
 def clear_qdisc(ns: NetworkNamespace | None, iface: str) -> None:
-    """Remove the root qdisc on `iface`. Idempotent: no-op if none is set."""
+    """Remove the root qdisc on `iface` in `ns`.
+
+    Pass `None` as `ns` to use the caller's network namespace. Repeated
+    calls are safe.
+    """
     argv = ["tc", "qdisc", "del", "dev", iface, "root"]
     result = _run(ns, argv)
     if result.returncode == 0:

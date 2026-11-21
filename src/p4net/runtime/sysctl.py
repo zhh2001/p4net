@@ -1,12 +1,7 @@
-"""Per-interface sysctl helpers for IPv6 gating.
+"""Configure per-interface IPv6 settings with `sysctl`.
 
-These functions toggle ``net.ipv6.conf.<iface>.{disable_ipv6,accept_ra,
-autoconf}`` inside a target namespace (or the root namespace if ``ns`` is
-``None``). They run ``sysctl -w`` via ``ns.exec``, which inherits the same
-``ip netns exec`` path used elsewhere in the runtime.
-
-These are NOT methods on :class:`NetworkNamespace` because they target a
-specific interface within a namespace, not the namespace itself.
+Pass a `NetworkNamespace` to apply settings in that namespace or `None`
+to use the caller's network namespace.
 """
 
 from __future__ import annotations
@@ -40,8 +35,8 @@ def _set_one(ns: NetworkNamespace | None, key: str, value: str) -> None:
 def disable_ipv6(ns: NetworkNamespace | None, iface: str) -> None:
     """Set ``net.ipv6.conf.<iface>.disable_ipv6=1`` inside ``ns``.
 
-    Idempotent — sysctl ``-w`` to an already-set value is harmless. Pass
-    ``ns=None`` to target the root namespace.
+    Repeated calls are safe. Pass ``None`` as ``ns`` to use the caller's
+    network namespace.
     """
     _set_one(ns, f"net.ipv6.conf.{iface}.disable_ipv6", "1")
     logger.debug("disabled IPv6 on %r in ns=%r", iface, ns.name if ns else "<root>")
@@ -56,6 +51,7 @@ def enable_ipv6(
 ) -> None:
     """Set ``disable_ipv6=0`` plus ``accept_ra`` and ``autoconf`` on ``iface``.
 
+    Pass ``None`` as ``ns`` to use the caller's network namespace.
     By default, the interface ignores router advertisements and disables
     address autoconfiguration from advertised prefixes. The kernel can
     still generate a link-local address according to ``addr_gen_mode``.
