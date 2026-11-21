@@ -491,7 +491,7 @@ class P4RuntimeClient:
             if self._stub is not stub or not self.is_connected():
                 raise ConnectionError(connection_closed)
         try:
-            config = self._read_pipeline_config(
+            response = self._read_pipeline_config(
                 stub, response_type="P4INFO_AND_COOKIE", timeout=timeout
             )
         except grpc.RpcError as exc:
@@ -505,10 +505,14 @@ class P4RuntimeClient:
         with self._teardown_lock:
             if self._stub is not stub or not self.is_connected():
                 raise ConnectionError(connection_closed)
-            self._index = _index_after_commit(config, previous)
+            self._index = _index_after_commit(response.config, previous)
 
     def get_pipeline_config(self, *, timeout: float = 10.0) -> tuple[bytes, P4InfoIndex]:
-        """Read the current pipeline back from the device."""
+        """Read the current pipeline back from the device.
+
+        A response without P4Info clears the cached index and raises
+        ``P4RuntimeError``. The device configuration bytes may be empty.
+        """
         with self._teardown_lock:
             self._require_connected()
             stub = self._stub
@@ -516,11 +520,21 @@ class P4RuntimeClient:
             with self._teardown_lock:
                 self._require_pipeline_connection(stub)
             try:
-                config = self._read_pipeline_config(stub, response_type="ALL", timeout=timeout)
+                response = self._read_pipeline_config(stub, response_type="ALL", timeout=timeout)
             except grpc.RpcError as exc:
                 raise self._translate_rpc_error(exc) from exc
             with self._teardown_lock:
                 self._require_pipeline_connection(stub)
+                config = response.config
+                if not config.HasField("p4info"):
+                    self._index = None
+                    if not response.HasField("config"):
+                        raise P4RuntimeError(
+                            f"Device {self.target!r} returned no forwarding pipeline configuration"
+                        )
+                    raise P4RuntimeError(
+                        f"Device {self.target!r} returned no P4Info for its pipeline"
+                    )
                 index = P4InfoIndex(config.p4info)
                 self._index = index
         return config.p4_device_config, index
@@ -537,7 +551,7 @@ class P4RuntimeClient:
         req.response_type = p4runtime_pb2.GetForwardingPipelineConfigRequest.ResponseType.Value(
             response_type
         )
-        return stub.GetForwardingPipelineConfig(req, timeout=timeout).config
+        return stub.GetForwardingPipelineConfig(req, timeout=timeout)
 
     # Table CRUD ---------------------------------------------------------
 

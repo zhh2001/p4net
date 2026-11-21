@@ -835,6 +835,52 @@ def test_set_pipeline_config_builds_request(
         client.disconnect()
 
 
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("has_config", [False, True])
+def test_get_pipeline_config_rejects_a_response_without_p4info(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    cached: bool,
+    has_config: bool,
+) -> None:
+    client, grpc_mocks, p4info_path, json_path = connected_client
+    response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    if has_config:
+        response.config.p4_device_config = b"{}"
+    grpc_mocks["stub"].GetForwardingPipelineConfig.return_value = response
+    try:
+        if cached:
+            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+            assert "MyIngress.ipv4_lpm" in client.index.table_names
+
+        message = (
+            "returned no P4Info" if has_config else "returned no forwarding pipeline configuration"
+        )
+        with pytest.raises(P4RuntimeError, match=message):
+            client.get_pipeline_config()
+        with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+            _ = client.index
+        assert client.is_connected()
+    finally:
+        client.disconnect()
+
+
+def test_get_pipeline_config_accepts_p4info_without_tables_or_device_config(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client, grpc_mocks, _, _ = connected_client
+    response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    response.config.p4info.pkg_info.name = "tableless"
+    grpc_mocks["stub"].GetForwardingPipelineConfig.return_value = response
+    try:
+        config, index = client.get_pipeline_config()
+        assert config == b""
+        assert client.index is index
+        assert index.raw.pkg_info.name == "tableless"
+        assert index.table_names == []
+    finally:
+        client.disconnect()
+
+
 @pytest.mark.parametrize("installed", [False, True])
 def test_verify_pipeline_keeps_the_current_index(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], installed: bool
