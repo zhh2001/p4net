@@ -4,9 +4,13 @@ description: Nine runnable p4net topologies covering forwarding, per-direction l
 
 # Examples
 
-The repository's `examples/` directory contains nine runnable topologies. [Install the external tools](../getting-started/installation.md#required-external-tools) and [install the CLI with pipx](../getting-started/installation.md#install-cli). Then run the quick-start example from the repository root.
+The repository's `examples/` directory contains nine runnable topologies. [Install the external tools](../getting-started/installation.md#required-external-tools) and [install the CLI with pipx](../getting-started/installation.md#install-cli).
+
+For a new checkout, use the commands below. If you already have the repository, run the last command from its root.
 
 ```sh
+git clone https://github.com/zhh2001/p4net.git
+cd p4net
 sudo p4net examples/quick_start/quick_start.py
 ```
 
