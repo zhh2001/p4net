@@ -140,11 +140,17 @@ def patched_grpc(mocker: MockerFixture) -> dict[str, Any]:
 
     stub.StreamChannel = MagicMock(side_effect=stream_channel)
     channel_factory = mocker.patch("p4net.control.client.grpc.insecure_channel", return_value=chan)
-    mocker.patch(
+    stub_factory = mocker.patch(
         "p4net.control.client.p4runtime_pb2_grpc.P4RuntimeStub",
         return_value=stub,
     )
-    return {"channel": chan, "channel_factory": channel_factory, "stub": stub, "stream": stream}
+    return {
+        "channel": chan,
+        "channel_factory": channel_factory,
+        "stub": stub,
+        "stub_factory": stub_factory,
+        "stream": stream,
+    }
 
 
 def _grpc_error(code: grpc.StatusCode, detail: str = "") -> grpc.RpcError:
@@ -187,6 +193,61 @@ def test_connect_sends_arbitration_and_succeeds(
         assert sent.arbitration.device_id == 7
         assert sent.arbitration.election_id.high == 10
         assert sent.arbitration.election_id.low == 5
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("step", ["stub", "stream"])
+def test_connect_initialization_failure_closes_channel_and_allows_retry(
+    patched_grpc: dict[str, Any], step: str
+) -> None:
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    failed_channel = patched_grpc["channel"]
+    retry_channel = MagicMock(name="retry-channel")
+    patched_grpc["channel_factory"].side_effect = [failed_channel, retry_channel]
+    failing_call = (
+        patched_grpc["stub_factory"] if step == "stub" else patched_grpc["stub"].StreamChannel
+    )
+    original_side_effect = failing_call.side_effect
+    failure = RuntimeError(f"{step} initialization failed")
+    failing_call.side_effect = failure
+
+    try:
+        with pytest.raises(RuntimeError) as raised, client:
+            pytest.fail("connection unexpectedly succeeded")
+        assert raised.value is failure
+        failed_channel.close.assert_called_once()
+        assert client._channel is None
+        assert client._stream_thread is None
+        assert not client.is_connected()
+
+        failing_call.side_effect = original_side_effect
+        patched_grpc["stream"].responses.put(_make_arbitration_response(1, (1, 0)))
+        with client:
+            assert client.is_connected()
+        retry_channel.close.assert_called_once()
+        failed_channel.close.assert_called_once()
+    finally:
+        client.disconnect()
+
+
+def test_connect_invalid_arbitration_request_releases_resources(
+    patched_grpc: dict[str, Any],
+) -> None:
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=-1)
+    consumers: list[threading.Thread | None] = []
+    patched_grpc["channel"].close.side_effect = lambda: consumers.append(client._stream_thread)
+    try:
+        with pytest.raises(ValueError, match="out of range"):
+            client.connect()
+        assert not client.is_connected()
+        assert patched_grpc["stream"]._cancelled
+        patched_grpc["channel"].close.assert_called_once()
+        assert client._channel is None
+        assert client._stream_thread is None
+        (consumer,) = consumers
+        assert consumer is not None
+        assert not consumer.is_alive()
     finally:
         client.disconnect()
 
@@ -256,8 +317,10 @@ def test_connect_raises_connection_error_on_unavailable(
     err = _grpc_error(grpc.StatusCode.UNAVAILABLE, "down")
     stub.StreamChannel = MagicMock(side_effect=err)
     client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
-    with pytest.raises(ConnectionError, match="unavailable"):
+    with pytest.raises(ConnectionError, match="unavailable") as raised:
         client.connect(timeout=1.0)
+    assert raised.value.__cause__ is err
+    patched_grpc["channel"].close.assert_called_once()
 
 
 def test_connect_arbitration_timeout(patched_grpc: dict[str, Any]) -> None:
