@@ -560,6 +560,137 @@ async def test_lifecycle_waits_for_stream_cleanup(
         await client.disconnect()
 
 
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_packet_handler_can_disconnect_during_cancellation(
+    patched_aio: dict[str, Any], delegated: bool
+) -> None:
+    client = await _connect(patched_aio)
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def handle(_payload: bytes, _metadata: dict[str, int]) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            if delegated:
+                await asyncio.wait_for(client.disconnect(), timeout=3.0)
+            else:
+                await client.disconnect()
+            cleaned_up.set()
+
+    await client.on_packet_in(handle)
+    closing = None
+    try:
+        await patched_aio["stream"].push_packet(b"packet")
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        closing = asyncio.create_task(client.disconnect())
+        await asyncio.wait_for(asyncio.shield(closing), timeout=0.5)
+        assert cleaned_up.is_set()
+        assert not client.is_connected
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_cancelled_disconnect_finishes_closing_the_channel(
+    patched_aio: dict[str, Any], mocker: MockerFixture
+) -> None:
+    client = await _connect(patched_aio)
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+
+    async def close() -> None:
+        close_started.set()
+        await release_close.wait()
+
+    patched_aio["channel"].close.side_effect = close
+    first = asyncio.create_task(client.disconnect())
+    second = None
+    try:
+        await asyncio.wait_for(close_started.wait(), timeout=1.0)
+        second = asyncio.create_task(client.disconnect())
+        for _ in range(2):
+            first.cancel()
+            await asyncio.sleep(0)
+        assert not first.done()
+        assert not second.done()
+        release_close.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await asyncio.wait_for(second, timeout=1.0)
+        assert not client.is_connected
+        patched_aio["channel"].close.assert_awaited_once()
+
+        retry_channel = MagicMock(name="retry-channel", close=AsyncMock(return_value=None))
+        mocker.patch(
+            "p4net.control.async_client.grpc.aio.insecure_channel", return_value=retry_channel
+        )
+        retry_stream = _FakeStream()
+        patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+        await retry_stream.push_arbitration()
+        await client.connect(timeout=1.0)
+        assert client.is_connected and client.is_primary
+        retry_channel.close.assert_not_awaited()
+    finally:
+        release_close.set()
+        await asyncio.gather(first, return_exceptions=True)
+        if second is not None:
+            await asyncio.gather(second, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_cancelled_handler_cleanup_does_not_close_a_reconnection(
+    patched_aio: dict[str, Any], mocker: MockerFixture
+) -> None:
+    client = await _connect(patched_aio)
+    handler_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    async def handle(_payload: bytes, _metadata: dict[str, int]) -> None:
+        handler_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await release_cleanup.wait()
+            await client.disconnect()
+
+    await client.on_packet_in(handle)
+    closing = None
+    try:
+        await patched_aio["stream"].push_packet(b"packet")
+        await asyncio.wait_for(handler_started.wait(), timeout=1.0)
+        closing = asyncio.create_task(client.disconnect())
+        await asyncio.sleep(0)
+        assert not client.is_connected
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1.0)
+
+        retry_channel = MagicMock(name="retry-channel", close=AsyncMock(return_value=None))
+        mocker.patch(
+            "p4net.control.async_client.grpc.aio.insecure_channel", return_value=retry_channel
+        )
+        retry_stream = _FakeStream()
+        patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+        await retry_stream.push_arbitration()
+        await asyncio.wait_for(client.connect(), timeout=0.5)
+        release_cleanup.set()
+        await asyncio.wait_for(closing, timeout=0.5)
+
+        assert client.is_connected and client.is_primary
+        assert client._channel is retry_channel
+        retry_channel.close.assert_not_awaited()
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        release_cleanup.set()
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("rpc_error", [True, False])
 async def test_stream_error_during_connect_preserves_cause(
     patched_aio: dict[str, Any], rpc_error: bool

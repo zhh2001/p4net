@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -49,6 +50,9 @@ _PIPELINE_ACTIONS: frozenset[str] = frozenset(
 )
 _PACKET_IN_QUEUE_CAPACITY = 256
 _PacketIn = tuple[bytes, dict[str, int]]
+_PACKET_IN_CALLBACK: ContextVar[tuple[AsyncP4RuntimeClient, Any] | None] = ContextVar(
+    "p4net_packet_in_callback", default=None
+)
 
 
 class _PacketInClosed(NamedTuple):
@@ -253,11 +257,23 @@ class AsyncP4RuntimeClient:
         )
 
     async def disconnect(self) -> None:
-        await self._teardown()
+        """Close the channel and release connection resources.
 
-    async def _teardown(self, *, expected_stream: Any = None) -> None:
+        In a PacketIn callback, close the stream that delivered the packet.
+        A cancellation during channel closure is propagated after cleanup.
+        """
+        callback = _PACKET_IN_CALLBACK.get()
+        if callback is not None and callback[0] is self:
+            await self._teardown(expected_stream=callback[1], from_packet_handler=True)
+        else:
+            await self._teardown(expected_stream=self._stream_call)
+
+    async def _teardown(
+        self, *, expected_stream: Any = None, from_packet_handler: bool = False
+    ) -> None:
+        caller = self._stream_task if from_packet_handler else asyncio.current_task()
         async with self._teardown_lock:
-            if expected_stream is not None and not self._stream_is_current(expected_stream):
+            if expected_stream is not None and expected_stream is not self._stream_call:
                 return
             self._closed = True
             was_connected = self._connected
@@ -284,23 +300,12 @@ class AsyncP4RuntimeClient:
                     self._stream_call.cancel()
                 except Exception as exc:
                     logger.debug("async stream cancel raised: %r", exc)
-            if (
-                self._stream_task is not None
-                and self._stream_task is not asyncio.current_task()
-                and not self._stream_task.done()
-            ):
-                self._stream_task.cancel()
-                try:
-                    await asyncio.shield(asyncio.wait_for(self._stream_task, timeout=2.0))
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-                except Exception as exc:
-                    logger.debug("async stream task awaited with: %r", exc)
-            if self._channel is not None:
-                try:
-                    await self._channel.close()
-                except Exception as exc:
-                    logger.debug("async channel close raised: %r", exc)
+            stream_task = self._stream_task
+            if stream_task is not None and stream_task is not caller and not stream_task.done():
+                stream_task.cancel()
+            else:
+                stream_task = None
+            cancelled = await self._close_channel()
             self._channel = None
             self._loop = None
             self._stub = None
@@ -309,6 +314,34 @@ class AsyncP4RuntimeClient:
             self._outgoing = None
             if was_connected:
                 logger.info("AsyncP4RuntimeClient %s disconnected", self.target)
+
+        if cancelled:
+            raise asyncio.CancelledError
+        # A callback may call disconnect from its cancellation handler.
+        # Wait for it only after releasing the lifecycle lock.
+        if stream_task is not None:
+            done, _ = await asyncio.wait((stream_task,), timeout=2.0)
+            if done and not stream_task.cancelled():
+                error = stream_task.exception()
+                if error is not None:
+                    logger.debug("async stream task awaited with: %r", error)
+
+    async def _close_channel(self) -> bool:
+        """Finish closing the channel and report whether the caller was cancelled."""
+        if self._channel is None:
+            return False
+        cancelled = False
+        try:
+            closing = asyncio.create_task(self._channel.close())
+            while not closing.done():
+                try:
+                    await asyncio.shield(closing)
+                except asyncio.CancelledError:
+                    cancelled = True
+            closing.result()
+        except Exception as exc:
+            logger.debug("async channel close raised: %r", exc)
+        return cancelled
 
     @staticmethod
     def _suppress_queue_full() -> Any:
@@ -372,13 +405,17 @@ class AsyncP4RuntimeClient:
         # Dispatch to async handlers.
         async with self._handlers_lock:
             handlers = list(self._packet_handlers)
-        for h in handlers:
-            if not self._stream_is_current(stream_call):
-                return
-            try:
-                await h(payload, meta)
-            except Exception as exc:
-                logger.warning("async packet_in handler %r raised: %r", h, exc)
+        token = _PACKET_IN_CALLBACK.set((self, stream_call))
+        try:
+            for h in handlers:
+                if not self._stream_is_current(stream_call):
+                    return
+                try:
+                    await h(payload, meta)
+                except Exception as exc:
+                    logger.warning("async packet_in handler %r raised: %r", h, exc)
+        finally:
+            _PACKET_IN_CALLBACK.reset(token)
 
     # ----------------------------------------------------------------- pipeline
 
