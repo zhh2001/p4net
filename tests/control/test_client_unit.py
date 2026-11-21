@@ -1794,6 +1794,93 @@ def test_add_multicast_group_rejects_zero_id(
 
 
 @pytest.mark.parametrize(
+    ("method", "args", "rpc", "pause"),
+    [
+        ("list_multicast_groups", (), "Read", "request"),
+        ("add_multicast_group", (7, [1, 2]), "Write", "request"),
+        ("modify_multicast_group", (7, [3]), "Write", "request"),
+        ("delete_multicast_group", (7,), "Write", "request"),
+        ("list_multicast_groups", (), "Read", "reply"),
+        ("list_multicast_groups", (), "Read", "closed-channel"),
+        ("add_multicast_group", (7, [1, 2]), "Write", "closed-channel"),
+    ],
+)
+def test_multicast_operations_keep_their_connection(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    mocker: MockerFixture,
+    method: str,
+    args: tuple[object, ...],
+    rpc: str,
+    pause: str,
+) -> None:
+    client, mocks, _, _ = connected_client
+    old_stub = mocks["stub"]
+    started, release = threading.Event(), threading.Event()
+
+    reply = p4runtime_pb2.ReadResponse()
+    group = reply.entities.add().packet_replication_engine_entry.multicast_group_entry
+    group.multicast_group_id = 7
+    group.replicas.add(egress_port=3, instance=1)
+
+    def wait_for_reconnect() -> None:
+        started.set()
+        assert release.wait(timeout=3.0)
+
+    if pause == "request":
+        name = f"{rpc}Request"
+        make_request = getattr(p4runtime_pb2, name)
+
+        def hold_request() -> Any:
+            wait_for_reconnect()
+            return make_request()
+
+        mocker.patch.object(p4runtime_pb2, name, side_effect=hold_request)
+    else:
+
+        def hold_rpc(_request: Any, *, timeout: float) -> Iterator[Any]:
+            wait_for_reconnect()
+            if pause == "closed-channel":
+                raise ValueError("Cannot invoke RPC on closed channel!")
+            return iter([reply])
+
+        getattr(old_stub, rpc).side_effect = hold_rpc
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            operation = getattr(client, method)
+            pending = worker.submit(operation, *args)
+            assert started.wait(timeout=1.0)
+            client.disconnect()
+            stream = FakeStreamCall()
+            stream.responses.put(_make_arbitration_response(0, (1, 0)))
+
+            def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+                stream.attach_request_iter(requests)
+                return stream
+
+            replacement = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+            replacement.Read.return_value = iter([reply])
+            mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
+            mocks["stub_factory"].return_value = replacement
+            client.connect(timeout=1.0)
+            release.set()
+
+            with pytest.raises(ConnectionError, match="closed during a multicast"):
+                pending.result(timeout=1.0)
+            assert getattr(old_stub, rpc).call_count == int(pause != "request")
+            replacement.Read.assert_not_called()
+            replacement.Write.assert_not_called()
+
+            result = operation(*args)
+            getattr(replacement, rpc).assert_called_once()
+            if rpc == "Read":
+                assert result == {7: [3]}
+        finally:
+            release.set()
+            client.disconnect()
+
+
+@pytest.mark.parametrize(
     ("match_type", "value"),
     [
         (p4info_pb2.MatchField.OPTIONAL, "10.0.0.1"),

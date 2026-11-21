@@ -1113,7 +1113,10 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> None:
-        """Create a multicast group with one replica per port (instance=1)."""
+        """Create a multicast group with one replica per port (instance=1).
+
+        Raises ``ConnectionError`` if the connection closes during request preparation.
+        """
         self._mcast_write(group_id, ports, update_type="INSERT", timeout=timeout)
 
     def modify_multicast_group(
@@ -1123,7 +1126,10 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> None:
-        """Replace the replica list of an existing multicast group."""
+        """Replace the replica list of an existing multicast group.
+
+        Raises ``ConnectionError`` if the connection closes during request preparation.
+        """
         self._mcast_write(group_id, ports, update_type="MODIFY", timeout=timeout)
 
     def delete_multicast_group(
@@ -1132,7 +1138,10 @@ class P4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> None:
-        """Delete a multicast group."""
+        """Delete a multicast group.
+
+        Raises ``ConnectionError`` if the connection closes during request preparation.
+        """
         self._mcast_write(group_id, ports=(), update_type="DELETE", timeout=timeout)
 
     def _mcast_write(
@@ -1143,7 +1152,9 @@ class P4RuntimeClient:
         update_type: str,
         timeout: float,
     ) -> None:
-        self._require_connected()
+        with self._teardown_lock:
+            self._require_connected()
+            stub = self._stub
         if group_id <= 0:
             raise EncodingError(f"multicast group_id must be positive, got {group_id}")
         req = p4runtime_pb2.WriteRequest()
@@ -1161,10 +1172,16 @@ class P4RuntimeClient:
                 replica = mge.replicas.add()
                 replica.egress_port = int(port)
                 replica.instance = 1
+        with self._teardown_lock:
+            self._require_same_connection(stub, operation="a multicast write")
         try:
-            self._stub.Write(req, timeout=timeout)
+            stub.Write(req, timeout=timeout)
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc) from exc
+        except ValueError:
+            with self._teardown_lock:
+                self._require_same_connection(stub, operation="a multicast write")
+            raise
 
     def list_multicast_groups(self, *, timeout: float = 5.0) -> dict[int, list[int]]:
         """Return ``{group_id: [egress_port, ...]}``.
@@ -1173,14 +1190,20 @@ class P4RuntimeClient:
         per replica regardless of its instance value (we always write
         instance=1 ourselves; foreign instance values are still listed but
         not exposed in this dict shape).
+
+        Raises ``ConnectionError`` if the connection closes during the read.
         """
-        self._require_connected()
+        with self._teardown_lock:
+            self._require_connected()
+            stub = self._stub
         req = p4runtime_pb2.ReadRequest()
         req.device_id = self._device_id
         entity = req.entities.add()
         entity.packet_replication_engine_entry.multicast_group_entry.multicast_group_id = 0
+        with self._teardown_lock:
+            self._require_same_connection(stub, operation="a multicast read")
         try:
-            response_iter = self._stub.Read(req, timeout=timeout)
+            response_iter = stub.Read(req, timeout=timeout)
             groups: dict[int, list[int]] = {}
             for resp in response_iter:
                 for ent in resp.entities:
@@ -1191,9 +1214,15 @@ class P4RuntimeClient:
                         continue
                     mge = pre.multicast_group_entry
                     groups[int(mge.multicast_group_id)] = [int(r.egress_port) for r in mge.replicas]
-            return groups
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc) from exc
+        except ValueError:
+            with self._teardown_lock:
+                self._require_same_connection(stub, operation="a multicast read")
+            raise
+        with self._teardown_lock:
+            self._require_same_connection(stub, operation="a multicast read")
+        return groups
 
     # Controller packet I/O ---------------------------------------------
 
