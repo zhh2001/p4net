@@ -68,6 +68,7 @@ The console script loads a Python file that defines a module-level `topology: To
 - [`examples/ipv6_lpm/`](https://github.com/zhh2001/p4net/tree/main/examples/ipv6_lpm) — runtime-programmed IPv6 LPM forwarding.
 - [`examples/int/`](https://github.com/zhh2001/p4net/tree/main/examples/int) — single-switch in-band network telemetry: the pipeline inserts a 14-byte INT shim into every forwarded packet; a raw-socket listener decodes it on the receiver.
 - [`examples/int_multi_hop/`](https://github.com/zhh2001/p4net/tree/main/examples/int_multi_hop) — multi-hop INT on a two-switch linear path; the listener decodes the full hop-by-hop stack. Production-style telemetry topology.
+- [`examples/async_concurrent/`](https://github.com/zhh2001/p4net/tree/main/examples/async_concurrent) — three-switch mesh with IPv4 forwarding entries installed concurrently using `AsyncP4RuntimeClient`.
 
 ## Documentation
 
