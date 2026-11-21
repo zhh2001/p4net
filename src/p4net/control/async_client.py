@@ -21,7 +21,7 @@ import subprocess
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import grpc
 from google.protobuf import text_format
@@ -48,6 +48,11 @@ _PIPELINE_ACTIONS: frozenset[str] = frozenset(
     {"VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"}
 )
 _PACKET_IN_QUEUE_CAPACITY = 256
+_PacketIn = tuple[bytes, dict[str, int]]
+
+
+class _PacketInClosed(NamedTuple):
+    cause: BaseException | None
 
 
 def _parse_register_read_single(output: str, name: str, index: int) -> int:
@@ -115,7 +120,7 @@ class AsyncP4RuntimeClient:
         self._arbitration_event: asyncio.Event | None = None
         self._arbitration: Any = None
         self._stream_error: BaseException | None = None
-        self._packet_in_queue: asyncio.Queue[tuple[bytes, dict[str, int]]] | None = None
+        self._packet_in_queue: asyncio.Queue[_PacketIn | _PacketInClosed] | None = None
         self._packet_handlers: list[Callable[[bytes, dict[str, int]], Awaitable[None]]] = []
         self._handlers_lock = asyncio.Lock()
         self._teardown_lock = asyncio.Lock()
@@ -245,6 +250,12 @@ class AsyncP4RuntimeClient:
                     )
                 if self._arbitration_event is not None:
                     self._arbitration_event.set()
+            queue = self._packet_in_queue
+            self._packet_in_queue = None
+            if queue is not None:
+                while not queue.empty():
+                    queue.get_nowait()
+                queue.put_nowait(_PacketInClosed(self._stream_error))
             if self._outgoing is not None:
                 with self._suppress_queue_full():
                     self._outgoing.put_nowait(None)  # sentinel
@@ -276,7 +287,6 @@ class AsyncP4RuntimeClient:
             self._stream_call = None
             self._stream_task = None
             self._outgoing = None
-            self._packet_in_queue = None
             if was_connected:
                 logger.info("AsyncP4RuntimeClient %s disconnected", self.target)
 
@@ -751,14 +761,26 @@ class AsyncP4RuntimeClient:
         The queue holds up to 256 packets per connection. When it is full,
         new packets go only to registered handlers.
 
-        Raises P4RuntimeError on timeout.
+        Raises ConnectionError if the connection closes during the wait,
+        or P4RuntimeError on timeout.
         """
         self._require_connected()
-        q = self._packet_in_queue
-        if q is None:
+        queue = self._packet_in_queue
+        if queue is None:
             raise ConnectionError("packet_in queue is not initialised")
+
+        async def receive() -> tuple[bytes, dict[str, int]]:
+            packet = await queue.get()
+            if isinstance(packet, _PacketInClosed):
+                # Pass the close marker to the next reader before raising.
+                queue.put_nowait(packet)
+                raise ConnectionError(
+                    f"Connection to {self.target!r} closed while waiting for PacketIn"
+                ) from packet.cause
+            return packet
+
         try:
-            return await asyncio.wait_for(q.get(), timeout=timeout)
+            return await asyncio.wait_for(receive(), timeout=timeout)
         except asyncio.TimeoutError as exc:
             raise P4RuntimeError(f"no PacketIn within {timeout}s on {self.target!r}") from exc
         except asyncio.CancelledError as exc:

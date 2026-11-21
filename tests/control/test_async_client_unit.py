@@ -1146,6 +1146,80 @@ async def test_expect_packet_in_timeout(patched_aio: dict[str, Any]) -> None:
         await client.disconnect()
 
 
+@pytest.mark.parametrize("ending", ["disconnect", "eof", "rpc-error"])
+async def test_connection_close_wakes_packet_in_waiters(
+    patched_aio: dict[str, Any], ending: str
+) -> None:
+    client = await _connect(patched_aio)
+    stream_task = client._stream_task
+    assert stream_task is not None
+    waiters = [asyncio.create_task(client.expect_packet_in(timeout=30.0)) for _ in range(2)]
+    error = grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), "server stopped")
+    try:
+        await asyncio.sleep(0)
+        if ending == "disconnect":
+            await client.disconnect()
+        else:
+            await patched_aio["stream"].finish(error if ending == "rpc-error" else None)
+            await asyncio.wait_for(asyncio.shield(stream_task), timeout=2.0)
+
+        for waiter in waiters:
+            with pytest.raises(ConnectionError, match="closed") as result:
+                await asyncio.wait_for(asyncio.shield(waiter), timeout=0.5)
+            if ending == "rpc-error":
+                assert result.value.__cause__ is error
+
+        retry_stream = _FakeStream()
+        patched_aio["stub"].StreamChannel.side_effect = lambda _requests: retry_stream
+        await retry_stream.push_arbitration()
+        await client.connect()
+        await retry_stream.push_packet(b"new connection")
+        assert (await client.expect_packet_in(timeout=1.0))[0] == b"new connection"
+    finally:
+        for waiter in waiters:
+            waiter.cancel()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_cancelled_packet_in_wait_leaves_next_packet_available(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = await _connect(patched_aio)
+    waiter = asyncio.create_task(client.expect_packet_in())
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(AsyncOperationCancelledError):
+            await waiter
+        await patched_aio["stream"].push_packet(b"next")
+        assert (await client.expect_packet_in(timeout=1.0))[0] == b"next"
+    finally:
+        await client.disconnect()
+
+
+async def test_packet_in_arrival_racing_with_cancellation(patched_aio: dict[str, Any]) -> None:
+    client = await _connect(patched_aio)
+    waiter = asyncio.create_task(client.expect_packet_in())
+    try:
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        queue = client._packet_in_queue
+        assert queue is not None
+        packet = (b"arriving", {})
+        queue.put_nowait(packet)
+        asyncio.get_running_loop().call_soon(waiter.cancel)
+
+        try:
+            received = await waiter
+        except AsyncOperationCancelledError:
+            received = await client.expect_packet_in(timeout=0.5)
+        assert received == packet
+    finally:
+        await client.disconnect()
+
+
 # ---------------------------------------------------------------------------
 # Registers (mocked subprocess)
 # ---------------------------------------------------------------------------
