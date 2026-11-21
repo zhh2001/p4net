@@ -14,7 +14,9 @@ description: 三台交换机组成网格，通过 AsyncP4RuntimeClient 和 async
 sudo p4net examples/async_concurrent/topology.py
 ```
 
-`setup(net)` 先连接三台交换机，再计时下发这批表项。九条写入操作全部返回时，计时结束。在 `p4net>` 提示符下运行 `pingall`。
+`setup(net)` 先连接三台交换机，再计时并发下发九条表项。写入完成后，异步客户端主动关闭连接，交换机继续使用这些表项转发。加上 `-v` 启动时，每个异步客户端会记录一条 `disconnected`。
+
+在 `p4net>` 提示符下运行 `pingall`。
 
 ```
 p4net> pingall

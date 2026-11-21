@@ -14,7 +14,9 @@ From the repository root, start the topology.
 sudo p4net examples/async_concurrent/topology.py
 ```
 
-`setup(net)` connects to the three switches before starting the timer. The timer measures the batch of nine inserts until all calls return. Run `pingall` at the `p4net>` prompt.
+`setup(net)` connects to the three switches, then times the nine concurrent table writes. Once the writes finish, the async clients close their connections. The entries stay on the switches for forwarding. With `-v`, each client logs `disconnected`.
+
+Run `pingall` at the `p4net>` prompt.
 
 ```
 p4net> pingall

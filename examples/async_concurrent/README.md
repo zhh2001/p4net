@@ -55,7 +55,7 @@ async def _async_setup(net: Network) -> dict:
             ))
     await asyncio.gather(*tasks)
 
-    # 3. Disconnect (Network.stop would do this anyway, but explicit is fine).
+    # 3. Close the async connections after the writes complete.
     await asyncio.gather(*(c.disconnect() for c in clients))
 ```
 
@@ -67,7 +67,10 @@ The full source is in [`topology.py`](topology.py).
 sudo p4net examples/async_concurrent/topology.py
 ```
 
-On startup, the example prints a line like this.
+The example closes the async connections after all nine writes finish.
+With `-v`, each client logs `disconnected`. The entries stay on the
+switches for forwarding. The example then prints a timing summary like
+this.
 
 ```
 async setup: 9 table entries installed concurrently in 4.04 ms
@@ -116,9 +119,8 @@ await each insert before starting the next.
 ## Mastership note
 
 The sync client at `switch.client` and the async client at
-`switch.async_client` are *independent* connections with independent
-election IDs. By default the sync client wins primary because it
-connects first during `Network.start()`. If you want the async client
-to be primary, construct it manually with a higher election_id, or
-disconnect the sync client first. Mixing primary writes through both
-clients against the same switch is not supported.
+`switch.async_client` use separate connections and election IDs. A
+client with a higher election ID can take over as primary. In this
+example, the async clients obtain primary status before writing the
+entries. To choose an election ID in your own program, see
+[Connections and primary status](https://zhh2001.github.io/p4net/async-client/#connections-and-primary-status).
