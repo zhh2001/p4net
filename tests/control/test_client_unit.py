@@ -865,6 +865,86 @@ def test_verify_pipeline_keeps_the_current_index(
         client.disconnect()
 
 
+@pytest.mark.parametrize("index_state", ["saved", "unknown", "older"])
+def test_commit_uses_the_switch_p4info(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], index_state: str
+) -> None:
+    client, grpc_mocks, p4info_path, json_path = connected_client
+    stub = grpc_mocks["stub"]
+    candidate = _build_p4info()
+    candidate.tables[0].preamble.name = "Candidate.ipv4_lpm"
+    response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    response.config.p4info.CopyFrom(candidate)
+    stub.GetForwardingPipelineConfig.return_value = response
+    try:
+        saved = None
+        if index_state != "unknown":
+            if index_state == "saved":
+                p4info_path.write_text(str(candidate))
+            client.set_pipeline_config(
+                bmv2_json=json_path, p4info=p4info_path, action="VERIFY_AND_SAVE"
+            )
+            saved = client.index
+
+        if index_state == "older":
+            missing = p4info_path.with_name("unused")
+            client.set_pipeline_config(
+                bmv2_json=missing, p4info=missing, action="COMMIT", timeout=2.0
+            )
+        else:
+            client.set_pipeline_config(action="COMMIT", timeout=2.0)
+
+        sent = stub.SetForwardingPipelineConfig.call_args.args[0]
+        assert sent.action == p4runtime_pb2.SetForwardingPipelineConfigRequest.COMMIT
+        assert not sent.HasField("config")
+        sent = stub.GetForwardingPipelineConfig.call_args.args[0]
+        assert (
+            sent.response_type == p4runtime_pb2.GetForwardingPipelineConfigRequest.P4INFO_AND_COOKIE
+        )
+        assert stub.GetForwardingPipelineConfig.call_args.kwargs == {"timeout": 2.0}
+        assert client.index.raw == candidate
+        if index_state == "saved":
+            assert client.index is saved
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize("failure", ["commit", "refresh", "missing-p4info"])
+def test_commit_failure_leaves_a_usable_or_empty_index(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], failure: str
+) -> None:
+    client, grpc_mocks, p4info_path, json_path = connected_client
+    stub = grpc_mocks["stub"]
+    try:
+        client.set_pipeline_config(
+            bmv2_json=json_path, p4info=p4info_path, action="VERIFY_AND_SAVE"
+        )
+        saved = client.index
+        if failure == "commit":
+            stub.SetForwardingPipelineConfig.side_effect = _grpc_error(
+                grpc.StatusCode.NOT_FOUND, "no saved pipeline"
+            )
+        elif failure == "refresh":
+            stub.GetForwardingPipelineConfig.side_effect = _grpc_error(
+                grpc.StatusCode.UNAVAILABLE, "could not get configuration"
+            )
+        else:
+            stub.GetForwardingPipelineConfig.return_value = (
+                p4runtime_pb2.GetForwardingPipelineConfigResponse()
+            )
+        message = "no saved pipeline" if failure == "commit" else "COMMIT succeeded"
+        with pytest.raises(P4RuntimeError, match=message):
+            client.set_pipeline_config(action="COMMIT")
+        if failure == "commit":
+            assert client.index is saved
+            stub.GetForwardingPipelineConfig.assert_not_called()
+        else:
+            with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                _ = client.index
+    finally:
+        client.disconnect()
+
+
 def test_set_pipeline_config_failed_precondition_raises_pipeline_error(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
 ) -> None:

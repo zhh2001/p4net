@@ -41,7 +41,7 @@ from p4net.control.exceptions import (
     P4RuntimeError,
     PipelineError,
 )
-from p4net.control.p4info_index import P4InfoIndex
+from p4net.control.p4info_index import P4InfoIndex, _index_after_commit
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,7 @@ class AsyncP4RuntimeClient:
         self._packet_handlers: list[Callable[[bytes, dict[str, int]], Awaitable[None]]] = []
         self._handlers_lock = asyncio.Lock()
         self._teardown_lock = asyncio.Lock()
+        self._pipeline_lock = asyncio.Lock()
         self._connected = False
         self._is_primary = False
         self._closed = False
@@ -421,8 +422,8 @@ class AsyncP4RuntimeClient:
 
     async def push_pipeline(
         self,
-        p4info_bytes: bytes,
-        json_bytes: bytes,
+        p4info_bytes: bytes | None = None,
+        json_bytes: bytes | None = None,
         *,
         action: str = "VERIFY_AND_COMMIT",
         timeout: float = 10.0,
@@ -430,27 +431,68 @@ class AsyncP4RuntimeClient:
         """Push a compiled pipeline (raw bytes).
 
         ``VERIFY`` validates the candidate and retains the current P4Info index.
+        ``COMMIT`` uses the configuration already saved on the switch and reads
+        back its P4Info. The bytes arguments are only used for other actions.
+        The timeout applies to each RPC.
         """
         self._require_connected()
+        stub = self._stub
         if action not in _PIPELINE_ACTIONS:
             raise P4RuntimeError(f"invalid pipeline action {action!r}")
-        msg = p4info_pb2.P4Info()
-        text_format.Merge(p4info_bytes.decode("utf-8"), msg)
         req = p4runtime_pb2.SetForwardingPipelineConfigRequest()
         req.device_id = self._device_id
         req.election_id.high = self._election_id[0]  # type: ignore[index]
         req.election_id.low = self._election_id[1]  # type: ignore[index]
         req.action = p4runtime_pb2.SetForwardingPipelineConfigRequest.Action.Value(action)
-        req.config.p4info.CopyFrom(msg)
-        req.config.p4_device_config = bytes(json_bytes)
+        msg = None
+        if action != "COMMIT":
+            if p4info_bytes is None or json_bytes is None:
+                raise TypeError(f"p4info_bytes and json_bytes are required for {action}")
+            msg = p4info_pb2.P4Info()
+            text_format.Merge(p4info_bytes.decode("utf-8"), msg)
+            req.config.p4info.CopyFrom(msg)
+            req.config.p4_device_config = bytes(json_bytes)
+
         try:
-            await asyncio.wait_for(self._stub.SetForwardingPipelineConfig(req), timeout=timeout)
+            async with self._pipeline_lock:
+                if self._stub is not stub or not self.is_connected:
+                    raise ConnectionError(
+                        f"Connection to {self.target!r} closed before pipeline RPC"
+                    )
+                await asyncio.wait_for(stub.SetForwardingPipelineConfig(req), timeout=timeout)
+                if msg is None:
+                    await self._refresh_committed_pipeline(stub, timeout=timeout)
+                elif action != "VERIFY":
+                    self._info_index = P4InfoIndex(msg)
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError("push_pipeline cancelled") from exc
         except grpc.aio.AioRpcError as exc:
             raise self._translate_rpc_error(exc, pipeline=True) from exc
-        if action != "VERIFY":
-            self._info_index = P4InfoIndex(msg)
+
+    async def _refresh_committed_pipeline(self, stub: Any, *, timeout: float) -> None:
+        connection_closed = "COMMIT succeeded. Connection closed during P4Info refresh."
+        previous, self._info_index = self._info_index, None
+        if self._stub is not stub or not self.is_connected:
+            raise ConnectionError(connection_closed)
+        req = p4runtime_pb2.GetForwardingPipelineConfigRequest()
+        req.device_id = self._device_id
+        req.response_type = p4runtime_pb2.GetForwardingPipelineConfigRequest.P4INFO_AND_COOKIE
+        try:
+            response = await asyncio.wait_for(
+                stub.GetForwardingPipelineConfig(req), timeout=timeout
+            )
+        except asyncio.CancelledError as exc:
+            raise AsyncOperationCancelledError(
+                "COMMIT succeeded. P4Info refresh cancelled."
+            ) from exc
+        except asyncio.TimeoutError as exc:
+            raise asyncio.TimeoutError("COMMIT succeeded. P4Info refresh timed out.") from exc
+        except grpc.aio.AioRpcError as exc:
+            error = self._translate_rpc_error(exc)
+            raise type(error)(f"COMMIT succeeded. P4Info refresh failed: {error}") from exc
+        if self._stub is not stub or not self.is_connected:
+            raise ConnectionError(connection_closed)
+        self._info_index = _index_after_commit(response.config, previous)
 
     # ----------------------------------------------------------------- tables
 

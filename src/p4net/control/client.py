@@ -35,7 +35,7 @@ from p4net.control.exceptions import (
     P4RuntimeError,
     PipelineError,
 )
-from p4net.control.p4info_index import P4InfoIndex
+from p4net.control.p4info_index import P4InfoIndex, _index_after_commit
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,7 @@ class P4RuntimeClient:
         self._connected = False
         self._closed = False
         self._teardown_lock = threading.RLock()
+        self._pipeline_lock = threading.Lock()
         self._index: P4InfoIndex | None = None
         # Controller packet I/O. Handlers run on the stream-consumer thread.
         self._packet_in_handlers: list[Callable[[bytes, dict[str, int]], None]] = []
@@ -430,24 +431,25 @@ class P4RuntimeClient:
     def set_pipeline_config(
         self,
         *,
-        bmv2_json: Path,
-        p4info: Path,
+        bmv2_json: Path | None = None,
+        p4info: Path | None = None,
         action: str = "VERIFY_AND_COMMIT",
         timeout: float = 10.0,
     ) -> None:
         """Push a compiled pipeline to the device.
 
         ``VERIFY`` validates the candidate and retains the current P4Info index.
+        ``COMMIT`` uses the configuration already saved on the switch and reads
+        back its P4Info. The file arguments are only used for other actions.
+        The timeout applies to each RPC.
         """
-        self._require_connected()
+        with self._teardown_lock:
+            self._require_connected()
+            stub = self._stub
         if action not in _PIPELINE_ACTIONS:
             raise P4RuntimeError(
                 f"invalid pipeline action {action!r}; must be one of {sorted(_PIPELINE_ACTIONS)}"
             )
-        p4info_msg = p4info_pb2.P4Info()
-        text_format.Merge(Path(p4info).read_text(), p4info_msg)
-        bmv2_data = Path(bmv2_json).read_bytes()
-
         req = p4runtime_pb2.SetForwardingPipelineConfigRequest()
         req.device_id = self._device_id
         if self._role_name:
@@ -455,36 +457,87 @@ class P4RuntimeClient:
         req.election_id.high = self._election_id_high
         req.election_id.low = self._election_id_low
         req.action = p4runtime_pb2.SetForwardingPipelineConfigRequest.Action.Value(action)
-        req.config.p4info.CopyFrom(p4info_msg)
-        req.config.p4_device_config = bmv2_data
+        p4info_msg = None
+        if action != "COMMIT":
+            if p4info is None or bmv2_json is None:
+                raise TypeError(f"p4info and bmv2_json are required for {action}")
+            p4info_msg = p4info_pb2.P4Info()
+            text_format.Merge(Path(p4info).read_text(), p4info_msg)
+            req.config.p4info.CopyFrom(p4info_msg)
+            req.config.p4_device_config = Path(bmv2_json).read_bytes()
 
+        with self._pipeline_lock:
+            with self._teardown_lock:
+                self._require_pipeline_connection(stub)
+            try:
+                stub.SetForwardingPipelineConfig(req, timeout=timeout)
+            except grpc.RpcError as exc:
+                raise self._translate_rpc_error(exc, pipeline=True) from exc
+            if p4info_msg is None:
+                self._refresh_committed_pipeline(stub, timeout=timeout)
+                p4info_msg = self.index.raw
+            elif action != "VERIFY":
+                self._index = P4InfoIndex(p4info_msg)
+            logger.debug(
+                "P4Runtime pipeline request succeeded (action=%s, p4info_tables=%d)",
+                action,
+                len(p4info_msg.tables),
+            )
+
+    def _refresh_committed_pipeline(self, stub: Any, *, timeout: float) -> None:
+        connection_closed = "COMMIT succeeded. Connection closed during P4Info refresh."
+        with self._teardown_lock:
+            previous, self._index = self._index, None
+            if self._stub is not stub or not self.is_connected():
+                raise ConnectionError(connection_closed)
         try:
-            self._stub.SetForwardingPipelineConfig(req, timeout=timeout)
+            config = self._read_pipeline_config(
+                stub, response_type="P4INFO_AND_COOKIE", timeout=timeout
+            )
         except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc, pipeline=True) from exc
-        if action != "VERIFY":
-            self._index = P4InfoIndex(p4info_msg)
-        logger.debug(
-            "P4Runtime pipeline request succeeded (action=%s, p4info_tables=%d)",
-            action,
-            len(p4info_msg.tables),
-        )
+            error = self._translate_rpc_error(exc)
+            raise type(error)(f"COMMIT succeeded. P4Info refresh failed: {error}") from exc
+        except ValueError as exc:
+            with self._teardown_lock:
+                if self._stub is not stub or not self.is_connected():
+                    raise ConnectionError(connection_closed) from exc
+            raise
+        with self._teardown_lock:
+            if self._stub is not stub or not self.is_connected():
+                raise ConnectionError(connection_closed)
+            self._index = _index_after_commit(config, previous)
 
     def get_pipeline_config(self, *, timeout: float = 10.0) -> tuple[bytes, P4InfoIndex]:
         """Read the current pipeline back from the device."""
-        self._require_connected()
+        with self._teardown_lock:
+            self._require_connected()
+            stub = self._stub
+        with self._pipeline_lock:
+            with self._teardown_lock:
+                self._require_pipeline_connection(stub)
+            try:
+                config = self._read_pipeline_config(stub, response_type="ALL", timeout=timeout)
+            except grpc.RpcError as exc:
+                raise self._translate_rpc_error(exc) from exc
+            with self._teardown_lock:
+                self._require_pipeline_connection(stub)
+                index = P4InfoIndex(config.p4info)
+                self._index = index
+        return config.p4_device_config, index
+
+    def _require_pipeline_connection(self, stub: Any) -> None:
+        if self._stub is not stub or not self.is_connected():
+            raise ConnectionError(
+                f"Connection to {self.target!r} closed during a pipeline operation"
+            )
+
+    def _read_pipeline_config(self, stub: Any, *, response_type: str, timeout: float) -> Any:
         req = p4runtime_pb2.GetForwardingPipelineConfigRequest()
         req.device_id = self._device_id
         req.response_type = p4runtime_pb2.GetForwardingPipelineConfigRequest.ResponseType.Value(
-            "ALL"
+            response_type
         )
-        try:
-            resp = self._stub.GetForwardingPipelineConfig(req, timeout=timeout)
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
-        index = P4InfoIndex(resp.config.p4info)
-        self._index = index
-        return resp.config.p4_device_config, index
+        return stub.GetForwardingPipelineConfig(req, timeout=timeout).config
 
     # Table CRUD ---------------------------------------------------------
 

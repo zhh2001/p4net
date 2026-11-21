@@ -424,3 +424,11 @@ class P4InfoIndex:
                 continue
             out[str(m.name)] = int.from_bytes(bytes(pm.value), "big")
         return out
+
+
+def _index_after_commit(config: Any, previous: P4InfoIndex | None) -> P4InfoIndex:
+    if not config.HasField("p4info"):
+        raise P4RuntimeError("COMMIT succeeded. The device returned no P4Info.")
+    if previous is not None and previous.raw == config.p4info:
+        return previous
+    return P4InfoIndex(config.p4info)
