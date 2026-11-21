@@ -69,7 +69,7 @@ async def _async_setup(net: Network) -> dict[str, Any]:
     t1 = _time.perf_counter()
     concurrent_ms = (t1 - t0) * 1000.0
 
-    # Disconnect (Network.stop would do this anyway).
+    # Close the clients before asyncio.run() shuts down their event loop.
     await asyncio.gather(*(c.disconnect() for c in clients))
     return {"concurrent_ms": concurrent_ms, "inserts": len(tasks)}
 ```
