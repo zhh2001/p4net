@@ -10,6 +10,8 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -119,6 +121,66 @@ def test_send_packet_out_uses_index_encode(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(c._index, "encode_packet_out_metadata", spy)  # type: ignore[union-attr]
     c.send_packet_out(b"abc", {"egress_port": 2})
     spy.assert_called_once()
+
+
+@pytest.mark.parametrize("change", ["disconnect", "reconnect", "p4info"])
+def test_send_packet_out_keeps_its_stream_and_p4info(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    client = _connected_client()
+    original_queue = client._outgoing
+    assert original_queue is not None
+    original_index = client.index
+    encode = original_index.encode_packet_out_metadata
+    preparing, release = threading.Event(), threading.Event()
+
+    def hold_encoding(metadata: Mapping[str, object]) -> list[Any]:
+        preparing.set()
+        assert release.wait(timeout=3.0)
+        return encode(metadata)
+
+    monkeypatch.setattr(original_index, "encode_packet_out_metadata", hold_encoding)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            pending = worker.submit(client.send_packet_out, b"stale", {"egress_port": 1})
+            assert preparing.wait(timeout=1.0)
+            egress_id = 1
+            if change == "p4info":
+                egress_id = 3
+                p4info = _build_p4info_with_controller_meta()
+                p4info.controller_packet_metadata[1].metadata[0].id = egress_id
+                client._index = P4InfoIndex(p4info)
+            else:
+                client.disconnect()
+                if change == "reconnect":
+                    client._outgoing = queue.Queue()
+                    client._closed = False
+                    client._connected = True
+            release.set()
+
+            if change == "p4info":
+                with pytest.raises(P4RuntimeError, match="P4Info changed"):
+                    pending.result(timeout=1.0)
+            else:
+                with pytest.raises(P4ConnectionError):
+                    pending.result(timeout=1.0)
+                original_queue.get_nowait()  # The disconnect sentinel.
+                assert original_queue.empty()
+
+            current_queue = client._outgoing
+            if change == "disconnect":
+                assert current_queue is None
+            else:
+                assert current_queue is not None and current_queue.empty()
+                monkeypatch.setattr(original_index, "encode_packet_out_metadata", encode)
+                client.send_packet_out(b"fresh", {"egress_port": 2})
+                request = current_queue.get_nowait()
+                assert request.packet.payload == b"fresh"
+                values = {field.metadata_id: field.value for field in request.packet.metadata}
+                assert values == {egress_id: b"\x02", 2: b"\x00"}
+        finally:
+            release.set()
+            client.disconnect()
 
 
 # ---------------------------------------------------------------------------

@@ -1240,9 +1240,16 @@ class P4RuntimeClient:
         fire-and-forget in P4Runtime; this method does not wait for a switch
         response. ``timeout`` is reserved for future flow-control limits and
         currently only bounds the queue put.
+
+        Raises:
+            ConnectionError: if the connection closes during packet preparation.
+            P4RuntimeError: if P4Info changes during packet preparation.
         """
-        self._require_connected()
-        idx = self._index
+        with self._teardown_lock:
+            self._require_connected()
+            out, idx = self._outgoing, self._index
+        if out is None:
+            raise ConnectionError("client is not connected; outgoing queue is closed")
         encoded = idx.encode_packet_out_metadata(metadata or {}) if idx is not None else []
         if metadata and idx is None:
             raise EncodingError(
@@ -1255,10 +1262,14 @@ class P4RuntimeClient:
         req.packet.payload = bytes(payload)
         for pm in encoded:
             req.packet.metadata.add().CopyFrom(pm)
-        out = self._outgoing
-        if out is None:
-            raise ConnectionError("client is not connected; outgoing queue is closed")
-        out.put(req, timeout=timeout)
+        with self._teardown_lock:
+            if self._outgoing is not out or not self.is_connected():
+                raise ConnectionError(
+                    f"Connection to {self.target!r} closed during PacketOut preparation"
+                )
+            if self._index is not idx:
+                raise P4RuntimeError("P4Info changed during PacketOut preparation")
+            out.put(req, timeout=timeout)
 
     def on_packet_in(
         self,
