@@ -435,7 +435,8 @@ class AsyncP4RuntimeClient:
         back its P4Info. The bytes arguments are only used for other actions.
         The timeout applies to each RPC.
 
-        A successful reply from a closed connection raises ``ConnectionError``.
+        The client raises ``ConnectionError`` if the connection closes while
+        it is waiting for a reply or before it can apply the reply.
         """
         self._require_connected()
         stub = self._stub
@@ -461,7 +462,12 @@ class AsyncP4RuntimeClient:
                     raise ConnectionError(
                         f"Connection to {self.target!r} closed before pipeline RPC"
                     )
-                await asyncio.wait_for(stub.SetForwardingPipelineConfig(req), timeout=timeout)
+                await self._await_rpc(
+                    stub,
+                    lambda: stub.SetForwardingPipelineConfig(req),
+                    connection_closed=f"Connection to {self.target!r} closed during pipeline RPC",
+                    timeout=timeout,
+                )
                 if msg is None:
                     await self._refresh_committed_pipeline(stub, timeout=timeout)
                     return
@@ -485,8 +491,11 @@ class AsyncP4RuntimeClient:
         req.device_id = self._device_id
         req.response_type = p4runtime_pb2.GetForwardingPipelineConfigRequest.P4INFO_AND_COOKIE
         try:
-            response = await asyncio.wait_for(
-                stub.GetForwardingPipelineConfig(req), timeout=timeout
+            response = await self._await_rpc(
+                stub,
+                lambda: stub.GetForwardingPipelineConfig(req),
+                connection_closed=connection_closed,
+                timeout=timeout,
             )
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError(
@@ -560,7 +569,7 @@ class AsyncP4RuntimeClient:
         timeout: float,
     ) -> None:
         self._require_connected_with_index()
-        idx = self.info_index
+        stub, idx = self._stub, self.info_index
         table_id = idx.table_id(table)
         requires_priority = idx.table_requires_priority(table)
         if requires_priority and priority is None:
@@ -592,8 +601,18 @@ class AsyncP4RuntimeClient:
         req.election_id.high = self._election_id[0]  # type: ignore[index]
         req.election_id.low = self._election_id[1]  # type: ignore[index]
         req.updates.add().CopyFrom(upd)
+
+        async def write() -> Any:
+            self._require_same_indexed_context(stub, idx, operation="table write")
+            return await stub.Write(req)
+
         try:
-            await asyncio.wait_for(self._stub.Write(req), timeout=timeout)
+            await self._await_rpc(
+                stub,
+                write,
+                connection_closed=f"Connection to {self.target!r} closed during a table write",
+                timeout=timeout,
+            )
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError(f"{update_type} on {table!r} cancelled") from exc
         except grpc.aio.AioRpcError as exc:
@@ -651,42 +670,66 @@ class AsyncP4RuntimeClient:
 
         return _gen()
 
+    async def _await_rpc(
+        self,
+        stub: Any,
+        start: Callable[[], Awaitable[Any]],
+        *,
+        connection_closed: str,
+        timeout: float | None = None,
+    ) -> Any:
+        def require_connection(cause: BaseException | None = None) -> None:
+            if self._stub is not stub or not self.is_connected:
+                raise ConnectionError(connection_closed) from cause
+
+        async def invoke() -> Any:
+            require_connection()
+            try:
+                return await start()
+            except (asyncio.CancelledError, grpc.aio.AioRpcError) as exc:
+                if (
+                    isinstance(exc, asyncio.CancelledError)
+                    or exc.code() == grpc.StatusCode.CANCELLED
+                ):
+                    require_connection(exc)
+                raise
+
+        if timeout is not None and timeout <= 0:
+            raise asyncio.TimeoutError
+        task = asyncio.create_task(invoke())
+        try:
+            # Waiting for completion separates a caller cancellation from
+            # cancellation reported by the RPC itself.
+            done, _ = await asyncio.wait((task,), timeout=timeout)
+            if not done:
+                raise asyncio.TimeoutError
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
+        return task.result()
+
     async def _read_responses(
         self, stub: Any, request: Any, *, timeout: float, operation: str
     ) -> AsyncGenerator[Any, None]:
-        def raise_if_disconnected(exc: BaseException) -> None:
-            if self._stub is not stub or not self.is_connected:
-                raise ConnectionError(f"Connection to {self.target!r} closed {operation}") from exc
-
-        async def receive_next(responses: AsyncIterator[Any]) -> Any:
-            try:
-                return await anext(responses)
-            except asyncio.CancelledError as exc:
-                raise_if_disconnected(exc)
-                raise
-
+        connection_closed = f"Connection to {self.target!r} closed {operation}"
         call = None
         try:
             call = stub.Read(request, timeout=timeout)
             responses = aiter(call)
             while True:
-                receive = asyncio.create_task(receive_next(responses))
                 try:
-                    # Waiting for the task's completion keeps a caller cancellation
-                    # separate from a cancellation reported by the RPC.
-                    await asyncio.wait((receive,))
-                except asyncio.CancelledError:
-                    receive.cancel()
-                    await asyncio.gather(receive, return_exceptions=True)
-                    raise
-                try:
-                    response = receive.result()
+                    response = await self._await_rpc(
+                        stub, lambda: anext(responses), connection_closed=connection_closed
+                    )
                 except StopAsyncIteration:
                     break
                 yield response
         except grpc.aio.AioRpcError as exc:
-            if exc.code() == grpc.StatusCode.CANCELLED:
-                raise_if_disconnected(exc)
+            if exc.code() == grpc.StatusCode.CANCELLED and (
+                self._stub is not stub or not self.is_connected
+            ):
+                raise ConnectionError(connection_closed) from exc
             raise self._translate_rpc_error(exc) from exc
         finally:
             if isinstance(call, grpc.aio.Call) and not call.done():

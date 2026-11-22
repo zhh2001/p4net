@@ -161,7 +161,7 @@ For `push_pipeline()`, `INVALID_ARGUMENT` and `FAILED_PRECONDITION` instead rais
 
 When an outer `UNKNOWN` response contains per-update P4Runtime errors, the client selects the first recognized non-success code. If no such code can be decoded, it raises `P4RuntimeError`.
 
-Table and counter reads raise `ConnectionError` if the connection closes while they are awaiting a response.
+Table reads, counter reads, table writes, and pipeline pushes raise `ConnectionError` if the connection closes while they are waiting for a response.
 
 Cancellation and timeout results depend on the operation. The timeout column refers to the method's own `timeout=` parameter:
 

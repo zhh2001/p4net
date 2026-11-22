@@ -161,7 +161,7 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 外层状态为 `UNKNOWN` 且携带逐条 P4Runtime 错误时，客户端使用第一个可识别的非成功状态码选择异常。无法解析出这样的状态码时，保留为 `P4RuntimeError`。
 
-等待表项或计数器响应时，如果连接断开，读取会抛出 `ConnectionError`。
+读取表项或计数器、写入表项或下发流水线时，如果连接在等待响应期间断开，操作会抛出 `ConnectionError`。
 
 取消和超时的结果取决于具体操作。下表的超时指方法自身的 `timeout=` 参数：
 

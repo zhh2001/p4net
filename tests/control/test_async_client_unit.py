@@ -1197,6 +1197,141 @@ async def test_push_pipeline_cancel_or_timeout_preserves_index(
         await client.disconnect()
 
 
+@pytest.mark.parametrize("operation", ["table", "pipeline", "commit", "refresh"])
+@pytest.mark.parametrize(
+    "ending", ["disconnect", "disconnect-status", "caller-and-disconnect", "timeout"]
+)
+async def test_async_write_rpcs_distinguish_disconnect_from_cancellation(
+    patched_aio: dict[str, Any], operation: str, ending: str
+) -> None:
+    client = await _connect(patched_aio)
+    original_index = client.info_index
+    stub = patched_aio["stub"]
+    waiting, release, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    transport_error = (
+        grpc.aio.AioRpcError(grpc.StatusCode.CANCELLED, (), (), "channel closed")
+        if ending == "disconnect-status"
+        else asyncio.CancelledError("channel closed")
+    )
+
+    async def hold_response(_request: Any) -> None:
+        waiting.set()
+        try:
+            await release.wait()
+            raise transport_error
+        finally:
+            finished.set()
+
+    timeout = 0.15 if ending == "timeout" else 5.0
+    if operation == "table":
+        stub.Write.side_effect = hold_response
+        pending = asyncio.create_task(
+            client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dstAddr": "10.0.0.1/32"},
+                "MyIngress.set_egress_port",
+                {"port": 2},
+                timeout=timeout,
+            )
+        )
+    elif operation == "refresh":
+        stub.GetForwardingPipelineConfig = AsyncMock(side_effect=hold_response)
+        pending = asyncio.create_task(client.push_pipeline(action="COMMIT", timeout=timeout))
+    else:
+        stub.SetForwardingPipelineConfig.side_effect = hold_response
+        if operation == "commit":
+            pending = asyncio.create_task(client.push_pipeline(action="COMMIT", timeout=timeout))
+        else:
+            pending = asyncio.create_task(client.push_pipeline(b"", b"{}", timeout=timeout))
+
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=1.0)
+        if ending != "timeout":
+            if ending == "caller-and-disconnect":
+
+                async def close() -> None:
+                    pending.cancel()
+                    release.set()
+
+                patched_aio["channel"].close.side_effect = close
+            await client.disconnect()
+            release.set()
+
+        if ending == "timeout":
+            with pytest.raises(asyncio.TimeoutError) as raised:
+                await asyncio.wait_for(pending, timeout=2.0)
+            if operation == "refresh":
+                assert "COMMIT succeeded. P4Info refresh timed out." in str(raised.value)
+            assert client.is_connected
+        elif ending == "caller-and-disconnect":
+            with pytest.raises(AsyncOperationCancelledError, match="cancelled") as raised:
+                await pending
+            assert isinstance(raised.value.__cause__, asyncio.CancelledError)
+        else:
+            with pytest.raises(ConnectionError) as raised:
+                await pending
+            assert raised.value.__cause__ is transport_error
+        if operation == "refresh":
+            assert "COMMIT succeeded." in str(raised.value)
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
+        else:
+            assert "COMMIT succeeded." not in str(raised.value)
+            assert client.info_index is original_index
+            stub.GetForwardingPipelineConfig.assert_not_called()
+        assert finished.is_set()
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_table_write_rechecks_p4info_before_dispatch(
+    patched_aio: dict[str, Any], mocker: MockerFixture
+) -> None:
+    client = await _connect(patched_aio)
+    lookup = client.info_index.table_id
+
+    def change_p4info_after_encoding(table: str) -> int:
+        asyncio.get_running_loop().call_soon(setattr, client, "_info_index", _make_p4info_index())
+        return lookup(table)
+
+    mocker.patch.object(client.info_index, "table_id", side_effect=change_p4info_after_encoding)
+    try:
+        with pytest.raises(P4RuntimeError, match="P4Info changed during table write"):
+            await client.insert_table_entry(
+                "MyIngress.ipv4_lpm",
+                {"hdr.ipv4.dstAddr": "10.0.0.1/32"},
+                "MyIngress.set_egress_port",
+                {"port": 2},
+            )
+        patched_aio["stub"].Write.assert_not_called()
+    finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["table", "pipeline"])
+async def test_expired_write_deadline_does_not_dispatch_rpc(
+    patched_aio: dict[str, Any], operation: str
+) -> None:
+    client = await _connect(patched_aio)
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            if operation == "table":
+                await client.delete_table_entry(
+                    "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.0.1/32"}, timeout=0
+                )
+            else:
+                await client.push_pipeline(b"", b"{}", timeout=0)
+        stub = patched_aio["stub"]
+        stub.Write.assert_not_called()
+        stub.SetForwardingPipelineConfig.assert_not_called()
+    finally:
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("operation", ["write", "read"])
 async def test_unavailable_rpc_raises_connection_error(
     patched_aio: dict[str, Any], operation: str
