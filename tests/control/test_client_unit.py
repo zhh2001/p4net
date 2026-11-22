@@ -991,9 +991,12 @@ def test_commit_failure_leaves_a_usable_or_empty_index(
         client.disconnect()
 
 
-@pytest.mark.parametrize("action", ["VERIFY_AND_COMMIT", "VERIFY", "COMMIT"])
-def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
-    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], action: str
+@pytest.mark.parametrize("action", ["GET", "VERIFY_AND_COMMIT", "VERIFY", "COMMIT"])
+@pytest.mark.parametrize("outcome", ["reply", "closed-channel"])
+def test_pipeline_rpc_from_an_old_connection_keeps_the_current_index(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    action: str,
+    outcome: str,
 ) -> None:
     client, grpc_mocks, p4info_path, json_path = connected_client
     client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
@@ -1004,13 +1007,27 @@ def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
 
     started = threading.Event()
     reply = threading.Event()
+    closed_channel = ValueError("Cannot invoke RPC on closed channel!")
+    stale_response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    stale_response.config.p4info.CopyFrom(candidate)
 
-    def hold_reply(_request: Any, *, timeout: float) -> None:
+    def hold_reply(_request: Any, *, timeout: float) -> Any:
         started.set()
         assert reply.wait(timeout=3.0)
+        if outcome == "closed-channel":
+            raise closed_channel
+        if action == "GET":
+            return stale_response
+        return p4runtime_pb2.SetForwardingPipelineConfigResponse()
 
     old_stub = grpc_mocks["stub"]
-    old_stub.SetForwardingPipelineConfig.side_effect = hold_reply
+    rpc = (
+        old_stub.GetForwardingPipelineConfig
+        if action == "GET"
+        else old_stub.SetForwardingPipelineConfig
+    )
+    rpc.side_effect = hold_reply
+    old_stub.SetForwardingPipelineConfig.reset_mock()
     stream = FakeStreamCall()
 
     def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
@@ -1021,7 +1038,10 @@ def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
     files = {} if action == "COMMIT" else {"bmv2_json": json_path, "p4info": p4info_path}
     with ThreadPoolExecutor(max_workers=1) as worker:
         try:
-            pending = worker.submit(client.set_pipeline_config, action=action, **files)
+            if action == "GET":
+                pending = worker.submit(client.get_pipeline_config)
+            else:
+                pending = worker.submit(client.set_pipeline_config, action=action, **files)
             assert started.wait(timeout=1.0)
             client.disconnect()
             grpc_mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
@@ -1030,10 +1050,21 @@ def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
             client.connect(timeout=1.0)
             reply.set()
 
-            with pytest.raises(ConnectionError, match="closed"):
+            message = (
+                "COMMIT succeeded. Connection closed during P4Info refresh."
+                if action == "COMMIT" and outcome == "reply"
+                else "closed during a pipeline operation"
+            )
+            with pytest.raises(ConnectionError, match=message) as raised:
                 pending.result(timeout=1.0)
+            if outcome == "closed-channel":
+                assert raised.value.__context__ is closed_channel
             assert client.index is current
-            old_stub.GetForwardingPipelineConfig.assert_not_called()
+            rpc.assert_called_once()
+            if action == "GET":
+                old_stub.SetForwardingPipelineConfig.assert_not_called()
+            else:
+                old_stub.GetForwardingPipelineConfig.assert_not_called()
             new_stub.GetForwardingPipelineConfig.assert_not_called()
             new_stub.SetForwardingPipelineConfig.assert_not_called()
 
@@ -1043,6 +1074,34 @@ def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
         finally:
             reply.set()
             client.disconnect()
+
+
+@pytest.mark.parametrize("operation", ["get", "push", "commit"])
+def test_pipeline_value_error_on_active_connection_is_preserved(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], operation: str
+) -> None:
+    client, grpc_mocks, p4info_path, json_path = connected_client
+    stub = grpc_mocks["stub"]
+    error = ValueError("invalid RPC timeout")
+    client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+    original_index = client.index
+    try:
+        with pytest.raises(ValueError, match="invalid RPC timeout") as raised:
+            if operation == "get":
+                stub.GetForwardingPipelineConfig.side_effect = error
+                client.get_pipeline_config()
+            else:
+                stub.SetForwardingPipelineConfig.side_effect = error
+                if operation == "commit":
+                    client.set_pipeline_config(action="COMMIT")
+                else:
+                    client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+        assert raised.value is error
+        assert client.is_connected() and client.index is original_index
+        if operation == "commit":
+            stub.GetForwardingPipelineConfig.assert_not_called()
+    finally:
+        client.disconnect()
 
 
 def test_set_pipeline_config_failed_precondition_raises_pipeline_error(

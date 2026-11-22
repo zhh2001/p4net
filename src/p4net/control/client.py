@@ -443,7 +443,8 @@ class P4RuntimeClient:
         back its P4Info. The file arguments are only used for other actions.
         The timeout applies to each RPC.
 
-        A successful reply from a closed connection raises ``ConnectionError``.
+        The client raises ``ConnectionError`` if the channel closes before
+        dispatch or a successful reply arrives after disconnection.
         """
         with self._teardown_lock:
             self._require_connected()
@@ -475,6 +476,11 @@ class P4RuntimeClient:
                 stub.SetForwardingPipelineConfig(req, timeout=timeout)
             except grpc.RpcError as exc:
                 raise self._translate_rpc_error(exc, pipeline=True) from exc
+            except ValueError:
+                # gRPC can report a closed channel if teardown wins after the check.
+                with self._teardown_lock:
+                    self._require_same_connection(stub, operation="a pipeline operation")
+                raise
             if p4info_msg is None:
                 self._refresh_committed_pipeline(stub, timeout=timeout)
                 p4info_msg = self.index.raw
@@ -517,6 +523,8 @@ class P4RuntimeClient:
 
         A response without P4Info clears the cached index and raises
         ``P4RuntimeError``. The device configuration bytes may be empty.
+        The client raises ``ConnectionError`` if the channel closes before
+        dispatch or a successful reply arrives after disconnection.
         """
         with self._teardown_lock:
             self._require_connected()
@@ -528,6 +536,10 @@ class P4RuntimeClient:
                 response = self._read_pipeline_config(stub, response_type="ALL", timeout=timeout)
             except grpc.RpcError as exc:
                 raise self._translate_rpc_error(exc) from exc
+            except ValueError:
+                with self._teardown_lock:
+                    self._require_same_connection(stub, operation="a pipeline operation")
+                raise
             with self._teardown_lock:
                 self._require_same_connection(stub, operation="a pipeline operation")
                 config = response.config
