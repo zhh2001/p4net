@@ -1596,9 +1596,9 @@ async def test_unstarted_read_iterator_is_bound_to_its_connection(
         await client.disconnect()
 
 
-@pytest.mark.parametrize("started", [False, True])
-async def test_read_iterator_uses_the_p4info_for_its_request(
-    patched_aio: dict[str, Any], started: bool
+@pytest.mark.parametrize("position", ["before-start", "next-response", "same-response"])
+async def test_read_iterator_rejects_a_new_p4info(
+    patched_aio: dict[str, Any], position: str
 ) -> None:
     client = await _connect(patched_aio)
     old_table = "MyIngress.ipv4_lpm"
@@ -1611,30 +1611,31 @@ async def test_read_iterator_uses_the_p4info_for_its_request(
     new_info.actions[0].preamble.name = new_action
 
     async def respond() -> AsyncIterator[Any]:
-        for _ in range(2):
+        batch_sizes = (2,) if position == "same-response" else (1, 1)
+        for row_count in batch_sizes:
             response = p4runtime_pb2.ReadResponse()
-            row = response.entities.add().table_entry
-            row.table_id = 2001
-            row.action.action.action_id = 1001
+            for _ in range(row_count):
+                row = response.entities.add().table_entry
+                row.table_id = 2001
+                row.action.action.action_id = 1001
             yield response
 
     rpc = patched_aio["stub"].Read
     rpc.side_effect = lambda _request, timeout: respond()
     read = client.list_table_entries(old_table)
     try:
+        started = position != "before-start"
         if started:
-            assert (await anext(read))["table"] == old_table
+            first = await anext(read)
+            assert (first["table"], first["action"]) == (old_table, old_action)
         await client.push_pipeline(str(new_info).encode(), b"{}")
 
+        when = "while" if started else "before"
+        with pytest.raises(P4RuntimeError, match=f"P4Info changed {when} reading"):
+            await anext(read)
         if started:
-            remaining = [entry async for entry in read]
-            assert [(entry["table"], entry["action"]) for entry in remaining] == [
-                (old_table, old_action)
-            ]
             rpc.assert_called_once()
         else:
-            with pytest.raises(P4RuntimeError, match="P4Info changed before reading"):
-                await anext(read)
             rpc.assert_not_called()
 
         fresh = [entry async for entry in client.list_table_entries(new_table)]
@@ -1642,6 +1643,118 @@ async def test_read_iterator_uses_the_p4info_for_its_request(
             (new_table, new_action)
         ] * 2
     finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("change", ["reconnect", "p4info"])
+@pytest.mark.parametrize("reply", ["row", "eof"])
+async def test_started_read_iterator_rejects_a_delayed_reply(
+    patched_aio: dict[str, Any], mocker: MockerFixture, change: str, reply: str
+) -> None:
+    client = await _connect(patched_aio)
+    original_stub = current_stub = patched_aio["stub"]
+    waiting, release = asyncio.Event(), asyncio.Event()
+    table = "MyIngress.ipv4_lpm"
+
+    def response(table_id: int) -> Any:
+        result = p4runtime_pb2.ReadResponse()
+        result.entities.add().table_entry.table_id = table_id
+        return result
+
+    active_id = 2001
+
+    async def delayed() -> AsyncIterator[Any]:
+        waiting.set()
+        await release.wait()
+        if reply == "row":
+            yield response(2001)
+
+    call = MagicMock(spec=grpc.aio.UnaryStreamCall)
+    call.__aiter__.side_effect = delayed
+    call.done.return_value = False
+    original_stub.Read.return_value = call
+    iterator = client.list_table_entries(table)
+    pending = asyncio.create_task(anext(iterator))
+
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=1.0)
+        if change == "reconnect":
+            await client.disconnect()
+            stream = _FakeStream()
+            await stream.push_arbitration()
+            current_stub = MagicMock(StreamChannel=MagicMock(return_value=stream))
+            mocker.patch(
+                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
+                return_value=current_stub,
+            )
+            await client.connect()
+        else:
+            active_id = 4001
+            p4info = p4info_pb2.P4Info()
+            p4info.CopyFrom(client.info_index.raw)
+            p4info.tables[0].preamble.id = active_id
+            await client.push_pipeline(str(p4info).encode(), b"{}")
+        release.set()
+
+        if change == "reconnect":
+            with pytest.raises(ConnectionError, match="closed while reading table entries"):
+                await asyncio.wait_for(pending, timeout=1.0)
+            current_stub.Read.assert_not_called()
+        else:
+            with pytest.raises(P4RuntimeError, match="P4Info changed while reading table entries"):
+                await asyncio.wait_for(pending, timeout=1.0)
+        call.cancel.assert_called_once()
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
+
+        async def fresh() -> AsyncIterator[Any]:
+            yield response(active_id)
+
+        current_stub.Read.return_value = fresh()
+        assert [row["table"] async for row in client.list_table_entries(table)] == [table]
+        request = current_stub.Read.call_args.args[0]
+        assert request.entities[0].table_entry.table_id == active_id
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("ending", ["close", "cancel"])
+async def test_ending_table_iteration_cancels_an_unfinished_read(
+    patched_aio: dict[str, Any], ending: str
+) -> None:
+    client = await _connect(patched_aio)
+    waiting = asyncio.Event()
+
+    async def responses() -> AsyncIterator[Any]:
+        waiting.set()
+        if ending == "cancel":
+            await asyncio.Future()
+        response = p4runtime_pb2.ReadResponse()
+        response.entities.add().table_entry.table_id = 2001
+        yield response
+
+    call = MagicMock(spec=grpc.aio.UnaryStreamCall)
+    call.__aiter__.side_effect = responses
+    call.done.return_value = False
+    patched_aio["stub"].Read.return_value = call
+    iterator = client.list_table_entries()
+    pending = asyncio.create_task(anext(iterator))
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=1.0)
+        if ending == "cancel":
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        else:
+            await pending
+            await iterator.aclose()
+        call.cancel.assert_called_once()
+        assert client.is_connected
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
         await client.disconnect()
 
 

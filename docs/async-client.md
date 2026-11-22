@@ -92,6 +92,8 @@ For a backup client that only reads, construct it with `election_id=(0, 0)`. Thi
 
 The async client currently has no `get_pipeline_config()`, `clear_table()`, `reset_counter()`, or multicast group operations. See the [control-plane API](api/control.md) for full signatures.
 
+A table iterator uses the connection and P4Info from the call to `list_table_entries()`. If either changes during iteration, start a new query.
+
 When installing a pipeline yourself, pass text-format P4Info bytes to `push_pipeline()`. On both clients, `action="VERIFY"` checks the candidate pipeline and keeps the current P4Info index. Register operations use `simple_switch_CLI`. Install that tool and pass `thrift_address` when constructing the client.
 
 Use `set_pipeline_config(action="COMMIT")` or `await push_pipeline(action="COMMIT")` to activate a pipeline saved with `VERIFY_AND_SAVE`. Both clients read back P4Info after the commit succeeds. If the read fails, the call reports the refresh error and clears the local index.

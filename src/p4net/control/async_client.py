@@ -608,9 +608,9 @@ class AsyncP4RuntimeClient:
         """Async iterator over decoded table entries.
 
         Use it as ``async for entry in client.list_table_entries(...)``.
-        The RPC starts when iteration begins. Create a new iterator if the
-        connection closes or P4Info changes before iteration. Each started
-        read uses the P4Info captured for its request to decode responses.
+        The RPC starts when iteration begins. The iterator becomes invalid
+        if its connection closes or its P4Info changes, even after iteration
+        has started. Create a new iterator to read again.
         """
         self._require_connected_with_index()
         stub = self._stub
@@ -623,24 +623,33 @@ class AsyncP4RuntimeClient:
         else:
             entity.table_entry.table_id = 0
 
-        async def _gen() -> AsyncIterator[dict[str, Any]]:
+        def require_current_context(when: str) -> None:
             if not self.is_connected or self._stub is not stub:
                 raise ConnectionError(
-                    f"Connection to {self.target!r} closed before reading table entries"
+                    f"Connection to {self.target!r} closed {when} reading table entries"
                 )
             if self._info_index is not idx:
                 raise P4RuntimeError(
-                    "P4Info changed before reading table entries; create a new iterator"
+                    f"P4Info changed {when} reading table entries. Create a new iterator."
                 )
+
+        async def _gen() -> AsyncIterator[dict[str, Any]]:
+            require_current_context("before")
+            call = None
             try:
-                async for resp in stub.Read(req, timeout=timeout):
+                call = stub.Read(req, timeout=timeout)
+                async for resp in call:
+                    require_current_context("while")
                     for ent in resp.entities:
                         if ent.HasField("table_entry"):
                             yield self._decode_table_entry(ent.table_entry, idx)
-            except asyncio.CancelledError:
-                raise
+                            require_current_context("while")
+                require_current_context("while")
             except grpc.aio.AioRpcError as exc:
                 raise self._translate_rpc_error(exc) from exc
+            finally:
+                if isinstance(call, grpc.aio.Call) and not call.done():
+                    call.cancel()
 
         return _gen()
 
