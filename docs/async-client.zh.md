@@ -199,6 +199,8 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 如果缓存的异步客户端所属的事件循环暂停，或等待客户端关闭时超时，其他网络资源仍会释放，等待清理的调用会抛出 `NetworkError`。让客户端所属的事件循环运行，再调用 `net.stop()` 或 `await net.astop()` 完成关闭。在这些客户端全部关闭前，用 `net.start()` 或 `await net.astart()` 重启同一个网络也会抛出 `NetworkError`。
 
+如果异步客户端尚未断开，所属的事件循环就已关闭，网络仍会释放其他资源，并抛出 `NetworkError`，指出受影响的交换机。
+
 事件循环运行时，SIGINT/SIGTERM 处理器会先等待网络清理，再恢复原处理器并重新投递信号。事件循环之外使用同步清理。
 
 StreamChannel 结束或报错后，客户端会清除连接和主控状态并关闭通道。可在同一实例上调用 `connect()` 重连。初次仲裁期间断流会直接结束连接等待，清理进行中调用 `connect()` 或 `disconnect()` 会等待清理完成。

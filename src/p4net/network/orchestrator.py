@@ -192,6 +192,7 @@ class Network:
         self._spawned_processes: list[NSProcess] = []
         self._host_commands: set[NSProcess] = set()
         self._async_disconnects: list[_AsyncDisconnect] = []
+        self._closed_async_client_loops: set[str] = set()
         self._stop_lock = threading.RLock()
         self._start_future: Future[None] | None = None
         self._start_thread_id: int | None = None
@@ -299,6 +300,7 @@ class Network:
             if stopping or any(not close.done() for close in self._async_disconnects):
                 raise NetworkError("Network shutdown is still running")
             self._async_disconnects.clear()
+            self._closed_async_client_loops.clear()
             self._stop_future = None
             self._start_thread_id = None if background else threading.get_ident()
             self._start_future = Future()
@@ -384,8 +386,9 @@ class Network:
         Startup already in progress finishes or rolls back before teardown.
 
         Raises:
-            NetworkError: if an async client's event loop is paused or waiting for
-                the client to close times out. Call again to wait for shutdown.
+            NetworkError: if an async client's event loop is paused or closed,
+                or waiting for the client to close times out. After a pause or
+                timeout, call again to wait for shutdown.
         """
         try:
             asyncio.get_running_loop()
@@ -424,7 +427,12 @@ class Network:
             if startup is not None and start_thread_id != threading.get_ident():
                 startup.result()
             self._do_stop()
-            if self._async_disconnects:
+            if self._closed_async_client_loops:
+                switches = ", ".join(repr(name) for name in sorted(self._closed_async_client_loops))
+                error = NetworkError(
+                    f"async client shutdown failed: event loop is closed for {switches}"
+                )
+            elif self._async_disconnects:
                 error = NetworkError("async client shutdown did not finish")
         except BaseException as exc:
             error = exc
@@ -442,8 +450,9 @@ class Network:
         Cancellation is propagated after cleanup finishes.
 
         Raises:
-            NetworkError: if an async client's event loop is paused or waiting for
-                the client to close times out. Call again to wait for shutdown.
+            NetworkError: if an async client's event loop is paused or closed,
+                or waiting for the client to close times out. After a pause or
+                timeout, call again to wait for shutdown.
         """
         with self._stop_lock:
             self.stop()
@@ -884,10 +893,21 @@ class Network:
                     result[int(ep.port)] = ep.iface_name
         return result
 
+    def _settle_closed_async_loop(self, close: _AsyncDisconnect) -> bool:
+        """Settle a disconnect whose owning loop can no longer run."""
+        if not close.loop.is_closed():
+            return False
+        if close.client._retire() is not None:
+            self._closed_async_client_loops.add(close.switch)
+            logger.warning("async client disconnect %r failed: event loop is closed", close.switch)
+        return True
+
     def _close_async_clients(self) -> None:
         pending = []
         scheduled = []
         for close in self._async_disconnects:
+            if self._settle_closed_async_loop(close):
+                continue
             if close.future is not None:
                 scheduled.append(close)
                 continue
@@ -909,13 +929,16 @@ class Network:
                     raise
                 scheduled.append(close)
             except Exception as exc:
-                logger.warning("async client disconnect %r: %r", close.switch, exc)
+                if not self._settle_closed_async_loop(close):
+                    logger.warning("async client disconnect %r: %r", close.switch, exc)
 
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
             current_loop = None
         for close in scheduled:
+            if self._settle_closed_async_loop(close):
+                continue
             future = close.future
             assert future is not None
             if close.loop is current_loop and not future.done():
@@ -924,10 +947,12 @@ class Network:
             try:
                 future.result(timeout=5.0)
             except FutureTimeoutError:
-                pending.append(close)
-                logger.warning("async client disconnect %r timed out", close.switch)
+                if not self._settle_closed_async_loop(close):
+                    pending.append(close)
+                    logger.warning("async client disconnect %r timed out", close.switch)
             except Exception as exc:
-                logger.warning("async client disconnect %r: %r", close.switch, exc)
+                if not self._settle_closed_async_loop(close):
+                    logger.warning("async client disconnect %r: %r", close.switch, exc)
         self._async_disconnects = pending
 
     def _do_stop(self) -> None:

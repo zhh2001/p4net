@@ -9,7 +9,7 @@ import signal
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from types import SimpleNamespace
@@ -1476,6 +1476,10 @@ class _LoopBoundClient:
         self.closed = False
         self.disconnect_count = 0
 
+    @classmethod
+    async def create(cls) -> _LoopBoundClient:
+        return cls()
+
     def _retire(self) -> asyncio.AbstractEventLoop:
         return self._loop
 
@@ -1626,10 +1630,7 @@ def test_stop_closes_client_owned_by_background_loop(
     thread = threading.Thread(target=loop.run_forever)
     thread.start()
 
-    async def make_client() -> _LoopBoundClient:
-        return _LoopBoundClient()
-
-    client = asyncio.run_coroutine_threadsafe(make_client(), loop).result(timeout=2.0)
+    client = asyncio.run_coroutine_threadsafe(_LoopBoundClient.create(), loop).result(timeout=2.0)
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     try:
         net.start()
@@ -1642,6 +1643,68 @@ def test_stop_closes_client_owned_by_background_loop(
         net.stop()
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2.0)
+        loop.close()
+
+
+@pytest.mark.parametrize("state", ["cached", "deferred", "scheduled"])
+def test_stop_reports_closed_async_client_loop(
+    patched: dict[str, Any], tmp_path: Path, state: str
+) -> None:
+    loop = asyncio.new_event_loop()
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    try:
+        client = loop.run_until_complete(_LoopBoundClient.create())
+        net.start()
+        net.switch("s1")._async_client = client  # type: ignore[assignment]
+        if state != "cached":
+            with pytest.raises(NetworkError, match="async client shutdown did not finish"):
+                net.stop()
+            if state == "scheduled":
+                # The loop can close with a disconnect callback still queued.
+                (disconnect,) = net._async_disconnects
+                disconnect.future = Future()
+    finally:
+        loop.close()
+
+    for stop in (net.stop, lambda: asyncio.run(net.astop())):
+        with pytest.raises(NetworkError, match="event loop is closed for 's1'"):
+            stop()
+    assert client.disconnect_count == 0
+    assert not net.is_running
+    assert not net._async_disconnects
+    patched["clients"][0].disconnect.assert_called_once()
+    patched["bmv2s"][0].stop.assert_called_once()
+    for veth in patched["veths"]:
+        veth.destroy.assert_called_once()
+    patched["unregister"].assert_called_once_with(net)
+
+    net.start()
+    net.stop()
+
+
+def test_closed_loop_error_persists_when_other_async_client_finishes(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    closed_loop = asyncio.new_event_loop()
+    try:
+        lost_client = closed_loop.run_until_complete(_LoopBoundClient.create())
+    finally:
+        closed_loop.close()
+
+    loop = asyncio.new_event_loop()
+    net = Network(_make_multi_link_host_topology(), log_dir=tmp_path / "logs")
+    try:
+        pending_client = loop.run_until_complete(_LoopBoundClient.create())
+        net.start()
+        net.switch("s1")._async_client = lost_client  # type: ignore[assignment]
+        net.switch("s2")._async_client = pending_client  # type: ignore[assignment]
+        with pytest.raises(NetworkError, match="event loop is closed for 's1'"):
+            net.stop()
+        with pytest.raises(NetworkError, match="event loop is closed for 's1'"):
+            loop.run_until_complete(net.astop())
+        assert pending_client.closed and pending_client.disconnect_count == 1
+        assert not net.is_running
+    finally:
         loop.close()
 
 

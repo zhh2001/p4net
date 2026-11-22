@@ -199,6 +199,8 @@ Outside an event loop, `net.stop()` waits for cleanup. Inside an event loop, it 
 
 If a cached async client's event loop is paused or the client takes too long to close, the remaining network resources are released and the waiting call raises `NetworkError`. Run the client's event loop and call `net.stop()` or `await net.astop()` again to finish shutdown. Until those clients finish closing, `net.start()` and `await net.astart()` raise `NetworkError`.
 
+If an async client's event loop has already closed with the client still connected, shutdown releases the other network resources and raises `NetworkError` naming the affected switch.
+
 With a running event loop, the SIGINT/SIGTERM handler awaits network cleanup before restoring the previous handler and delivering the signal again. Outside an event loop, it uses synchronous cleanup.
 
 When the StreamChannel ends or fails, the client clears its connection and primary status and closes the channel. Call `connect()` on the same instance to reconnect. If the stream ends during initial arbitration, the connection wait ends immediately. `connect()` and `disconnect()` wait for any cleanup already in progress.
