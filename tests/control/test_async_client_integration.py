@@ -234,6 +234,52 @@ async def test_network_stop_closes_async_connection(
         await asyncio.to_thread(net.stop)
 
 
+@pytest.mark.parametrize("close_through_network", [True, False])
+def test_stop_retains_async_client_while_its_loop_is_paused(
+    tmp_path: Path, mocker: MockerFixture, close_through_network: bool
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    owner = asyncio.new_event_loop()
+    try:
+        owner.run_until_complete(client.connect())
+        channel = client._channel
+        close = mocker.spy(channel, "close")
+        for _ in range(2):
+            with pytest.raises(NetworkError, match="async client shutdown did not finish"):
+                net.stop()
+            assert not sw.bmv2.is_running()
+            assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
+            close.assert_not_awaited()
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+
+        if close_through_network:
+            owner.run_until_complete(net.astop())
+        else:
+            owner.run_until_complete(client.disconnect())
+        close.assert_awaited_once()
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        net.start()
+        assert net.switch(switch) is not sw
+        assert not net._async_disconnects
+    finally:
+        owner.run_until_complete(client.disconnect())
+        owner.run_until_complete(net.astop())
+        owner.close()
+
+
 @pytest.mark.parametrize("retry_shutdown", [True, False])
 async def test_network_stop_timeout_blocks_restart_until_async_close_finishes(
     tmp_path: Path, mocker: MockerFixture, retry_shutdown: bool
@@ -287,8 +333,9 @@ async def test_network_stop_timeout_blocks_restart_until_async_close_finishes(
         if retry_shutdown:
             await asyncio.wait_for(asyncio.to_thread(net.stop), timeout=3.0)
         else:
-            ((_, _, disconnect),) = net._async_disconnects
-            await asyncio.wait_for(asyncio.wrap_future(disconnect), timeout=3.0)
+            (disconnect,) = net._async_disconnects
+            assert disconnect.future is not None
+            await asyncio.wait_for(asyncio.wrap_future(disconnect.future), timeout=3.0)
         assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
         assert client._loop is None
         close_spy.assert_awaited_once()
