@@ -49,7 +49,7 @@ The sync and async clients have different call patterns and some different metho
 | `Network.boot_timestamps` | Stable | Returns a new dictionary mapping switch names to their `boot_timestamp_us` values. Editing the dictionary does not change the network. Raises `NetworkNotRunningError` when the network is not running. |
 | `RunningHost` | Stable | Host descriptor, namespace and interface access, addresses, command execution, and ping. |
 | `RunningSwitch` | Stable | Switch descriptor, BMv2 process, sync client, compiler outputs, and log path. |
-| `RunningSwitch.async_client` | Stable since 1.7 | Lazily creates an unconnected client. Each new connection reads P4Info from the switch. The instance is cached until `stop()` or `astop()` closes and clears it. |
+| `RunningSwitch.async_client` | Stable since 1.7 | Lazily creates one unconnected client per running switch. Each new connection reads P4Info from the switch. Shutdown closes and clears the cached client. Accessing the property on that switch during cleanup or after shutdown raises `NetworkNotRunningError`. |
 | `RunningSwitch.boot_timestamp_us` | Stable | Unix microseconds recorded just before launching the BMv2 process. Raises `NetworkNotRunningError` if the underlying process has no boot timestamp. |
 | `NetworkError`, `NetworkAlreadyRunningError`, `NetworkNotRunningError`, `NodeNotFoundError` | Stable | Network lifecycle and node lookup errors. |
 

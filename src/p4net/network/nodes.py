@@ -14,6 +14,7 @@ import os
 import selectors
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -268,6 +269,8 @@ class RunningSwitch:
         self._client = client
         self._compile_result = compile_result
         self._async_client: AsyncP4RuntimeClient | None = None
+        self._async_client_lock = threading.Lock()
+        self._stopped = False
 
     @property
     def name(self) -> str:
@@ -337,27 +340,35 @@ class RunningSwitch:
         take primary status from an existing client; ``(0, 0)`` permits
         a backup connection for reads.
 
-        The returned instance is cached; subsequent property accesses
-        return the same object. ``Network.stop()`` and ``Network.astop()``
-        close the cached client on its owning event loop and clear it.
+        Concurrent accesses share the cached instance. ``Network.stop()``
+        and ``Network.astop()`` close it on its owning event loop and clear it.
+
+        Raises:
+            NetworkNotRunningError: if the network has retired this switch during shutdown.
 
         **Stable** in p4net 1.x since version 1.7.0 — see
         :class:`AsyncP4RuntimeClient`.
         """
-        if self._async_client is None:
-            client = AsyncP4RuntimeClient(
-                grpc_address=("127.0.0.1", self._bmv2.grpc_port),
-                device_id=self._bmv2.device_id,
-                thrift_address=("127.0.0.1", self._bmv2.thrift_port),
-            )
-            client._pipeline_state = self._client._pipeline_state
-            client._read_pipeline_on_first_connect = True
-            self._async_client = client
-        return self._async_client
+        with self._async_client_lock:
+            if self._stopped:
+                raise NetworkNotRunningError(f"switch {self.name!r} is not running")
+            if self._async_client is None:
+                client = AsyncP4RuntimeClient(
+                    grpc_address=("127.0.0.1", self._bmv2.grpc_port),
+                    device_id=self._bmv2.device_id,
+                    thrift_address=("127.0.0.1", self._bmv2.thrift_port),
+                )
+                client._pipeline_state = self._client._pipeline_state
+                client._read_pipeline_on_first_connect = True
+                self._async_client = client
+            return self._async_client
 
-    def _reset_async_client(self) -> None:
-        """Drop the cached async client. Called by ``Network.stop()``."""
-        self._async_client = None
+    def _take_async_client_for_stop(self) -> AsyncP4RuntimeClient | None:
+        """Retire the switch handle and return its cached client for cleanup."""
+        with self._async_client_lock:
+            self._stopped = True
+            client, self._async_client = self._async_client, None
+            return client
 
     def __repr__(self) -> str:
         return f"RunningSwitch(name={self.name!r}, grpc={self._bmv2.grpc_address!r})"

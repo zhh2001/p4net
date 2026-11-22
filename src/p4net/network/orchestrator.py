@@ -881,7 +881,7 @@ class Network:
 
         # 1a. Submit disconnects to the loops that own the gRPC resources.
         for sw_name, rs in list(self._running_switches.items()):
-            ac = rs._async_client
+            ac = rs._take_async_client_for_stop()
             if ac is None:
                 continue
             try:
@@ -898,7 +898,6 @@ class Network:
                     self._async_disconnects.append((sw_name, loop, future))
             except Exception as exc:
                 logger.warning("async client disconnect %r: %r", sw_name, exc)
-            rs._reset_async_client()
 
         try:
             current_loop = asyncio.get_running_loop()

@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,7 +19,13 @@ from unittest.mock import MagicMock, call
 import pytest
 from pytest_mock import MockerFixture
 
-from p4net.network import Network, NetworkAlreadyRunningError, NetworkError, NodeNotFoundError
+from p4net.network import (
+    Network,
+    NetworkAlreadyRunningError,
+    NetworkError,
+    NetworkNotRunningError,
+    NodeNotFoundError,
+)
 from p4net.network.orchestrator import (
     _add_durations,
     _format_duration_ns,
@@ -1399,19 +1406,64 @@ def test_running_switch_async_client_lazy_cached() -> None:
     assert ac._pipeline_state is sync_client._pipeline_state
 
 
-def test_running_switch_async_client_reset_after_stop(
-    patched: dict[str, Any], tmp_path: Path
+def test_concurrent_first_async_client_access_reuses_the_same_instance(
+    patched: dict[str, Any], tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    """Network.stop() drops the cached async client on each RunningSwitch."""
+    from p4net.control import AsyncP4RuntimeClient
+
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     net.start()
     sw = net.switch("s1")
-    first = sw.async_client
-    assert first is sw.async_client  # cached
-    net.stop()
-    # The orchestrator clears the running-switches dict on stop AND zeroes
-    # the per-RunningSwitch async cache via _reset_async_client.
+    constructing, release, accessing = (threading.Event() for _ in range(3))
+
+    def construct(**kwargs: Any) -> AsyncP4RuntimeClient:
+        if not constructing.is_set():
+            constructing.set()
+            assert release.wait(timeout=3.0)
+        return AsyncP4RuntimeClient(**kwargs)
+
+    def access() -> AsyncP4RuntimeClient:
+        accessing.set()
+        return sw.async_client
+
+    factory = mocker.patch("p4net.network.nodes.AsyncP4RuntimeClient", side_effect=construct)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            try:
+                first = workers.submit(lambda: sw.async_client)
+                assert constructing.wait(timeout=1.0)
+                second = workers.submit(access)
+                assert accessing.wait(timeout=1.0)
+                with pytest.raises(FutureTimeoutError):
+                    second.result(timeout=0.05)
+                release.set()
+                assert first.result(timeout=1.0) is second.result(timeout=1.0) is sw.async_client
+                factory.assert_called_once()
+            finally:
+                release.set()
+    finally:
+        net.stop()
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_stopped_switch_cannot_create_an_async_client(
+    patched: dict[str, Any], tmp_path: Path, mocker: MockerFixture, cached: bool
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    sw = net.switch("s1")
+    try:
+        if cached:
+            first = sw.async_client
+            assert first is sw.async_client
+    finally:
+        net.stop()
+
+    factory = mocker.patch("p4net.network.nodes.AsyncP4RuntimeClient")
     assert sw._async_client is None
+    with pytest.raises(NetworkNotRunningError, match="switch 's1' is not running"):
+        _ = sw.async_client
+    factory.assert_not_called()
 
 
 class _LoopBoundClient:
@@ -1431,6 +1483,51 @@ class _LoopBoundClient:
         self.disconnect_count += 1
         self.is_connected = False
         self.closed = True
+
+
+async def test_astop_closes_the_client_if_creation_already_started(
+    patched: dict[str, Any], tmp_path: Path, mocker: MockerFixture
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    sw = net.switch("s1")
+    client = _LoopBoundClient()
+    constructing, release, stopping = (threading.Event() for _ in range(3))
+    do_stop = net._do_stop
+
+    def construct(**_kwargs: Any) -> _LoopBoundClient:
+        constructing.set()
+        assert release.wait(timeout=3.0)
+        return client
+
+    def begin_stop() -> None:
+        stopping.set()
+        do_stop()
+
+    factory = mocker.patch("p4net.network.nodes.AsyncP4RuntimeClient", side_effect=construct)
+    mocker.patch.object(net, "_do_stop", side_effect=begin_stop)
+    creating = asyncio.create_task(asyncio.to_thread(lambda: sw.async_client))
+    shutdown = None
+    try:
+        assert await asyncio.to_thread(constructing.wait, 1.0)
+        shutdown = asyncio.create_task(net.astop())
+        assert await asyncio.to_thread(stopping.wait, 1.0)
+        done, _ = await asyncio.wait((shutdown,), timeout=0.05)
+        assert not done
+        release.set()
+        assert await asyncio.wait_for(creating, timeout=1.0) is client
+        await asyncio.wait_for(shutdown, timeout=2.0)
+        assert client.closed and client.disconnect_count == 1
+        assert sw._async_client is None
+        with pytest.raises(NetworkNotRunningError, match="switch 's1' is not running"):
+            _ = sw.async_client
+        factory.assert_called_once()
+    finally:
+        release.set()
+        await asyncio.gather(creating, return_exceptions=True)
+        if shutdown is not None:
+            await asyncio.gather(shutdown, return_exceptions=True)
+        await net.astop()
 
 
 @pytest.mark.parametrize("mode", ["async", "worker", "owner"])
@@ -1472,13 +1569,16 @@ async def test_astop_waits_for_client_before_stopping_switch(
 ) -> None:
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     net.start()
+    sw = net.switch("s1")
     client = _LoopBoundClient()
     client.allow_disconnect.clear()
-    net.switch("s1")._async_client = client  # type: ignore[assignment]
+    sw._async_client = client  # type: ignore[assignment]
     task = asyncio.create_task(net.astop())
     try:
         await asyncio.wait_for(client.disconnect_started.wait(), timeout=2.0)
         assert not task.done()
+        with pytest.raises(NetworkNotRunningError, match="switch 's1' is not running"):
+            _ = sw.async_client
         patched["bmv2s"][0].stop.assert_not_called()
         client.allow_disconnect.set()
         await asyncio.wait_for(task, timeout=2.0)
