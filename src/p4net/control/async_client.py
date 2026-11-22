@@ -118,7 +118,8 @@ class AsyncP4RuntimeClient:
         self._host, self._port = grpc_address
         self._device_id = int(device_id)
         self._info_index = info_index
-        self._read_pipeline_on_connect = False
+        self._read_pipeline_on_first_connect = False
+        self._has_connected = False
         self._thrift_address = thrift_address
         self._election_id = election_id  # resolved at connect() if None
 
@@ -186,8 +187,9 @@ class AsyncP4RuntimeClient:
     async def connect(self, *, timeout: float = 10.0) -> None:
         """Connect and await arbitration. Concurrent callers share the first attempt.
 
-        A client from ``RunningSwitch.async_client`` also reads the device's
-        P4Info on each new connection within the same timeout.
+        Reconnecting also reads the device's P4Info within the same timeout.
+        Clients from ``RunningSwitch.async_client`` do so on their first
+        connection as well.
         """
         if self._connected:
             return
@@ -218,7 +220,7 @@ class AsyncP4RuntimeClient:
             await self._teardown()
         self._closed = False
         loop = self._loop = asyncio.get_running_loop()
-        read_pipeline = self._read_pipeline_on_connect
+        read_pipeline = self._has_connected or self._read_pipeline_on_first_connect
         previous = self._info_index
         if read_pipeline:
             deadline = loop.time() + timeout
@@ -272,6 +274,7 @@ class AsyncP4RuntimeClient:
             self._info_index = await self._read_p4info_on_connect(
                 stream_call, previous, timeout=deadline - loop.time()
             )
+        self._has_connected = True
         self._connected = True
         logger.info(
             "AsyncP4RuntimeClient %s connected (primary=%s, election=%s)",

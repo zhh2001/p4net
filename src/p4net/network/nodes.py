@@ -351,7 +351,7 @@ class RunningSwitch:
                 info_index=self._client._index,
                 thrift_address=("127.0.0.1", self._bmv2.thrift_port),
             )
-            client._read_pipeline_on_connect = True
+            client._read_pipeline_on_first_connect = True
             self._async_client = client
         return self._async_client
 

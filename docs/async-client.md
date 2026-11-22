@@ -66,13 +66,13 @@ The output should contain a `MyIngress.ipv4_lpm` entry with action parameters `{
 
 ## Connections and primary status
 
-`net.switch("s1").async_client` lazily creates and caches an unconnected client. It starts with the sync client's cached P4Info and reads the current P4Info from the switch each time `await client.connect()` opens a new connection. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
+`net.switch("s1").async_client` lazily creates and caches an unconnected client. It starts with the sync client's cached P4Info and reads the current P4Info from the switch on its first connection. A client you construct yourself uses the `info_index=` argument on its first connection. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
 
 After connecting to a switch with no installed pipeline, the primary client can install one with `push_pipeline()`.
 
 Concurrent `connect()` calls on a single instance share one connection attempt in both clients. The first call sets the timeout for arbitration and any P4Info readback. With the async client, cancelling a waiting call leaves the attempt running. Cancelling the first call cleans up the attempt and propagates `asyncio.CancelledError` to the remaining callers.
 
-The sync client also reads the switch's P4Info when it reconnects. The readback uses the same connection timeout as arbitration.
+Both clients read the switch's P4Info when they reconnect. The readback and arbitration share the connection timeout.
 
 Without an explicit `election_id`, the async client generates one from the current millisecond timestamp at its first connection. The sync client created by `Network` also uses a timestamp, so do not rely on construction order to assign primary status. Construct a client with an explicit election ID, as in the complete example, when you need to choose which client writes. Election IDs are compared as `(high, low)` pairs.
 
@@ -102,7 +102,7 @@ When installing a pipeline yourself, pass text-format P4Info bytes to `push_pipe
 
 Use `set_pipeline_config(action="COMMIT")` or `await push_pipeline(action="COMMIT")` to activate a pipeline saved with `VERIFY_AND_SAVE`. Both clients read back P4Info after the commit succeeds. If the read fails, the call reports the refresh error and clears the local index.
 
-The switch can apply a pipeline change even if the client times out. Both clients clear their cached P4Info when they cannot confirm the result of a dispatched change. To restore the index, use `get_pipeline_config()` on the sync client. On the async client, push the intended pipeline again or disconnect and reconnect a client obtained through `RunningSwitch.async_client`. `VERIFY` and explicit rejections of a change keep the current index.
+The switch can apply a pipeline change even if the client times out. Both clients clear their cached P4Info when they cannot confirm the result of a dispatched change. Reconnect to restore the index, or use `get_pipeline_config()` on the sync client. `VERIFY` and explicit rejections of a change keep the current index.
 
 ## Concurrent operations and PacketIn
 

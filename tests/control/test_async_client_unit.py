@@ -128,6 +128,7 @@ def patched_aio(mocker: MockerFixture) -> dict[str, Any]:
     stub.StreamChannel = MagicMock(side_effect=stream_channel)
     stub.Write = AsyncMock(return_value=MagicMock())
     stub.SetForwardingPipelineConfig = AsyncMock(return_value=MagicMock())
+    stub.GetForwardingPipelineConfig = AsyncMock(return_value=_pipeline_reply())
     # `Read` returns an async iterator; default is empty.
     stub.Read = MagicMock()
 
@@ -149,13 +150,15 @@ async def _connect(
     status_code: int = 0,
     info_index: P4InfoIndex | None = None,
 ) -> AsyncP4RuntimeClient:
+    index = info_index or _make_p4info_index()
     client = AsyncP4RuntimeClient(
         grpc_address=("127.0.0.1", 50051),
         device_id=0,
-        info_index=info_index or _make_p4info_index(),
+        info_index=index,
         thrift_address=("127.0.0.1", 9090),
         election_id=election_id,
     )
+    patched_aio["stub"].GetForwardingPipelineConfig.return_value = _pipeline_reply(index)
     _arb_task = asyncio.create_task(patched_aio["stream"].push_arbitration(code=status_code))
     await client.connect(timeout=2.0)
     await _arb_task
@@ -179,7 +182,9 @@ def _batch_error(codes: list[int], *, details: str = "batch write failed") -> gr
 # ---------------------------------------------------------------------------
 
 
-def _managed_client(info: P4InfoIndex) -> AsyncP4RuntimeClient:
+def _lifecycle_client(info: P4InfoIndex, *, managed: bool) -> AsyncP4RuntimeClient:
+    if not managed:
+        return AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=3, info_index=info)
     switch = RunningSwitch(
         P4Switch(name="s1", p4_src=Path("routing.p4")),
         MagicMock(device_id=3, grpc_port=50051, thrift_port=9090),
@@ -189,6 +194,13 @@ def _managed_client(info: P4InfoIndex) -> AsyncP4RuntimeClient:
     return switch.async_client
 
 
+def _pipeline_reply(info: P4InfoIndex | None = None) -> Any:
+    reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    if info is not None:
+        reply.config.p4info.CopyFrom(info.raw)
+    return reply
+
+
 def _replace_async_stream(mocker: MockerFixture) -> tuple[Any, _FakeStream]:
     stream = _FakeStream()
     stub = MagicMock(StreamChannel=MagicMock(return_value=stream))
@@ -196,10 +208,12 @@ def _replace_async_stream(mocker: MockerFixture) -> tuple[Any, _FakeStream]:
     return stub, stream
 
 
-async def _connect_and_disconnect_managed_client(
+async def _connect_then_replace_stream(
     client: AsyncP4RuntimeClient,
     patched_aio: dict[str, Any],
     mocker: MockerFixture,
+    *,
+    managed: bool,
 ) -> tuple[Any, _FakeStream]:
     reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
     reply.config.p4info.CopyFrom(client.info_index.raw)
@@ -208,23 +222,26 @@ async def _connect_and_disconnect_managed_client(
     await patched_aio["stream"].push_arbitration()
     try:
         await client.connect()
-        initial_stub.GetForwardingPipelineConfig.assert_awaited_once()
+        assert initial_stub.GetForwardingPipelineConfig.await_count == int(managed)
     finally:
         await client.disconnect()
     return _replace_async_stream(mocker)
 
 
 @pytest.mark.parametrize("p4info", ["same", "changed", "missing", "unconfigured-bmv2"])
-@pytest.mark.parametrize("reconnect", [False, True])
-async def test_managed_client_confirms_p4info_for_each_connection(
-    patched_aio: dict[str, Any], mocker: MockerFixture, p4info: str, reconnect: bool
+@pytest.mark.parametrize("connection", ["managed-first", "managed-reconnect", "direct-reconnect"])
+async def test_connection_confirms_p4info_when_readback_is_required(
+    patched_aio: dict[str, Any], mocker: MockerFixture, p4info: str, connection: str
 ) -> None:
     previous = _make_p4info_index()
-    client = _managed_client(previous)
+    managed = connection.startswith("managed")
+    client = _lifecycle_client(previous, managed=managed)
     assert client.info_index is previous
     stub, stream = patched_aio["stub"], patched_aio["stream"]
-    if reconnect:
-        stub, stream = await _connect_and_disconnect_managed_client(client, patched_aio, mocker)
+    if connection.endswith("reconnect"):
+        stub, stream = await _connect_then_replace_stream(
+            client, patched_aio, mocker, managed=managed
+        )
     reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
     if p4info in ("same", "changed"):
         reply.config.p4info.CopyFrom(previous.raw)
@@ -273,14 +290,17 @@ async def test_managed_client_confirms_p4info_for_each_connection(
 
 
 @pytest.mark.parametrize("ending", ["disconnect", "timeout", "cancel", "rpc-error"])
-@pytest.mark.parametrize("reconnect", [False, True])
-async def test_failed_managed_p4info_readback_is_retried_on_next_connect(
-    patched_aio: dict[str, Any], mocker: MockerFixture, ending: str, reconnect: bool
+@pytest.mark.parametrize("connection", ["managed-first", "managed-reconnect", "direct-reconnect"])
+async def test_failed_p4info_readback_is_retried_on_next_connect(
+    patched_aio: dict[str, Any], mocker: MockerFixture, ending: str, connection: str
 ) -> None:
-    client = _managed_client(_make_p4info_index())
+    managed = connection.startswith("managed")
+    client = _lifecycle_client(_make_p4info_index(), managed=managed)
     stub, stream = patched_aio["stub"], patched_aio["stream"]
-    if reconnect:
-        stub, stream = await _connect_and_disconnect_managed_client(client, patched_aio, mocker)
+    if connection.endswith("reconnect"):
+        stub, stream = await _connect_then_replace_stream(
+            client, patched_aio, mocker, managed=managed
+        )
     read_started, release = asyncio.Event(), asyncio.Event()
     reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
     reply.config.p4info.CopyFrom(_make_p4info_index().raw)
@@ -335,11 +355,12 @@ async def test_failed_managed_p4info_readback_is_retried_on_next_connect(
         await client.disconnect()
 
 
-async def test_managed_reconnect_waits_for_an_older_pipeline_rpc(
-    patched_aio: dict[str, Any], mocker: MockerFixture
+@pytest.mark.parametrize("managed", [True, False])
+async def test_reconnect_waits_for_an_older_pipeline_rpc(
+    patched_aio: dict[str, Any], mocker: MockerFixture, managed: bool
 ) -> None:
     previous = _make_p4info_index()
-    client = _managed_client(previous)
+    client = _lifecycle_client(previous, managed=managed)
     old_stub = patched_aio["stub"]
     reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
     reply.config.p4info.CopyFrom(previous.raw)
@@ -389,6 +410,26 @@ async def test_connect_then_disconnect_clean(patched_aio: dict[str, Any]) -> Non
     assert client.is_primary
     await client.disconnect()
     assert not client.is_connected
+
+
+@pytest.mark.parametrize("configured", [False, True])
+async def test_direct_client_starts_with_the_constructor_index(
+    patched_aio: dict[str, Any], configured: bool
+) -> None:
+    initial = _make_p4info_index() if configured else None
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0, info_index=initial)
+    try:
+        await patched_aio["stream"].push_arbitration()
+        await client.connect()
+        assert client.is_connected
+        patched_aio["stub"].GetForwardingPipelineConfig.assert_not_called()
+        if configured:
+            assert client.info_index is initial
+        else:
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
+    finally:
+        await client.disconnect()
 
 
 @pytest.mark.parametrize("step", ["stub", "stream"])
@@ -1211,23 +1252,29 @@ async def test_commit_refresh_cannot_overwrite_a_later_pipeline(
     commit = asyncio.create_task(client.push_pipeline(action="COMMIT"))
     obsolete = None
     newer = None
+    reconnecting = None
     try:
         await asyncio.wait_for(read_started.wait(), timeout=1.0)
         if reconnect:
             obsolete = asyncio.create_task(client.push_pipeline(b"", b"{}"))
             await asyncio.sleep(0)
             await client.disconnect()
-            stream = _FakeStream()
-            newer_stub = MagicMock(
-                StreamChannel=MagicMock(return_value=stream),
-                SetForwardingPipelineConfig=AsyncMock(),
-            )
-            mocker.patch(
-                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
-                return_value=newer_stub,
-            )
+            newer_stub, stream = _replace_async_stream(mocker)
+            newer_stub.SetForwardingPipelineConfig = AsyncMock()
+            newer_stub.GetForwardingPipelineConfig = AsyncMock(return_value=response)
             await stream.push_arbitration()
-            await client.connect()
+            reconnecting = asyncio.create_task(client.connect())
+            done, _ = await asyncio.wait((reconnecting,), timeout=0.02)
+            assert not done
+            newer_stub.GetForwardingPipelineConfig.assert_not_called()
+            old_stub.SetForwardingPipelineConfig.assert_awaited_once()
+
+            release_read.set()
+            with pytest.raises(ConnectionError, match="COMMIT succeeded"):
+                await asyncio.wait_for(commit, timeout=1.0)
+            with pytest.raises(ConnectionError, match="closed before pipeline RPC"):
+                await asyncio.wait_for(obsolete, timeout=1.0)
+            await asyncio.wait_for(reconnecting, timeout=1.0)
 
         next_info = _make_p4info_index().raw
         next_info.tables[0].preamble.name = "Newer.ipv4_lpm"
@@ -1238,14 +1285,8 @@ async def test_commit_refresh_cannot_overwrite_a_later_pipeline(
         if reconnect:
             newer_stub.SetForwardingPipelineConfig.assert_not_called()
 
-        release_read.set()
-        if reconnect:
-            with pytest.raises(ConnectionError, match="COMMIT succeeded"):
-                await commit
-            assert obsolete is not None
-            with pytest.raises(ConnectionError, match="closed before pipeline RPC"):
-                await obsolete
-        else:
+        if not reconnect:
+            release_read.set()
             await commit
         await newer
         assert newer_stub.SetForwardingPipelineConfig.call_count == (1 if reconnect else 2)
@@ -1255,6 +1296,8 @@ async def test_commit_refresh_cannot_overwrite_a_later_pipeline(
         await asyncio.gather(commit, return_exceptions=True)
         if obsolete is not None:
             await asyncio.gather(obsolete, return_exceptions=True)
+        if reconnecting is not None:
+            await asyncio.gather(reconnecting, return_exceptions=True)
         if newer is not None:
             await asyncio.gather(newer, return_exceptions=True)
         await client.disconnect()
@@ -1279,13 +1322,9 @@ async def test_pipeline_reply_from_an_old_connection_does_not_install_the_candid
 
     old_stub = patched_aio["stub"]
     old_stub.SetForwardingPipelineConfig.side_effect = hold_reply
-    stream = _FakeStream()
-    new_stub = MagicMock(
-        StreamChannel=MagicMock(return_value=stream),
-        SetForwardingPipelineConfig=AsyncMock(),
-    )
     config = () if action == "COMMIT" else (p4info, b"{}")
     pending = asyncio.create_task(client.push_pipeline(*config, action=action))
+    reconnecting = None
     try:
         await asyncio.wait_for(started.wait(), timeout=1.0)
         await client.disconnect()
@@ -1293,22 +1332,22 @@ async def test_pipeline_reply_from_an_old_connection_does_not_install_the_candid
             "p4net.control.async_client.grpc.aio.insecure_channel",
             return_value=MagicMock(close=AsyncMock()),
         )
-        mocker.patch(
-            "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub", return_value=new_stub
-        )
+        new_stub, stream = _replace_async_stream(mocker)
+        new_stub.SetForwardingPipelineConfig = AsyncMock()
+        new_stub.GetForwardingPipelineConfig = AsyncMock(return_value=_pipeline_reply(current))
         await stream.push_arbitration()
-        await client.connect(timeout=1.0)
+        reconnecting = asyncio.create_task(client.connect())
+        done, _ = await asyncio.wait((reconnecting,), timeout=0.02)
+        assert not done
+        new_stub.GetForwardingPipelineConfig.assert_not_called()
         reply.set()
 
         with pytest.raises(ConnectionError, match="closed"):
             await asyncio.wait_for(pending, timeout=1.0)
-        if action == "VERIFY":
-            assert client.info_index is current
-        else:
-            with pytest.raises(P4RuntimeError, match="no P4Info index"):
-                _ = client.info_index
+        await asyncio.wait_for(reconnecting, timeout=1.0)
+        assert client.info_index is current
         old_stub.GetForwardingPipelineConfig.assert_not_called()
-        new_stub.GetForwardingPipelineConfig.assert_not_called()
+        new_stub.GetForwardingPipelineConfig.assert_awaited_once()
         new_stub.SetForwardingPipelineConfig.assert_not_awaited()
 
         await client.push_pipeline(p4info, b"{}")
@@ -1317,6 +1356,8 @@ async def test_pipeline_reply_from_an_old_connection_does_not_install_the_candid
     finally:
         reply.set()
         await asyncio.gather(pending, return_exceptions=True)
+        if reconnecting is not None:
+            await asyncio.gather(reconnecting, return_exceptions=True)
         await client.disconnect()
 
 
@@ -2170,6 +2211,9 @@ async def test_unstarted_read_iterator_is_bound_to_its_connection(
 
     retry_stream = _FakeStream()
     retry_stub = MagicMock(StreamChannel=MagicMock(return_value=retry_stream))
+    retry_stub.GetForwardingPipelineConfig = AsyncMock(
+        return_value=_pipeline_reply(client.info_index)
+    )
     retry_stub.Read.side_effect = lambda _request, timeout: respond()
     try:
         await client.disconnect()
@@ -2276,14 +2320,13 @@ async def test_started_read_iterator_rejects_a_delayed_reply(
     try:
         await asyncio.wait_for(waiting.wait(), timeout=1.0)
         if change == "reconnect":
+            current_index = client.info_index
             await client.disconnect()
-            stream = _FakeStream()
-            await stream.push_arbitration()
-            current_stub = MagicMock(StreamChannel=MagicMock(return_value=stream))
-            mocker.patch(
-                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
-                return_value=current_stub,
+            current_stub, stream = _replace_async_stream(mocker)
+            current_stub.GetForwardingPipelineConfig = AsyncMock(
+                return_value=_pipeline_reply(current_index)
             )
+            await stream.push_arbitration()
             await client.connect()
         else:
             active_id = 4001
@@ -2649,14 +2692,13 @@ async def test_read_counter_keeps_its_connection_and_p4info(
         assert request.entities[0].counter_entry.counter_id == original_id
         active_id = original_id
         if change == "reconnect":
+            current_index = client.info_index
             await client.disconnect()
-            stream = _FakeStream()
-            await stream.push_arbitration()
-            current_stub = MagicMock(StreamChannel=MagicMock(return_value=stream))
-            mocker.patch(
-                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
-                return_value=current_stub,
+            current_stub, stream = _replace_async_stream(mocker)
+            current_stub.GetForwardingPipelineConfig = AsyncMock(
+                return_value=_pipeline_reply(current_index)
             )
+            await stream.push_arbitration()
             await client.connect()
         else:
             active_id = updated_id
@@ -2770,13 +2812,11 @@ async def test_async_reads_distinguish_disconnect_from_cancellation(
                 patched_aio["channel"].close.side_effect = close
             await client.disconnect()
         if ending == "reconnect":
-            stream = _FakeStream()
-            await stream.push_arbitration()
-            replacement = MagicMock(StreamChannel=MagicMock(return_value=stream))
-            mocker.patch(
-                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
-                return_value=replacement,
+            replacement, stream = _replace_async_stream(mocker)
+            replacement.GetForwardingPipelineConfig = AsyncMock(
+                return_value=_pipeline_reply(P4InfoIndex(info))
             )
+            await stream.push_arbitration()
             await client.connect()
             replacement.Read.assert_not_called()
         release.set()
@@ -3070,24 +3110,24 @@ async def test_async_register_commands_keep_their_connection_and_p4info(
     proc = MagicMock(returncode=0, communicate=AsyncMock(return_value=(stdout, b"")))
     spawn = mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
     pending = None
+    reconnecting = None
     try:
         async with client._pipeline_lock:
             pending = asyncio.create_task(operation(name, *args))
             await asyncio.wait_for(started.wait(), timeout=1.0)
             if change == "reconnect":
+                current_index = client.info_index
                 await client.disconnect()
-                replacement = _FakeStream()
+                stub, replacement = _replace_async_stream(mocker)
+                stub.GetForwardingPipelineConfig = AsyncMock(
+                    return_value=_pipeline_reply(current_index)
+                )
                 await replacement.push_arbitration()
-                stub = MagicMock(StreamChannel=MagicMock(return_value=replacement))
                 channel = MagicMock(close=AsyncMock())
                 mocker.patch(
                     "p4net.control.async_client.grpc.aio.insecure_channel", return_value=channel
                 )
-                mocker.patch(
-                    "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
-                    return_value=stub,
-                )
-                await client.connect()
+                reconnecting = asyncio.create_task(client.connect())
             else:
                 client._info_index = _make_p4info_index()
 
@@ -3095,6 +3135,8 @@ async def test_async_register_commands_keep_their_connection_and_p4info(
         message = "closed during a register" if change == "reconnect" else "P4Info changed"
         with pytest.raises(error, match=message):
             await asyncio.wait_for(pending, timeout=1.0)
+        if reconnecting is not None:
+            await asyncio.wait_for(reconnecting, timeout=1.0)
         spawn.assert_not_awaited()
 
         assert await operation(name, *args) == expected
@@ -3103,6 +3145,8 @@ async def test_async_register_commands_keep_their_connection_and_p4info(
         if pending is not None and not pending.done():
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
+        if reconnecting is not None:
+            await asyncio.gather(reconnecting, return_exceptions=True)
         await client.disconnect()
 
 
