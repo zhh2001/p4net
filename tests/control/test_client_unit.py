@@ -1453,7 +1453,7 @@ def test_table_reads_keep_their_connection_and_p4info(
     change: str,
 ) -> None:
     client = _push_pipeline(connected_client)
-    _, mocks, p4info_path, json_path = connected_client
+    _, mocks, _, _ = connected_client
     original_stub = current_stub = mocks["stub"]
     table = "MyIngress.ipv4_lpm"
     original_id, updated_id = 2001, 4001
@@ -1518,10 +1518,12 @@ def test_table_reads_keep_their_connection_and_p4info(
                 client.connect(timeout=1.0)
             else:
                 active_id = updated_id
-                p4info = _build_p4info()
-                p4info.tables[0].preamble.id = active_id
-                p4info_path.write_text(str(p4info))
-            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+            p4info = _build_p4info()
+            p4info.tables[0].preamble.id = active_id
+            reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+            reply.config.p4info.CopyFrom(p4info)
+            current_stub.GetForwardingPipelineConfig.return_value = reply
+            client.get_pipeline_config()
             release.set()
 
             error = ConnectionError if change == "reconnect" else P4RuntimeError
@@ -1583,6 +1585,7 @@ def test_sync_indexed_write_waits_for_pipeline_and_rechecks_p4info(
     pushing, release_push = threading.Event(), threading.Event()
     refreshing, release_refresh = threading.Event(), threading.Event()
     queued, sent = threading.Event(), threading.Event()
+    allow_dispatch = threading.Event()
     table, counter = "MyIngress.ipv4_lpm", "MyIngress.ingress_pkts"
     key = {"hdr.ipv4.dstAddr": "10.0.0.1/32"}
 
@@ -1617,6 +1620,7 @@ def test_sync_indexed_write_waits_for_pipeline_and_rechecks_p4info(
 
     def note_dispatch(*args: Any, **kwargs: Any) -> None:
         queued.set()
+        assert allow_dispatch.wait(timeout=3.0)
         dispatch(*args, **kwargs)
 
     def send(*args: Any, **kwargs: Any) -> None:
@@ -1638,10 +1642,16 @@ def test_sync_indexed_write_waits_for_pipeline_and_rechecks_p4info(
     files = {} if action == "COMMIT" else {"bmv2_json": json_path, "p4info": p4info_path}
     with ThreadPoolExecutor(max_workers=2) as workers:
         try:
+            if operation in ("clear", "counter-all"):
+                # Finish the read so this test can pause the following write.
+                pending = workers.submit(write)
+                assert queued.wait(timeout=1.0)
             pipeline = workers.submit(client.set_pipeline_config, action=action, **files)
             assert pushing.wait(timeout=1.0)
-            pending = workers.submit(write)
+            if operation not in ("clear", "counter-all"):
+                pending = workers.submit(write)
             assert queued.wait(timeout=1.0)
+            allow_dispatch.set()
             assert not sent.wait(timeout=0.03)
             stub.Write.assert_not_called()
 
@@ -1675,14 +1685,118 @@ def test_sync_indexed_write_waits_for_pipeline_and_rechecks_p4info(
             else:
                 assert entity.table_entry.table_id == expected_table_id
         finally:
+            allow_dispatch.set()
+            release_push.set()
+            release_refresh.set()
+            client.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("operation", "action", "empty_result"),
+    [
+        ("table-one", "VERIFY", []),
+        ("table-all", "VERIFY_AND_COMMIT", []),
+        ("counter-cell", "VERIFY_AND_COMMIT", 0),
+        ("counter-all", "COMMIT", {}),
+        ("clear-empty", "COMMIT", 0),
+        ("reset-empty", "COMMIT", None),
+    ],
+)
+def test_sync_indexed_read_waits_for_pipeline_and_rechecks_p4info(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    mocker: MockerFixture,
+    operation: str,
+    action: str,
+    empty_result: object,
+) -> None:
+    client, mocks, p4info_path, json_path = connected_client
+    p4info_path.write_text(str(_build_p4info_with_counter()))
+    client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+    original = client.index
+    candidate = _build_p4info_with_counter()
+    candidate.tables[0].preamble.id = 4001
+    candidate.counters[0].preamble.id = 5001
+    p4info_path.write_text(str(candidate))
+    stub = mocks["stub"]
+    pushing, release_push = threading.Event(), threading.Event()
+    refreshing, release_refresh = threading.Event(), threading.Event()
+    prepared, sent = threading.Event(), threading.Event()
+    table, counter = "MyIngress.ipv4_lpm", "MyIngress.ingress_pkts"
+    capture_context = client._indexed_context
+
+    def hold_push(_request: Any, *, timeout: float) -> None:
+        pushing.set()
+        assert release_push.wait(timeout=3.0)
+
+    def hold_refresh(_request: Any, *, timeout: float) -> Any:
+        refreshing.set()
+        assert release_refresh.wait(timeout=3.0)
+        response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+        response.config.p4info.CopyFrom(candidate)
+        return response
+
+    def prepare() -> Any:
+        result = capture_context()
+        prepared.set()
+        return result
+
+    def empty_read(_request: Any, *, timeout: float) -> Iterator[Any]:
+        sent.set()
+        return iter(())
+
+    def read() -> Any:
+        if operation == "clear-empty":
+            return client.clear_table(table)
+        if operation == "reset-empty":
+            return client.reset_counter(counter)
+        if operation == "counter-cell":
+            return client.read_counter(counter, 3).packet_count
+        if operation == "counter-all":
+            return client.read_counter(counter)
+        return client.list_table_entries(table if operation == "table-one" else None)
+
+    stub.SetForwardingPipelineConfig.side_effect = hold_push
+    stub.GetForwardingPipelineConfig.side_effect = hold_refresh
+    stub.Read.side_effect = empty_read
+    mocker.patch.object(client, "_indexed_context", side_effect=prepare)
+    files = {} if action == "COMMIT" else {"bmv2_json": json_path, "p4info": p4info_path}
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        try:
+            pipeline = workers.submit(client.set_pipeline_config, action=action, **files)
+            assert pushing.wait(timeout=1.0)
+            pending = workers.submit(read)
+            assert prepared.wait(timeout=1.0)
+            assert not sent.wait(timeout=0.03)
+            stub.Read.assert_not_called()
+
+            release_push.set()
+            if action == "COMMIT":
+                assert refreshing.wait(timeout=1.0)
+                stub.Read.assert_not_called()
+                release_refresh.set()
+            pipeline.result(timeout=1.0)
+            if action == "VERIFY":
+                assert pending.result(timeout=1.0) == empty_result
+                assert client.index is original
+            else:
+                with pytest.raises(P4RuntimeError, match=r"P4Info changed during .* read"):
+                    pending.result(timeout=1.0)
+                stub.Read.assert_not_called()
+                assert read() == empty_result
+            stub.Read.assert_called_once()
+            stub.Write.assert_not_called()
+        finally:
             release_push.set()
             release_refresh.set()
             client.disconnect()
 
 
 @pytest.mark.parametrize("ending", ["success", "rpc-error"])
-def test_sync_pipeline_waits_for_all_inflight_indexed_writes(
-    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], ending: str
+@pytest.mark.parametrize("operation", ["read", "write"])
+def test_sync_pipeline_waits_for_all_inflight_indexed_operations(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    ending: str,
+    operation: str,
 ) -> None:
     client = _push_pipeline(connected_client)
     _, mocks, p4info_path, json_path = connected_client
@@ -1698,26 +1812,35 @@ def test_sync_pipeline_waits_for_all_inflight_indexed_writes(
     push_started = threading.Event()
     table = "MyIngress.ipv4_lpm"
 
-    def hold_write(request: Any, *, timeout: float) -> None:
-        cell = request.updates[0].entity.table_entry.match[0].lpm.value[-1] - 1
+    def hold(cell: int) -> None:
         entered[cell].set()
         assert release[cell].wait(timeout=3.0)
         if ending == "rpc-error" and cell == 0:
-            raise _grpc_error(grpc.StatusCode.DEADLINE_EXCEEDED, "write deadline")
+            raise _grpc_error(grpc.StatusCode.DEADLINE_EXCEEDED, "RPC deadline")
+
+    def hold_write(request: Any, *, timeout: float) -> None:
+        cell = request.updates[0].entity.table_entry.match[0].lpm.value[-1] - 1
+        hold(cell)
+
+    def hold_read(request: Any, *, timeout: float) -> Iterator[Any]:
+        yield p4runtime_pb2.ReadResponse()
+        hold(int(request.entities[0].table_entry.table_id != 2001))
 
     def push(_request: Any, *, timeout: float) -> None:
         push_started.set()
 
+    def run(cell: int) -> None:
+        if operation == "read":
+            client.list_table_entries(table if cell == 1 else "MyIngress.ternary_acl")
+        else:
+            client.delete_table_entry(table, {"hdr.ipv4.dstAddr": f"10.0.0.{cell}/32"})
+
     stub.Write.side_effect = hold_write
+    stub.Read.side_effect = hold_read
     stub.SetForwardingPipelineConfig.side_effect = push
     with ThreadPoolExecutor(max_workers=4) as workers:
         try:
-            writes = [
-                workers.submit(
-                    client.delete_table_entry, table, {"hdr.ipv4.dstAddr": f"10.0.0.{cell}/32"}
-                )
-                for cell in (1, 2)
-            ]
+            calls = [workers.submit(run, cell) for cell in (1, 2)]
             assert all(event.wait(timeout=1.0) for event in entered)
             pipeline = workers.submit(
                 client.set_pipeline_config, bmv2_json=json_path, p4info=p4info_path
@@ -1731,14 +1854,14 @@ def test_sync_pipeline_waits_for_all_inflight_indexed_writes(
 
             release[0].set()
             if ending == "rpc-error":
-                with pytest.raises(P4RuntimeError, match="write deadline"):
-                    writes[0].result(timeout=1.0)
+                with pytest.raises(P4RuntimeError, match="RPC deadline"):
+                    calls[0].result(timeout=1.0)
             else:
-                writes[0].result(timeout=1.0)
+                calls[0].result(timeout=1.0)
             assert not push_started.is_set()
 
             release[1].set()
-            writes[1].result(timeout=1.0)
+            calls[1].result(timeout=1.0)
             pipeline.result(timeout=1.0)
             stub.SetForwardingPipelineConfig.assert_called_once()
         finally:
@@ -1972,7 +2095,6 @@ def test_reset_counter_single_index_writes_zero(
 )
 def test_counter_operations_keep_their_connection_and_p4info(
     connected_client_with_counter: tuple[P4RuntimeClient, dict[str, Any]],
-    tmp_path: Path,
     mocker: MockerFixture,
     change: str,
     operation: str,
@@ -2040,10 +2162,10 @@ def test_counter_operations_keep_their_connection_and_p4info(
                 active_id = 4001
                 p4info = _build_p4info_with_counter()
                 p4info.counters[0].preamble.id = active_id
-                p4info_path, json_path = tmp_path / "updated.txtpb", tmp_path / "updated.json"
-                p4info_path.write_text(str(p4info))
-                json_path.write_text("{}")
-                client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+                reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+                reply.config.p4info.CopyFrom(p4info)
+                current_stub.GetForwardingPipelineConfig.return_value = reply
+                client.get_pipeline_config()
             release.set()
 
             error = ConnectionError if change == "reconnect" else P4RuntimeError

@@ -162,9 +162,9 @@ class P4RuntimeClient:
         self._closed = False
         self._teardown_lock = threading.RLock()
         self._pipeline_lock = threading.Lock()
-        self._active_indexed_writes = 0
-        self._indexed_writes_idle = threading.Event()
-        self._indexed_writes_idle.set()
+        self._active_indexed_operations = 0
+        self._indexed_operations_idle = threading.Event()
+        self._indexed_operations_idle.set()
         self._index: P4InfoIndex | None = None
         # Controller packet I/O. Handlers run on the stream-consumer thread.
         self._packet_in_handlers: list[Callable[[bytes, dict[str, int]], None]] = []
@@ -444,8 +444,8 @@ class P4RuntimeClient:
         ``VERIFY`` validates the candidate and retains the current P4Info index.
         ``COMMIT`` uses the configuration already saved on the switch and reads
         back its P4Info. The file arguments are only used for other actions.
-        The push waits for this client's in-flight table writes and counter
-        resets. The timeout applies to each RPC.
+        The push waits for this client's in-flight table and counter
+        operations. The timeout applies to each RPC.
 
         The client raises ``ConnectionError`` if the channel closes before
         dispatch or a successful reply arrives after disconnection.
@@ -474,7 +474,7 @@ class P4RuntimeClient:
             req.config.p4_device_config = Path(bmv2_json).read_bytes()
 
         with self._pipeline_lock:
-            self._indexed_writes_idle.wait()
+            self._indexed_operations_idle.wait()
             with self._teardown_lock:
                 self._require_same_connection(stub, operation="a pipeline operation")
             try:
@@ -736,29 +736,37 @@ class P4RuntimeClient:
             self._require_connected()
             return self._stub, self.index
 
+    @contextlib.contextmanager
+    def _indexed_operation(
+        self, stub: Any, index: P4InfoIndex, *, operation: str
+    ) -> Iterator[None]:
+        # Register under the pipeline lock so a push can wait for these RPCs
+        # while reads and writes can still overlap.
+        with self._pipeline_lock, self._teardown_lock:
+            self._require_same_indexed_context(stub, index, operation=operation)
+            self._active_indexed_operations += 1
+            self._indexed_operations_idle.clear()
+        try:
+            yield
+        finally:
+            with self._teardown_lock:
+                self._active_indexed_operations -= 1
+                if self._active_indexed_operations == 0:
+                    self._indexed_operations_idle.set()
+
     def _write_indexed_request(
         self, stub: Any, index: P4InfoIndex, req: Any, *, timeout: float, operation: str
     ) -> None:
-        # Track writes before releasing the pipeline lock so a push can wait
-        # for them while ordinary writes can still overlap.
-        with self._pipeline_lock, self._teardown_lock:
-            self._require_same_indexed_context(stub, index, operation=operation)
-            self._active_indexed_writes += 1
-            self._indexed_writes_idle.clear()
-        try:
-            stub.Write(req, timeout=timeout)
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
-        except ValueError:
-            # gRPC can report a closed channel if teardown wins after the check.
-            with self._teardown_lock:
-                self._require_same_connection(stub, operation=f"a {operation}")
-            raise
-        finally:
-            with self._teardown_lock:
-                self._active_indexed_writes -= 1
-                if self._active_indexed_writes == 0:
-                    self._indexed_writes_idle.set()
+        with self._indexed_operation(stub, index, operation=operation):
+            try:
+                stub.Write(req, timeout=timeout)
+            except grpc.RpcError as exc:
+                raise self._translate_rpc_error(exc) from exc
+            except ValueError:
+                # gRPC can report a closed channel if teardown wins after the check.
+                with self._teardown_lock:
+                    self._require_same_connection(stub, operation=f"a {operation}")
+                raise
 
     def list_table_entries(
         self,
@@ -791,24 +799,23 @@ class P4RuntimeClient:
             entity.table_entry.table_id = index.table_id(table)
         else:
             entity.table_entry.table_id = 0
-        with self._teardown_lock:
-            self._require_same_indexed_context(stub, index, operation="table read")
-        try:
-            response_iter = stub.Read(req, timeout=timeout)
-            entries: list[dict[str, Any]] = []
-            for resp in response_iter:
-                for ent in resp.entities:
-                    if ent.HasField("table_entry"):
-                        entries.append(self._decode_table_entry(ent.table_entry, index=index))
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
-        except (P4RuntimeError, ValueError):
+        with self._indexed_operation(stub, index, operation="table read"):
+            try:
+                response_iter = stub.Read(req, timeout=timeout)
+                entries: list[dict[str, Any]] = []
+                for resp in response_iter:
+                    for ent in resp.entities:
+                        if ent.HasField("table_entry"):
+                            entries.append(self._decode_table_entry(ent.table_entry, index=index))
+            except grpc.RpcError as exc:
+                raise self._translate_rpc_error(exc) from exc
+            except (P4RuntimeError, ValueError):
+                with self._teardown_lock:
+                    self._require_same_indexed_context(stub, index, operation="table read")
+                raise
             with self._teardown_lock:
                 self._require_same_indexed_context(stub, index, operation="table read")
-            raise
-        with self._teardown_lock:
-            self._require_same_indexed_context(stub, index, operation="table read")
-        return entries
+            return entries
 
     def clear_table(self, table: str, *, timeout: float = 10.0) -> int:
         """Read and delete all entries from `table` on the same connection.
@@ -923,30 +930,29 @@ class P4RuntimeClient:
         entity.counter_entry.counter_id = counter_id
         if cell is not None:
             entity.counter_entry.index.index = cell
-        with self._teardown_lock:
-            self._require_same_indexed_context(stub, p4info, operation="counter read")
-        try:
-            response_iter = stub.Read(req, timeout=timeout)
-            collected: dict[int, CounterData] = {}
-            for resp in response_iter:
-                for ent in resp.entities:
-                    if not ent.HasField("counter_entry"):
-                        continue
-                    ce = ent.counter_entry
-                    cell_index = int(ce.index.index)
-                    collected[cell_index] = CounterData(
-                        packet_count=int(ce.data.packet_count),
-                        byte_count=int(ce.data.byte_count),
-                    )
-        except grpc.RpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
-        except ValueError:
+        with self._indexed_operation(stub, p4info, operation="counter read"):
+            try:
+                response_iter = stub.Read(req, timeout=timeout)
+                collected: dict[int, CounterData] = {}
+                for resp in response_iter:
+                    for ent in resp.entities:
+                        if not ent.HasField("counter_entry"):
+                            continue
+                        ce = ent.counter_entry
+                        cell_index = int(ce.index.index)
+                        collected[cell_index] = CounterData(
+                            packet_count=int(ce.data.packet_count),
+                            byte_count=int(ce.data.byte_count),
+                        )
+            except grpc.RpcError as exc:
+                raise self._translate_rpc_error(exc) from exc
+            except ValueError:
+                with self._teardown_lock:
+                    self._require_same_connection(stub, operation="a counter read")
+                raise
             with self._teardown_lock:
-                self._require_same_connection(stub, operation="a counter read")
-            raise
-        with self._teardown_lock:
-            self._require_same_indexed_context(stub, p4info, operation="counter read")
-        return collected
+                self._require_same_indexed_context(stub, p4info, operation="counter read")
+            return collected
 
     def reset_counter(
         self,

@@ -119,7 +119,7 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 
 This overlaps the time spent waiting for RPC responses across switches. Total time depends on the number of requests and the switches' processing speed.
 
-On either client, a pipeline push waits for that client's table writes already in progress. Queued table writes check that their P4Info is still current before sending. Counter resets on the sync client follow the same rules.
+On either client, a pipeline push waits for that client's table writes already in progress. The sync client also waits for table reads and counter operations. Queued operations check that their P4Info is still current before sending.
 
 Both `on_packet_in()` and the unsubscribe function it returns require `await`. This example waits up to five seconds for the first PacketIn delivered to the new handler and unsubscribes when the wait ends.
 
