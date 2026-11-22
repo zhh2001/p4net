@@ -220,12 +220,15 @@ class AsyncP4RuntimeClient:
         attempt = asyncio.get_running_loop().create_future()
         self._connect_attempt = attempt
         try:
-            await self._connect(timeout=timeout)
-        except BaseException as exc:
-            try:
+            if self._channel is not None:
                 await self._teardown()
-            finally:
-                attempt.set_result(exc)
+            try:
+                await self._connect(timeout=timeout)
+            except BaseException:
+                await self._teardown_after_error()
+                raise
+        except BaseException as exc:
+            attempt.set_result(exc)
             raise
         else:
             attempt.set_result(None)
@@ -233,8 +236,6 @@ class AsyncP4RuntimeClient:
             self._connect_attempt = None
 
     async def _connect(self, *, timeout: float) -> None:
-        if self._channel is not None:
-            await self._teardown()
         # Publish the owner before opening the channel so shutdown can find it.
         with self._connection_state_lock:
             self._require_connectable()
@@ -366,6 +367,8 @@ class AsyncP4RuntimeClient:
 
         In a PacketIn callback, close the stream that delivered the packet.
         A cancellation during channel closure is propagated after cleanup.
+        On a channel close failure, raise :class:`ConnectionError` and keep
+        the channel for another attempt on the same event loop.
         """
         callback = _PACKET_IN_CALLBACK.get()
         if callback is not None and callback[0] is self:
@@ -432,6 +435,12 @@ class AsyncP4RuntimeClient:
                 if error is not None:
                     logger.debug("async stream task awaited with: %r", error)
 
+    async def _teardown_after_error(self, *, expected_stream: Any = None) -> None:
+        try:
+            await self._teardown(expected_stream=expected_stream)
+        except ConnectionError as exc:
+            logger.warning("%s: %r", exc, exc.__cause__)
+
     async def _close_channel(self) -> bool:
         """Finish closing the channel and report whether the caller was cancelled."""
         if self._channel is None:
@@ -445,8 +454,10 @@ class AsyncP4RuntimeClient:
                 except asyncio.CancelledError:
                     cancelled = True
             closing.result()
-        except Exception as exc:
-            logger.debug("async channel close raised: %r", exc)
+        except (Exception, asyncio.CancelledError) as exc:
+            raise ConnectionError(
+                f"Could not close async gRPC channel for {self.target!r}"
+            ) from exc
         return cancelled
 
     @staticmethod
@@ -494,7 +505,7 @@ class AsyncP4RuntimeClient:
                 self._stream_error = error
                 if self._arbitration_event is not None:
                     self._arbitration_event.set()
-                await self._teardown(expected_stream=stream_call)
+                await self._teardown_after_error(expected_stream=stream_call)
 
     async def _dispatch_packet_in(self, packet: Any, stream_call: Any) -> None:
         payload = bytes(packet.payload)

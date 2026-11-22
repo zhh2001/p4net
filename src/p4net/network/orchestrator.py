@@ -32,7 +32,7 @@ from pathlib import Path
 from types import TracebackType
 
 from p4net.compiler import CompileResult, P4Compiler
-from p4net.control import AsyncP4RuntimeClient, P4RuntimeClient
+from p4net.control import AsyncP4RuntimeClient, ConnectionError, P4RuntimeClient
 from p4net.network._cleanup import (
     defer_cleanup_signals,
     install_handlers,
@@ -387,8 +387,8 @@ class Network:
 
         Raises:
             NetworkError: if an async client's event loop is paused or closed,
-                or waiting for the client to close times out. After a pause or
-                timeout, call again to wait for shutdown.
+                or the channel close fails or times out. After a pause, timeout,
+                or channel close error, call again to wait for shutdown.
         """
         try:
             asyncio.get_running_loop()
@@ -426,12 +426,18 @@ class Network:
                 start_thread_id = self._start_thread_id
             if startup is not None and start_thread_id != threading.get_ident():
                 startup.result()
-            self._do_stop()
+            failed_channels = self._do_stop()
             if self._closed_async_client_loops:
                 switches = ", ".join(repr(name) for name in sorted(self._closed_async_client_loops))
                 error = NetworkError(
                     f"async client shutdown failed: event loop is closed for {switches}"
                 )
+            elif failed_channels:
+                switches = ", ".join(repr(name) for name in sorted(failed_channels))
+                error = NetworkError(
+                    f"async client shutdown failed: could not close gRPC channel for {switches}"
+                )
+                error.__cause__ = next(iter(failed_channels.values()))
             elif self._async_disconnects:
                 error = NetworkError("async client shutdown did not finish")
         except BaseException as exc:
@@ -451,8 +457,8 @@ class Network:
 
         Raises:
             NetworkError: if an async client's event loop is paused or closed,
-                or waiting for the client to close times out. After a pause or
-                timeout, call again to wait for shutdown.
+                or the channel close fails or times out. After a pause, timeout,
+                or channel close error, call again to wait for shutdown.
         """
         with self._stop_lock:
             self.stop()
@@ -902,7 +908,8 @@ class Network:
             logger.warning("async client disconnect %r failed: event loop is closed", close.switch)
         return True
 
-    def _close_async_clients(self) -> None:
+    def _close_async_clients(self) -> dict[str, ConnectionError]:
+        failed_channels: dict[str, ConnectionError] = {}
         pending = []
         scheduled = []
         for close in self._async_disconnects:
@@ -950,12 +957,19 @@ class Network:
                 if not self._settle_closed_async_loop(close):
                     pending.append(close)
                     logger.warning("async client disconnect %r timed out", close.switch)
+            except ConnectionError as exc:
+                if not self._settle_closed_async_loop(close):
+                    close.future = None
+                    pending.append(close)
+                    failed_channels[close.switch] = exc
+                    logger.warning("async client disconnect %r: %s", close.switch, exc)
             except Exception as exc:
                 if not self._settle_closed_async_loop(close):
                     logger.warning("async client disconnect %r: %r", close.switch, exc)
         self._async_disconnects = pending
+        return failed_channels
 
-    def _do_stop(self) -> None:
+    def _do_stop(self) -> dict[str, ConnectionError]:
         if self._running:
             logger.info("Network.stop: tearing down")
         # 0. user-spawned processes (xterm, etc.) — reap before namespaces vanish.
@@ -990,7 +1004,7 @@ class Network:
             ac, loop = cleanup
             if loop is not None:
                 self._async_disconnects.append(_AsyncDisconnect(sw_name, ac, loop))
-        self._close_async_clients()
+        failed_channels = self._close_async_clients()
 
         # 1. P4Runtime clients
         for sw_name, client in list(self._clients.items()):
@@ -1038,6 +1052,7 @@ class Network:
         self._host_iface_ip.clear()
         self._host_iface_ip6.clear()
         self._running = False
+        return failed_channels
 
     # Context manager ----------------------------------------------------
 

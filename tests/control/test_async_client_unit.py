@@ -640,6 +640,30 @@ async def test_connect_initialization_failure_closes_channel_and_allows_retry(
         await client.disconnect()
 
 
+async def test_connect_preserves_initialization_error_if_channel_close_fails(
+    patched_aio: dict[str, Any], mocker: MockerFixture
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0)
+    channel = patched_aio["channel"]
+    channel.close.side_effect = [RuntimeError("close failed"), None]
+    mocker.patch(
+        "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
+        side_effect=ValueError("stub initialization failed"),
+    )
+    try:
+        with pytest.raises(ValueError, match="stub initialization failed"):
+            await client.connect()
+        assert client._channel is channel
+        assert client._loop is asyncio.get_running_loop()
+        channel.close.assert_awaited_once()
+        await client.disconnect()
+        assert client._channel is None
+        assert channel.close.await_count == 2
+    finally:
+        channel.close.side_effect = None
+        await client.disconnect()
+
+
 async def test_connect_invalid_arbitration_request_releases_resources(
     patched_aio: dict[str, Any],
 ) -> None:
@@ -1080,6 +1104,28 @@ async def test_cancelled_disconnect_finishes_closing_the_channel(
         await asyncio.gather(first, return_exceptions=True)
         if second is not None:
             await asyncio.gather(second, return_exceptions=True)
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("close failed"), asyncio.CancelledError()])
+async def test_failed_channel_close_can_be_retried(
+    patched_aio: dict[str, Any], failure: BaseException
+) -> None:
+    client = await _connect(patched_aio)
+    channel = patched_aio["channel"]
+    channel.close.side_effect = [failure, None]
+    try:
+        with pytest.raises(ConnectionError, match="Could not close async gRPC channel") as raised:
+            await client.disconnect()
+        assert isinstance(raised.value.__cause__, type(failure))
+        assert not client.is_connected and not client.is_primary
+        assert client._channel is channel
+        assert client._loop is asyncio.get_running_loop()
+        await client.disconnect()
+        assert client._channel is None and client._loop is None
+        assert channel.close.await_count == 2
+    finally:
+        channel.close.side_effect = None
         await client.disconnect()
 
 

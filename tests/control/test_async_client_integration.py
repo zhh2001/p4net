@@ -234,6 +234,63 @@ async def test_network_stop_closes_async_connection(
         await asyncio.to_thread(net.stop)
 
 
+async def test_network_shutdown_reports_and_retries_channel_close_failure(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    channel = None
+    original_close = None
+    try:
+        await client.connect()
+        owner = asyncio.get_running_loop()
+        channel = client._channel
+        original_close = channel.close
+        failure = RuntimeError("gRPC close failed")
+        close_calls = 0
+
+        async def close_once_failed() -> None:
+            nonlocal close_calls
+            close_calls += 1
+            assert asyncio.get_running_loop() is owner
+            if close_calls == 1:
+                raise failure
+            await original_close()
+
+        mocker.patch.object(channel, "close", side_effect=close_once_failed)
+        with pytest.raises(
+            NetworkError, match=f"could not close gRPC channel for '{switch}'"
+        ) as raised:
+            await net.astop()
+        assert isinstance(raised.value.__cause__, ConnectionError)
+        assert raised.value.__cause__.__cause__ is failure
+        assert not net.is_running and not sw.bmv2.is_running()
+        assert client._channel is channel
+        assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            await net.astart()
+
+        await asyncio.to_thread(net.stop)
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert close_calls == 2
+        assert client._channel is None and client._loop is None
+    finally:
+        await net.astop()
+        if channel is not None and original_close is not None:
+            await original_close()
+
+
 @pytest.mark.parametrize("close_through_network", [True, False])
 def test_stop_retains_async_client_while_its_loop_is_paused(
     tmp_path: Path, mocker: MockerFixture, close_through_network: bool

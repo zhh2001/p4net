@@ -10,7 +10,7 @@ class P4RuntimeError(P4NetError):
 
 
 class ConnectionError(P4RuntimeError):
-    """Failure to open the gRPC channel or complete master arbitration."""
+    """Failure to open or close the gRPC channel or complete master arbitration."""
 
 
 class NotPrimaryError(P4RuntimeError):
