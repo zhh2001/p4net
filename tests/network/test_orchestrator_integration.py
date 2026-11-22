@@ -18,15 +18,20 @@ import os
 import signal
 import socket
 import subprocess
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import grpc
 import pytest
+from pytest_mock import MockerFixture
 
 from p4net import Network
 from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
+from p4net.control import ConnectionError
 from p4net.network import RunningHost
 from p4net.runtime import BMv2StartupError
 from p4net.topo import Topology
@@ -133,6 +138,58 @@ def test_single_host_loopback(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 2. Two hosts via one switch with table programming
 # ---------------------------------------------------------------------------
+
+
+def test_shutdown_refuses_connect_on_retained_sync_client(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    host, switch = f"h{suffix}", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    compiler = P4Compiler(cache_dir=tmp_path / "compiler")
+    net = Network(topo, compiler=compiler, log_dir=tmp_path / "logs")
+    with net:
+        sw = net.switch(switch)
+        client = sw.client
+        stopping, release = threading.Event(), threading.Event()
+        stop_bmv2 = sw.bmv2.stop
+
+        def pause_before_stopping_bmv2() -> None:
+            stopping.set()
+            release.wait(timeout=5.0)
+            stop_bmv2()
+
+        try:
+            client.disconnect()
+            client.connect(timeout=2.0)
+            assert client.is_connected()
+            make_channel = mocker.spy(grpc, "insecure_channel")
+            mocker.patch.object(sw.bmv2, "stop", side_effect=pause_before_stopping_bmv2)
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                shutdown = worker.submit(net.stop)
+                try:
+                    assert stopping.wait(timeout=3.0)
+                    assert sw.bmv2.is_running()
+                    assert not client.is_connected()
+                    with pytest.raises(ConnectionError, match="network shutdown"):
+                        client.connect(timeout=2.0)
+                finally:
+                    release.set()
+                shutdown.result(timeout=3.0)
+            make_channel.assert_not_called()
+            assert client._channel is None
+            assert client._stream_thread is None
+        finally:
+            client.disconnect()
+
+    with net:
+        replacement = net.switch(switch).client
+        assert replacement is not client and replacement.is_connected()
+        with pytest.raises(ConnectionError, match="network shutdown"):
+            client.connect(timeout=2.0)
 
 
 def test_two_hosts_one_switch_with_table_programming(tmp_path: Path) -> None:

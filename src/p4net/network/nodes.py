@@ -290,7 +290,11 @@ class RunningSwitch:
 
     @property
     def client(self) -> P4RuntimeClient:
-        """The P4Runtime gRPC client connected to this switch."""
+        """The P4Runtime gRPC client connected to this switch.
+
+        Once network shutdown starts closing switch clients, calling
+        ``connect()`` on this client raises :class:`p4net.control.ConnectionError`.
+        """
         return self._client
 
     @property

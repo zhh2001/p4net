@@ -879,6 +879,10 @@ class Network:
                 logger.warning("spawned process reap (pid=%s): %r", getattr(proc, "pid", "?"), exc)
         self._spawned_processes.clear()
 
+        # Reject sync reconnects while waiting for async clients to close.
+        for client in self._clients.values():
+            client._retire()
+
         # 1a. Submit disconnects to the loops that own the gRPC resources.
         for sw_name, rs in list(self._running_switches.items()):
             cleanup = rs._take_async_client_for_stop()

@@ -362,6 +362,24 @@ def test_packet_handler_cannot_block_its_own_arbitration(patched_grpc: dict[str,
             client.disconnect()
 
 
+def test_retired_client_cannot_finish_pending_arbitration(patched_grpc: dict[str, Any]) -> None:
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    stream = patched_grpc["stream"]
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        pending = worker.submit(client.connect, timeout=3.0)
+        try:
+            assert stream.read_started.wait(timeout=1.0)
+            client._retire()
+            stream.responses.put(_make_arbitration_response(1, (1, 0)))
+            with pytest.raises(ConnectionError, match="network shutdown"):
+                pending.result(timeout=2.0)
+            assert not client.is_connected()
+            assert client._stream_thread is None
+            patched_grpc["channel"].close.assert_called_once()
+        finally:
+            client.disconnect()
+
+
 @pytest.mark.parametrize(
     ("channel_options", "expected_options"),
     [

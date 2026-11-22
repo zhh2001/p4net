@@ -169,6 +169,7 @@ class P4RuntimeClient:
         self._connected = False
         self._closed = False
         self._has_connected = False
+        self._retired = False
         self._teardown_lock = threading.RLock()
         self._pipeline_lock = threading.Lock()
         self._active_indexed_operations = 0
@@ -232,12 +233,15 @@ class P4RuntimeClient:
         that timeout. An unconfigured switch can connect with no cached index.
         During connection setup, a call from a PacketIn handler raises
         ``ConnectionError`` because the receiver thread must keep reading the stream.
+        Once network shutdown starts closing managed switch clients, further
+        calls on those clients raise ``ConnectionError``.
         """
         attempt: Future[None] | None = None
         stream_call = None
         failed_thread = None
         try:
             with self._teardown_lock:
+                self._require_connectable()
                 if self._connected:
                     return
                 pending = self._connect_attempt
@@ -263,6 +267,7 @@ class P4RuntimeClient:
             if deadline is not None:
                 self._read_p4info_on_reconnect(stream_call, deadline=deadline)
             with self._teardown_lock:
+                self._require_connectable()
                 self._require_live_stream(
                     stream_call, "P4Runtime connection closed during connection setup"
                 )
@@ -395,6 +400,18 @@ class P4RuntimeClient:
             req.arbitration.role.name = self._role_name
         outgoing.put(req)
         return stream_call, stream_event
+
+    def _require_connectable(self) -> None:
+        """Check for retirement while holding the teardown lock."""
+        if self._retired:
+            raise ConnectionError(
+                f"P4Runtime client for {self.target!r} closed by network shutdown"
+            )
+
+    def _retire(self) -> None:
+        """Prevent this managed client from connecting again."""
+        with self._teardown_lock:
+            self._retired = True
 
     def disconnect(self) -> None:
         """Close the stream channel and the gRPC channel. Idempotent."""

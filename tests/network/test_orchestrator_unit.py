@@ -1582,6 +1582,8 @@ async def test_astop_waits_for_client_before_stopping_switch(
         assert not task.done()
         with pytest.raises(NetworkNotRunningError, match="switch 's1' is not running"):
             _ = sw.async_client
+        patched["clients"][0]._retire.assert_called_once()
+        patched["clients"][0].disconnect.assert_not_called()
         patched["bmv2s"][0].stop.assert_not_called()
         client.allow_disconnect.set()
         await asyncio.wait_for(task, timeout=2.0)
