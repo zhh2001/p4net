@@ -162,6 +162,9 @@ class P4RuntimeClient:
         self._closed = False
         self._teardown_lock = threading.RLock()
         self._pipeline_lock = threading.Lock()
+        self._active_indexed_writes = 0
+        self._indexed_writes_idle = threading.Event()
+        self._indexed_writes_idle.set()
         self._index: P4InfoIndex | None = None
         # Controller packet I/O. Handlers run on the stream-consumer thread.
         self._packet_in_handlers: list[Callable[[bytes, dict[str, int]], None]] = []
@@ -441,7 +444,8 @@ class P4RuntimeClient:
         ``VERIFY`` validates the candidate and retains the current P4Info index.
         ``COMMIT`` uses the configuration already saved on the switch and reads
         back its P4Info. The file arguments are only used for other actions.
-        The timeout applies to each RPC.
+        The push waits for this client's in-flight table writes and counter
+        resets. The timeout applies to each RPC.
 
         The client raises ``ConnectionError`` if the channel closes before
         dispatch or a successful reply arrives after disconnection.
@@ -470,6 +474,7 @@ class P4RuntimeClient:
             req.config.p4_device_config = Path(bmv2_json).read_bytes()
 
         with self._pipeline_lock:
+            self._indexed_writes_idle.wait()
             with self._teardown_lock:
                 self._require_same_connection(stub, operation="a pipeline operation")
             try:
@@ -734,8 +739,12 @@ class P4RuntimeClient:
     def _write_indexed_request(
         self, stub: Any, index: P4InfoIndex, req: Any, *, timeout: float, operation: str
     ) -> None:
-        with self._teardown_lock:
+        # Track writes before releasing the pipeline lock so a push can wait
+        # for them while ordinary writes can still overlap.
+        with self._pipeline_lock, self._teardown_lock:
             self._require_same_indexed_context(stub, index, operation=operation)
+            self._active_indexed_writes += 1
+            self._indexed_writes_idle.clear()
         try:
             stub.Write(req, timeout=timeout)
         except grpc.RpcError as exc:
@@ -745,6 +754,11 @@ class P4RuntimeClient:
             with self._teardown_lock:
                 self._require_same_connection(stub, operation=f"a {operation}")
             raise
+        finally:
+            with self._teardown_lock:
+                self._active_indexed_writes -= 1
+                if self._active_indexed_writes == 0:
+                    self._indexed_writes_idle.set()
 
     def list_table_entries(
         self,
