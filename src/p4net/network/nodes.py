@@ -328,7 +328,7 @@ class RunningSwitch:
         Returns an **unconnected** :class:`AsyncP4RuntimeClient`. Call
         ``await async_client.connect()`` to attach. The async client
         starts with the sync client's cached P4Info and reads the current
-        P4Info from the switch on its first connection.
+        P4Info from the switch on each new connection.
 
         The async client generates its own timestamp-based election ID
         on first connection. Its primary status is independent of the
@@ -351,7 +351,7 @@ class RunningSwitch:
                 info_index=self._client._index,
                 thrift_address=("127.0.0.1", self._bmv2.thrift_port),
             )
-            client._read_initial_pipeline = True
+            client._read_pipeline_on_connect = True
             self._async_client = client
         return self._async_client
 

@@ -320,6 +320,8 @@ async def test_stream_end_clears_state_and_allows_reconnect(tmp_path: Path) -> N
         assert client.is_connected
         assert client.is_primary
         assert client._channel is not channel
+        with pytest.raises(P4RuntimeError, match="no P4Info index"):
+            _ = client.info_index
         await client.push_pipeline(
             sw.compile_result.p4info.read_bytes(), sw.compile_result.bmv2_json.read_bytes()
         )

@@ -117,7 +117,7 @@ class AsyncP4RuntimeClient:
         self._host, self._port = grpc_address
         self._device_id = int(device_id)
         self._info_index = info_index
-        self._read_initial_pipeline = False
+        self._read_pipeline_on_connect = False
         self._thrift_address = thrift_address
         self._election_id = election_id  # resolved at connect() if None
 
@@ -186,7 +186,7 @@ class AsyncP4RuntimeClient:
         """Connect and await arbitration. Concurrent callers share the first attempt.
 
         A client from ``RunningSwitch.async_client`` also reads the device's
-        P4Info on its first connection within the same timeout.
+        P4Info on each new connection within the same timeout.
         """
         if self._connected:
             return
@@ -217,8 +217,9 @@ class AsyncP4RuntimeClient:
             await self._teardown()
         self._closed = False
         loop = self._loop = asyncio.get_running_loop()
+        read_pipeline = self._read_pipeline_on_connect
         previous = self._info_index
-        if self._read_initial_pipeline:
+        if read_pipeline:
             deadline = loop.time() + timeout
             self._info_index = None
         self._channel = grpc.aio.insecure_channel(self.target)
@@ -266,11 +267,10 @@ class AsyncP4RuntimeClient:
                 f"async client is not primary for device {self._device_id} "
                 f"(status code {status_code})"
             )
-        if self._read_initial_pipeline:
-            self._info_index = await self._read_initial_p4info(
+        if read_pipeline:
+            self._info_index = await self._read_p4info_on_connect(
                 stream_call, previous, timeout=deadline - loop.time()
             )
-            self._read_initial_pipeline = False
         self._connected = True
         logger.info(
             "AsyncP4RuntimeClient %s connected (primary=%s, election=%s)",
@@ -279,26 +279,42 @@ class AsyncP4RuntimeClient:
             self._election_id,
         )
 
-    async def _read_initial_p4info(
+    async def _read_p4info_on_connect(
         self, stream_call: Any, previous: P4InfoIndex | None, *, timeout: float
     ) -> P4InfoIndex | None:
         stub = self._stub
-        closed = f"Connection to {self.target!r} closed during initial P4Info readback"
+        closed = f"Connection to {self.target!r} closed during P4Info readback"
         request = p4runtime_pb2.GetForwardingPipelineConfigRequest(
             device_id=self._device_id,
             response_type=p4runtime_pb2.GetForwardingPipelineConfigRequest.P4INFO_AND_COOKIE,
         )
+
+        async def read() -> Any:
+            # A pipeline request on the previous connection may still be finishing.
+            async with self._pipeline_lock:
+                if not self._stream_is_current(stream_call):
+                    raise ConnectionError(closed)
+                return await stub.GetForwardingPipelineConfig(request)
+
         try:
             response = await self._await_rpc(
                 stub,
-                lambda: stub.GetForwardingPipelineConfig(request),
+                read,
                 connection_closed=closed,
                 timeout=timeout,
                 connecting_stream=stream_call,
             )
         except asyncio.TimeoutError as exc:
-            raise ConnectionError(f"{self.target!r} initial P4Info readback timed out") from exc
+            raise ConnectionError(f"{self.target!r} P4Info readback timed out") from exc
         except grpc.aio.AioRpcError as exc:
+            if not self._stream_is_current(stream_call):
+                raise ConnectionError(closed) from exc
+            if (
+                exc.code() == grpc.StatusCode.FAILED_PRECONDITION
+                and exc.details() == "No forwarding pipeline config set for this device"
+            ):
+                # BMv2 reports an unconfigured switch with this status.
+                return None
             raise self._translate_rpc_error(exc) from exc
         if not self._stream_is_current(stream_call):
             raise ConnectionError(closed)

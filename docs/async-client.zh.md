@@ -66,9 +66,11 @@ sudo "$(command -v python)" async_demo.py
 
 ## 连接与主控权
 
-`net.switch("s1").async_client` 会延迟创建并缓存一个尚未连接的客户端，初始索引来自同步客户端。首次调用 `await client.connect()` 时，异步客户端会从交换机回读当前 P4Info。同步和异步客户端各有自己的通道与选举 ID，连接其中一个不会关闭另一个。
+`net.switch("s1").async_client` 会延迟创建并缓存一个尚未连接的客户端，初始索引来自同步客户端。每次通过 `await client.connect()` 建立新连接时，异步客户端都会从交换机回读当前 P4Info。同步和异步客户端各有自己的通道与选举 ID，连接其中一个不会关闭另一个。
 
-无论使用同步还是异步客户端，同一实例上的并发 `connect()` 都共用一次连接尝试，仲裁超时由首次调用指定。使用异步客户端时，取消某个等待中的调用，连接尝试会继续。取消发起连接的调用时，客户端会清理连接，并向仍在等待的调用传播 `asyncio.CancelledError`。
+如果交换机还没有安装流水线，主客户端建立连接后可以用 `push_pipeline()` 下发。
+
+无论使用同步还是异步客户端，同一实例上的并发 `connect()` 都共用一次连接尝试。发起连接的调用为仲裁和 P4Info 回读设定总超时时间。使用异步客户端时，取消某个等待中的调用，连接尝试会继续。取消发起连接的调用时，客户端会清理连接，并向仍在等待的调用传播 `asyncio.CancelledError`。
 
 未传入 `election_id` 时，异步客户端在首次连接时用当前毫秒时间戳生成选举 ID。`Network` 创建的同步客户端也使用时间戳，因此不要依赖创建顺序决定主控权。需要指定主控时，按完整示例自行构造客户端并传入选举 ID。选举 ID 按 `(high, low)` 比较。
 
@@ -98,7 +100,7 @@ sudo "$(command -v python)" async_demo.py
 
 用 `set_pipeline_config(action="COMMIT")` 或 `await push_pipeline(action="COMMIT")` 启用通过 `VERIFY_AND_SAVE` 保存的流水线。提交成功后，客户端会回读 P4Info。如果回读失败，客户端会报告错误并清除本地索引。
 
-即使客户端等待超时，交换机也可能已经应用流水线变更。变更请求发出后，如果无法确认结果，客户端会清除缓存的 P4Info。同步客户端可用 `get_pipeline_config()` 回读并恢复索引，异步客户端可重新下发所需的流水线来恢复。`VERIFY` 或交换机明确拒绝变更时，客户端会保留当前索引。
+即使客户端等待超时，交换机也可能已经应用流水线变更。变更请求发出后，如果无法确认结果，客户端会清除缓存的 P4Info。同步客户端可用 `get_pipeline_config()` 回读并恢复索引，异步客户端可重新下发所需的流水线。通过 `RunningSwitch.async_client` 取得的客户端也可以断开后重连来恢复索引。`VERIFY` 或交换机明确拒绝变更时，客户端会保留当前索引。
 
 ## 并发操作与 PacketIn
 
@@ -171,7 +173,7 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 | 操作 | 调用任务被取消 | 超时 |
 | --- | --- | --- |
-| `connect()` | `asyncio.CancelledError`。取消发起连接的调用时也会清理共享的连接尝试。 | 仲裁超时后，共用该次连接尝试的调用均收到 `ConnectionError` |
+| `connect()` | `asyncio.CancelledError`。取消发起连接的调用时也会清理共享的连接尝试。 | 仲裁或 P4Info 回读超时后，共用该次连接尝试的调用均收到 `ConnectionError` |
 | `push_pipeline()`、表项写入 | `AsyncOperationCancelledError` | `asyncio.TimeoutError` |
 | `list_table_entries()` 的迭代 | `asyncio.CancelledError` | `P4RuntimeError`，原始 RPC 状态为 `DEADLINE_EXCEEDED` |
 | `read_counter()` | `AsyncOperationCancelledError` | `P4RuntimeError`，原始 RPC 状态为 `DEADLINE_EXCEEDED` |
