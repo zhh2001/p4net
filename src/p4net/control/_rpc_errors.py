@@ -1,9 +1,29 @@
-"""Decode per-update status codes from P4Runtime RPC errors."""
+"""Interpret gRPC status codes from P4Runtime requests."""
 
 from __future__ import annotations
 
 import grpc
 from p4.v1 import p4runtime_pb2
+
+_PIPELINE_REJECTIONS = frozenset(
+    {
+        grpc.StatusCode.ALREADY_EXISTS,
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.INVALID_ARGUMENT,
+        grpc.StatusCode.NOT_FOUND,
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.UNIMPLEMENTED,
+    }
+)
+
+
+def _pipeline_change_rejected(exc: grpc.RpcError) -> bool:
+    """Whether the RPC status confirms rejection before the pipeline changed."""
+    try:
+        return exc.code() in _PIPELINE_REJECTIONS
+    except Exception:
+        return False
 
 
 def _extract_p4_canonical_codes(exc: grpc.RpcError) -> list[int]:

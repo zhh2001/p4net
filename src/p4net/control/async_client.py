@@ -30,7 +30,11 @@ from google.protobuf import text_format
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2, p4runtime_pb2_grpc
 
-from p4net.control._rpc_errors import _extract_p4_canonical_codes, _grpc_code_for
+from p4net.control._rpc_errors import (
+    _extract_p4_canonical_codes,
+    _grpc_code_for,
+    _pipeline_change_rejected,
+)
 from p4net.control.codec import encode_value
 from p4net.control.exceptions import (
     AsyncOperationCancelledError,
@@ -48,17 +52,6 @@ logger = logging.getLogger(__name__)
 
 _PIPELINE_ACTIONS: frozenset[str] = frozenset(
     {"VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"}
-)
-_PIPELINE_REJECTIONS = frozenset(
-    {
-        grpc.StatusCode.ALREADY_EXISTS,
-        grpc.StatusCode.FAILED_PRECONDITION,
-        grpc.StatusCode.INVALID_ARGUMENT,
-        grpc.StatusCode.NOT_FOUND,
-        grpc.StatusCode.PERMISSION_DENIED,
-        grpc.StatusCode.UNAUTHENTICATED,
-        grpc.StatusCode.UNIMPLEMENTED,
-    }
 )
 _PACKET_IN_QUEUE_CAPACITY = 256
 _PacketIn = tuple[bytes, dict[str, int]]
@@ -514,8 +507,8 @@ class AsyncP4RuntimeClient:
                     ConnectionError,
                     grpc.aio.AioRpcError,
                 ) as exc:
-                    rejected = (
-                        isinstance(exc, grpc.aio.AioRpcError) and exc.code() in _PIPELINE_REJECTIONS
+                    rejected = isinstance(exc, grpc.aio.AioRpcError) and _pipeline_change_rejected(
+                        exc
                     )
                     if (
                         dispatched

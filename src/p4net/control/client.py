@@ -24,7 +24,11 @@ from google.protobuf import text_format
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2, p4runtime_pb2_grpc
 
-from p4net.control._rpc_errors import _extract_p4_canonical_codes, _grpc_code_for
+from p4net.control._rpc_errors import (
+    _extract_p4_canonical_codes,
+    _grpc_code_for,
+    _pipeline_change_rejected,
+)
 from p4net.control.codec import encode_value
 from p4net.control.exceptions import (
     ConnectionError,
@@ -189,10 +193,10 @@ class P4RuntimeClient:
 
     @property
     def index(self) -> P4InfoIndex:
-        """The :class:`P4InfoIndex` for the currently-pushed pipeline.
+        """The cached :class:`P4InfoIndex` for the device's pipeline.
 
         Raises:
-            P4RuntimeError: if no pipeline has been set yet.
+            P4RuntimeError: if no P4Info is cached.
         """
         if self._index is None:
             raise P4RuntimeError(
@@ -449,6 +453,9 @@ class P4RuntimeClient:
 
         The client raises ``ConnectionError`` if the channel closes before
         dispatch or a successful reply arrives after disconnection.
+        When the result of a dispatched pipeline change is uncertain, the
+        client clears its cached P4Info. Use ``get_pipeline_config()`` to
+        read the pipeline back and restore the index.
         """
         with self._teardown_lock:
             self._require_connected()
@@ -477,23 +484,35 @@ class P4RuntimeClient:
             self._indexed_operations_idle.wait()
             with self._teardown_lock:
                 self._require_same_connection(stub, operation="a pipeline operation")
+                previous = self._index
+            discard_index = action != "VERIFY"
             try:
-                stub.SetForwardingPipelineConfig(req, timeout=timeout)
-            except grpc.RpcError as exc:
-                raise self._translate_rpc_error(exc, pipeline=True) from exc
-            except ValueError:
-                # gRPC can report a closed channel if teardown wins after the check.
-                with self._teardown_lock:
-                    self._require_same_connection(stub, operation="a pipeline operation")
-                raise
-            if p4info_msg is None:
-                self._refresh_committed_pipeline(stub, timeout=timeout)
-                p4info_msg = self.index.raw
-            else:
-                with self._teardown_lock:
-                    self._require_same_connection(stub, operation="a pipeline operation")
-                    if action != "VERIFY":
-                        self._index = P4InfoIndex(p4info_msg)
+                try:
+                    stub.SetForwardingPipelineConfig(req, timeout=timeout)
+                except grpc.RpcError as exc:
+                    discard_index = discard_index and not _pipeline_change_rejected(exc)
+                    raise self._translate_rpc_error(exc, pipeline=True) from exc
+                except (TypeError, ValueError) as exc:
+                    discard_index = False
+                    # gRPC can reject a call locally after the channel has closed.
+                    if isinstance(exc, ValueError):
+                        with self._teardown_lock:
+                            self._require_same_connection(stub, operation="a pipeline operation")
+                    raise
+                if p4info_msg is None:
+                    self._refresh_committed_pipeline(stub, timeout=timeout)
+                    p4info_msg = self.index.raw
+                else:
+                    with self._teardown_lock:
+                        self._require_same_connection(stub, operation="a pipeline operation")
+                        if action != "VERIFY":
+                            self._index = P4InfoIndex(p4info_msg)
+                discard_index = False
+            finally:
+                if discard_index:
+                    with self._teardown_lock:
+                        if self._index is previous:
+                            self._index = None
             logger.debug(
                 "P4Runtime pipeline request succeeded (action=%s, p4info_tables=%d)",
                 action,

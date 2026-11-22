@@ -98,7 +98,7 @@ When installing a pipeline yourself, pass text-format P4Info bytes to `push_pipe
 
 Use `set_pipeline_config(action="COMMIT")` or `await push_pipeline(action="COMMIT")` to activate a pipeline saved with `VERIFY_AND_SAVE`. Both clients read back P4Info after the commit succeeds. If the read fails, the call reports the refresh error and clears the local index.
 
-If an async pipeline change times out after dispatch, the switch may already have applied it. The client clears its cached P4Info when it cannot confirm the result. Push the intended pipeline successfully before resuming operations that use P4Info. A failed `VERIFY` or an explicit rejection of a change keeps the current index.
+The switch can apply a pipeline change even if the client times out. Both clients clear their cached P4Info when they cannot confirm the result of a dispatched change. To restore the index, use `get_pipeline_config()` on the sync client or successfully push the intended pipeline again on the async client. `VERIFY` and explicit rejections of a change keep the current index.
 
 ## Concurrent operations and PacketIn
 

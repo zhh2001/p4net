@@ -993,7 +993,7 @@ def test_commit_failure_leaves_a_usable_or_empty_index(
 
 @pytest.mark.parametrize("action", ["GET", "VERIFY_AND_COMMIT", "VERIFY", "COMMIT"])
 @pytest.mark.parametrize("outcome", ["reply", "closed-channel"])
-def test_pipeline_rpc_from_an_old_connection_keeps_the_current_index(
+def test_pipeline_rpc_from_an_old_connection_does_not_install_a_stale_reply(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
     action: str,
     outcome: str,
@@ -1059,7 +1059,11 @@ def test_pipeline_rpc_from_an_old_connection_keeps_the_current_index(
                 pending.result(timeout=1.0)
             if outcome == "closed-channel":
                 assert raised.value.__context__ is closed_channel
-            assert client.index is current
+            if action in ("GET", "VERIFY") or outcome == "closed-channel":
+                assert client.index is current
+            else:
+                with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                    _ = client.index
             rpc.assert_called_once()
             if action == "GET":
                 old_stub.SetForwardingPipelineConfig.assert_not_called()
@@ -1077,16 +1081,19 @@ def test_pipeline_rpc_from_an_old_connection_keeps_the_current_index(
 
 
 @pytest.mark.parametrize("operation", ["get", "push", "commit"])
-def test_pipeline_value_error_on_active_connection_is_preserved(
-    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], operation: str
+@pytest.mark.parametrize("local_error", [ValueError, TypeError])
+def test_pipeline_argument_error_on_active_connection_is_preserved(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    operation: str,
+    local_error: type[ValueError | TypeError],
 ) -> None:
     client, grpc_mocks, p4info_path, json_path = connected_client
     stub = grpc_mocks["stub"]
-    error = ValueError("invalid RPC timeout")
+    error = local_error("invalid RPC timeout")
     client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
     original_index = client.index
     try:
-        with pytest.raises(ValueError, match="invalid RPC timeout") as raised:
+        with pytest.raises(local_error, match="invalid RPC timeout") as raised:
             if operation == "get":
                 stub.GetForwardingPipelineConfig.side_effect = error
                 client.get_pipeline_config()
@@ -1104,17 +1111,135 @@ def test_pipeline_value_error_on_active_connection_is_preserved(
         client.disconnect()
 
 
-def test_set_pipeline_config_failed_precondition_raises_pipeline_error(
+@pytest.mark.parametrize(
+    ("code", "error_type", "clears_index"),
+    [
+        (grpc.StatusCode.INVALID_ARGUMENT, P4RuntimeError, False),
+        (grpc.StatusCode.FAILED_PRECONDITION, PipelineError, False),
+        (grpc.StatusCode.PERMISSION_DENIED, NotPrimaryError, False),
+        (grpc.StatusCode.NOT_FOUND, EntryNotFoundError, False),
+        (grpc.StatusCode.ALREADY_EXISTS, DuplicateEntryError, False),
+        (grpc.StatusCode.UNAUTHENTICATED, P4RuntimeError, False),
+        (grpc.StatusCode.UNIMPLEMENTED, P4RuntimeError, False),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, P4RuntimeError, True),
+        (grpc.StatusCode.CANCELLED, P4RuntimeError, True),
+        (grpc.StatusCode.UNAVAILABLE, ConnectionError, True),
+        (grpc.StatusCode.INTERNAL, P4RuntimeError, True),
+        (grpc.StatusCode.UNKNOWN, P4RuntimeError, True),
+        (None, P4RuntimeError, True),
+    ],
+)
+def test_set_pipeline_config_preserves_rpc_error_and_invalidates_uncertain_index(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    code: grpc.StatusCode | None,
+    error_type: type[P4RuntimeError],
+    clears_index: bool,
 ) -> None:
     client, grpc_mocks, p4info_path, json_path = connected_client
     stub: MagicMock = grpc_mocks["stub"]
-    stub.SetForwardingPipelineConfig = MagicMock(
-        side_effect=_grpc_error(grpc.StatusCode.FAILED_PRECONDITION, "bad pipeline")
-    )
     try:
-        with pytest.raises(PipelineError, match="bad pipeline"):
+        original = _push_pipeline(connected_client).index
+        error = grpc.RpcError("bad pipeline") if code is None else _grpc_error(code, "bad pipeline")
+        stub.SetForwardingPipelineConfig.side_effect = error
+        with pytest.raises(error_type, match="bad pipeline") as raised:
             client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path, timeout=2.0)
+        assert type(raised.value) is error_type
+        assert raised.value.__cause__ is error
+        if clears_index:
+            with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                _ = client.index
+        else:
+            assert client.index is original
+        assert client.is_connected()
+        stub.GetForwardingPipelineConfig.assert_not_called()
+    finally:
+        client.disconnect()
+
+
+@pytest.mark.parametrize(
+    "action", ["VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"]
+)
+def test_sync_pipeline_deadline_checks_queued_reads_and_can_recover_by_readback(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    mocker: MockerFixture,
+    action: str,
+) -> None:
+    client, mocks, p4info_path, json_path = connected_client
+    p4info_path.write_text(str(_build_p4info_with_counter()))
+    client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+    previous = client.index
+    stub = mocks["stub"]
+    applied, release, prepared = (threading.Event() for _ in range(3))
+    table, counter = "MyIngress.ipv4_lpm", "MyIngress.ingress_pkts"
+    candidate = _build_p4info_with_counter()
+    candidate.tables[0].preamble.id = 3001
+    candidate.counters[0].preamble.id = 5001
+    p4info_path.write_text(str(candidate))
+    deadline = _grpc_error(grpc.StatusCode.DEADLINE_EXCEEDED, "pipeline deadline")
+
+    def lose_reply(_request: Any, *, timeout: float) -> None:
+        applied.set()
+        assert release.wait(timeout=3.0)
+        raise deadline
+
+    capture_context = client._indexed_context
+
+    def note_preparation() -> Any:
+        context = capture_context()
+        prepared.set()
+        return context
+
+    stub.SetForwardingPipelineConfig.side_effect = lose_reply
+    stub.Read.return_value = iter(())
+    mocker.patch.object(client, "_indexed_context", side_effect=note_preparation)
+    files = {} if action == "COMMIT" else {"p4info": p4info_path, "bmv2_json": json_path}
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        try:
+            pipeline = workers.submit(client.set_pipeline_config, action=action, **files)
+            assert applied.wait(timeout=1.0)
+            read = workers.submit(client.list_table_entries, table)
+            assert prepared.wait(timeout=1.0)
+            stub.Read.assert_not_called()
+
+            release.set()
+            with pytest.raises(P4RuntimeError, match="pipeline deadline") as raised:
+                pipeline.result(timeout=1.0)
+            assert raised.value.__cause__ is deadline
+            stub.GetForwardingPipelineConfig.assert_not_called()
+            if action == "VERIFY":
+                assert client.index is previous
+                assert read.result(timeout=1.0) == []
+                stub.Read.assert_called_once()
+            else:
+                with pytest.raises(P4RuntimeError, match="P4Info changed"):
+                    read.result(timeout=1.0)
+                with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                    client.read_counter(counter)
+                stub.Read.assert_not_called()
+
+                response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+                response.config.p4info.CopyFrom(candidate)
+                stub.GetForwardingPipelineConfig.return_value = response
+                _, current = client.get_pipeline_config()
+                assert client.index is current and current.raw == candidate
+                assert client.read_counter(counter, 3).packet_count == 0
+                assert stub.Read.call_args.args[0].entities[0].counter_entry.counter_id == 5001
+        finally:
+            release.set()
+            client.disconnect()
+
+
+def test_interrupted_pipeline_rpc_discards_index(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client, mocks, p4info_path, json_path = connected_client
+    _push_pipeline(connected_client)
+    mocks["stub"].SetForwardingPipelineConfig.side_effect = KeyboardInterrupt()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+        with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+            _ = client.index
     finally:
         client.disconnect()
 
@@ -1166,7 +1291,11 @@ def test_write_permission_denied_raises_not_primary(
                 )
         assert raised.value.__cause__ is error
         assert client.is_connected()
-        assert client.index is index
+        if operation == "pipeline" and wrapped:
+            with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                _ = client.index
+        else:
+            assert client.index is index
     finally:
         client.disconnect()
 
