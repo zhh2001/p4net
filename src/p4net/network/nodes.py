@@ -9,6 +9,7 @@ orchestrator's internals.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 import selectors
@@ -342,6 +343,8 @@ class RunningSwitch:
 
         Concurrent accesses share the cached instance. ``Network.stop()``
         and ``Network.astop()`` close it on its owning event loop and clear it.
+        Calling ``connect()`` on that instance during or after its shutdown
+        raises :class:`p4net.control.ConnectionError`.
 
         Raises:
             NetworkNotRunningError: if the network has retired this switch during shutdown.
@@ -363,12 +366,18 @@ class RunningSwitch:
                 self._async_client = client
             return self._async_client
 
-    def _take_async_client_for_stop(self) -> AsyncP4RuntimeClient | None:
-        """Retire the switch handle and return its cached client for cleanup."""
+    def _take_async_client_for_stop(
+        self,
+    ) -> tuple[AsyncP4RuntimeClient, asyncio.AbstractEventLoop | None] | None:
+        """Retire the switch handle and its cached client, and return the cleanup owner."""
         with self._async_client_lock:
             self._stopped = True
-            client, self._async_client = self._async_client, None
-            return client
+            client = self._async_client
+            if client is None:
+                return None
+            loop = client._retire()
+            self._async_client = None
+            return client, loop
 
     def __repr__(self) -> str:
         return f"RunningSwitch(name={self.name!r}, grpc={self._bmv2.grpc_address!r})"

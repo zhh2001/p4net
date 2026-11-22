@@ -273,6 +273,60 @@ async def test_network_astop_during_async_connect(tmp_path: Path, mocker: Mocker
         await asyncio.to_thread(net.stop)
 
 
+@pytest.mark.parametrize("previously_connected", [False, True])
+async def test_network_shutdown_refuses_connect_on_retained_client(
+    tmp_path: Path, mocker: MockerFixture, previously_connected: bool
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    owner = asyncio.get_running_loop()
+    sync_disconnecting = asyncio.Event()
+    release = threading.Event()
+    disconnect = sw.client.disconnect
+    shutdown = None
+
+    def pause_sync_disconnect() -> None:
+        owner.call_soon_threadsafe(sync_disconnecting.set)
+        release.wait(timeout=5.0)
+        disconnect()
+
+    try:
+        if previously_connected:
+            await client.connect()
+            await client.disconnect()
+        make_channel = mocker.spy(grpc.aio, "insecure_channel")
+        mocker.patch.object(sw.client, "disconnect", side_effect=pause_sync_disconnect)
+        shutdown = asyncio.create_task(net.astop())
+        await asyncio.wait_for(sync_disconnecting.wait(), timeout=3.0)
+        assert sw.bmv2.is_running()
+        with pytest.raises(ConnectionError, match="network shutdown"):
+            await client.connect(timeout=2.0)
+        release.set()
+        await shutdown
+        with pytest.raises(ConnectionError, match="network shutdown"):
+            await client.connect(timeout=2.0)
+        make_channel.assert_not_called()
+        assert client._channel is None
+        assert client._loop is None
+    finally:
+        release.set()
+        if shutdown is not None:
+            await asyncio.gather(shutdown, return_exceptions=True)
+        await client.disconnect()
+        await net.astop()
+
+
 async def test_stream_end_clears_state_and_allows_reconnect(tmp_path: Path) -> None:
     suffix = _suffix()
     switch = f"s{suffix}"

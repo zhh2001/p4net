@@ -881,11 +881,11 @@ class Network:
 
         # 1a. Submit disconnects to the loops that own the gRPC resources.
         for sw_name, rs in list(self._running_switches.items()):
-            ac = rs._take_async_client_for_stop()
-            if ac is None:
+            cleanup = rs._take_async_client_for_stop()
+            if cleanup is None:
                 continue
+            ac, loop = cleanup
             try:
-                loop = ac._loop
                 if loop is not None:
                     if not loop.is_running():
                         raise RuntimeError("async client event loop is not running")

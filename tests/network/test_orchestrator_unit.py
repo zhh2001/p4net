@@ -1476,6 +1476,9 @@ class _LoopBoundClient:
         self.closed = False
         self.disconnect_count = 0
 
+    def _retire(self) -> asyncio.AbstractEventLoop:
+        return self._loop
+
     async def disconnect(self) -> None:
         assert asyncio.get_running_loop() is self._loop
         self.disconnect_started.set()

@@ -751,6 +751,31 @@ async def test_disconnect_wakes_pending_connect(patched_aio: dict[str, Any]) -> 
         await client.disconnect()
 
 
+async def test_retired_client_cannot_finish_pending_arbitration(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=0)
+    stream = patched_aio["stream"]
+    attempts = [asyncio.create_task(client.connect(timeout=3.0))]
+    try:
+        await asyncio.wait_for(stream.read_started.wait(), timeout=1.0)
+        attempts.append(asyncio.create_task(client.connect()))
+        await asyncio.sleep(0)
+        assert await asyncio.to_thread(client._retire) is asyncio.get_running_loop()
+        await stream.push_arbitration()
+        for attempt in attempts:
+            with pytest.raises(ConnectionError, match="network shutdown"):
+                await asyncio.wait_for(attempt, timeout=1.0)
+        assert not client.is_connected
+        assert client._loop is None
+        patched_aio["channel"].close.assert_awaited_once()
+    finally:
+        for attempt in attempts:
+            attempt.cancel()
+        await asyncio.gather(*attempts, return_exceptions=True)
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("primary", [True, False])
 @pytest.mark.parametrize("ending", ["eof", "rpc-error", "exception", "cancelled"])
 async def test_stream_end_releases_resources_and_can_reconnect(

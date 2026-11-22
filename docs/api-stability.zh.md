@@ -49,7 +49,7 @@ description: p4net 公开接口的稳定性等级、弃用规则和各包分类�
 | `Network.boot_timestamps` | 稳定 | 每次返回一个新字典，将交换机名映射到对应的 `boot_timestamp_us`。修改该字典不影响网络状态。网络未运行时抛出 `NetworkNotRunningError`。 |
 | `RunningHost` | 稳定 | 主机描述、命名空间和接口访问、地址、命令执行及 ping。 |
 | `RunningSwitch` | 稳定 | 交换机描述、BMv2 进程、同步客户端、编译产物及日志路径。 |
-| `RunningSwitch.async_client` | 稳定，自 1.7 起 | 每台运行中的交换机在首次访问时创建一个未连接的客户端。每次建立新连接时，客户端都会从交换机回读 P4Info。关闭网络时会关闭并清除缓存的客户端。交换机进入清理阶段后，访问该属性会抛出 `NetworkNotRunningError`。 |
+| `RunningSwitch.async_client` | 稳定，自 1.7 起 | 每台运行中的交换机在首次访问时创建一个未连接的客户端。每次建立新连接时，客户端都会从交换机回读 P4Info。关闭网络时会关闭并清除缓存的客户端。交换机进入清理阶段后，访问该属性会抛出 `NetworkNotRunningError`，对已取得的客户端调用 `connect()` 会抛出 `p4net.control.ConnectionError`。 |
 | `RunningSwitch.boot_timestamp_us` | 稳定 | 启动 BMv2 进程前记录的 Unix 微秒时间戳。底层进程没有启动时间戳时抛出 `NetworkNotRunningError`。 |
 | `NetworkError`、`NetworkAlreadyRunningError`、`NetworkNotRunningError`、`NodeNotFoundError` | 稳定 | 网络启停和节点查询错误。 |
 

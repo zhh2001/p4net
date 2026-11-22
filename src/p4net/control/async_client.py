@@ -18,6 +18,7 @@ import contextlib
 import logging
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
@@ -127,6 +128,8 @@ class AsyncP4RuntimeClient:
 
         self._channel: Any = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._connection_state_lock = threading.Lock()
+        self._retired = False
         self._stub: Any = None
         self._outgoing: asyncio.Queue[Any] | None = None
         self._stream_call: Any = None
@@ -200,10 +203,13 @@ class AsyncP4RuntimeClient:
 
         Reconnecting also reads the device's P4Info within the same timeout.
         Clients from ``RunningSwitch.async_client`` do so on their first
-        connection as well.
+        connection as well. Once network shutdown starts closing the switch's
+        client, further calls raise :class:`ConnectionError`.
         """
-        if self._connected:
-            return
+        with self._connection_state_lock:
+            self._require_connectable()
+            if self._connected:
+                return
         attempt = self._connect_attempt
         if attempt is not None:
             failure = await asyncio.shield(attempt)
@@ -229,8 +235,11 @@ class AsyncP4RuntimeClient:
     async def _connect(self, *, timeout: float) -> None:
         if self._channel is not None:
             await self._teardown()
+        # Publish the owner before opening the channel so shutdown can find it.
+        with self._connection_state_lock:
+            self._require_connectable()
+            loop = self._loop = asyncio.get_running_loop()
         self._closed = False
-        loop = self._loop = asyncio.get_running_loop()
         read_pipeline = self._has_connected or self._read_pipeline_on_first_connect
         if read_pipeline:
             deadline = loop.time() + timeout
@@ -282,9 +291,11 @@ class AsyncP4RuntimeClient:
             )
         if read_pipeline:
             await self._read_p4info_on_connect(stream_call, timeout=deadline - loop.time())
-        self._p4info_unconfirmed = False
-        self._has_connected = True
-        self._connected = True
+        with self._connection_state_lock:
+            self._require_connectable()
+            self._p4info_unconfirmed = False
+            self._has_connected = True
+            self._connected = True
         logger.info(
             "AsyncP4RuntimeClient %s connected (primary=%s, election=%s)",
             self.target,
@@ -337,6 +348,19 @@ class AsyncP4RuntimeClient:
         if not self._stream_is_current(stream_call):
             raise ConnectionError(closed)
 
+    def _require_connectable(self) -> None:
+        """Check for retirement while holding the connection state lock."""
+        if self._retired:
+            raise ConnectionError(
+                f"P4Runtime async client for {self.target!r} closed by network shutdown"
+            )
+
+    def _retire(self) -> asyncio.AbstractEventLoop | None:
+        """Block future connections and return the event loop that can close the channel."""
+        with self._connection_state_lock:
+            self._retired = True
+            return self._loop
+
     async def disconnect(self) -> None:
         """Close the channel and release connection resources.
 
@@ -388,11 +412,12 @@ class AsyncP4RuntimeClient:
                 stream_task = None
             cancelled = await self._close_channel()
             self._channel = None
-            self._loop = None
             self._stub = None
             self._stream_call = None
             self._stream_task = None
             self._outgoing = None
+            with self._connection_state_lock:
+                self._loop = None
             if was_connected:
                 logger.info("AsyncP4RuntimeClient %s disconnected", self.target)
 
