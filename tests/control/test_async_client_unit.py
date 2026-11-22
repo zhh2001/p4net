@@ -1958,6 +1958,94 @@ async def test_cancelling_counter_read_ends_unfinished_rpc(patched_aio: dict[str
         await client.disconnect()
 
 
+@pytest.mark.parametrize("operation", ["table", "counter"])
+@pytest.mark.parametrize(
+    "ending",
+    ["disconnect", "disconnect-status", "reconnect", "caller-and-disconnect", "active-status"],
+)
+async def test_async_reads_distinguish_disconnect_from_cancellation(
+    patched_aio: dict[str, Any], mocker: MockerFixture, operation: str, ending: str
+) -> None:
+    info = _make_p4info_index().raw
+    info.counters.add().CopyFrom(_counter_p4info().counters[0])
+    client = await _connect(patched_aio, info_index=P4InfoIndex(info))
+    waiting, release = asyncio.Event(), asyncio.Event()
+    status_cancelled = grpc.aio.AioRpcError(grpc.StatusCode.CANCELLED, (), (), "RPC cancelled")
+    transport_cancelled = asyncio.CancelledError("channel closed")
+    rpc_error = (
+        status_cancelled
+        if ending in ("active-status", "disconnect-status")
+        else transport_cancelled
+    )
+    original_stub = patched_aio["stub"]
+
+    async def read_response() -> Any:
+        waiting.set()
+        await release.wait()
+        raise rpc_error
+
+    async def responses() -> AsyncIterator[Any]:
+        yield await read_response()
+
+    async def read() -> Any:
+        if operation == "table":
+            return [entry async for entry in client.list_table_entries()]
+        return await client.read_counter("MyIngress.pkts", 3)
+
+    original_stub.Read.side_effect = lambda request, timeout: responses()
+    pending = asyncio.create_task(read())
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=1.0)
+        if ending != "active-status":
+            if ending == "caller-and-disconnect":
+
+                async def close() -> None:
+                    pending.cancel("caller cancelled")
+                    release.set()
+
+                patched_aio["channel"].close.side_effect = close
+            await client.disconnect()
+        if ending == "reconnect":
+            stream = _FakeStream()
+            await stream.push_arbitration()
+            replacement = MagicMock(StreamChannel=MagicMock(return_value=stream))
+            mocker.patch(
+                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
+                return_value=replacement,
+            )
+            await client.connect()
+            replacement.Read.assert_not_called()
+        release.set()
+
+        if ending == "caller-and-disconnect":
+            error = asyncio.CancelledError if operation == "table" else AsyncOperationCancelledError
+            with pytest.raises(error) as raised:
+                await pending
+            cause = raised.value if operation == "table" else raised.value.__cause__
+            assert isinstance(cause, asyncio.CancelledError)
+        elif ending == "active-status":
+            with pytest.raises(AsyncOperationCancelledError, match="RPC cancelled") as raised:
+                await pending
+            assert raised.value.__cause__ is status_cancelled
+            assert client.is_connected
+        else:
+            message = (
+                "closed while reading table entries"
+                if operation == "table"
+                else "closed during a counter read"
+            )
+            with pytest.raises(ConnectionError, match=message) as raised:
+                await pending
+            assert raised.value.__cause__ is rpc_error
+        original_stub.Read.assert_called_once()
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await client.disconnect()
+
+
 # ---------------------------------------------------------------------------
 # Packet I/O
 # ---------------------------------------------------------------------------

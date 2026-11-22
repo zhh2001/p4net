@@ -19,7 +19,7 @@ import logging
 import shutil
 import subprocess
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -610,7 +610,8 @@ class AsyncP4RuntimeClient:
         Use it as ``async for entry in client.list_table_entries(...)``.
         The RPC starts when iteration begins. The iterator becomes invalid
         if its connection closes or its P4Info changes, even after iteration
-        has started. Create a new iterator to read again.
+        has started. A closed connection raises ``ConnectionError``. Create
+        a new iterator to read again.
         """
         self._require_connected_with_index()
         stub = self._stub
@@ -635,23 +636,61 @@ class AsyncP4RuntimeClient:
 
         async def _gen() -> AsyncIterator[dict[str, Any]]:
             require_current_context("before")
-            call = None
-            try:
-                call = stub.Read(req, timeout=timeout)
-                async for resp in call:
+            async with contextlib.aclosing(
+                self._read_responses(
+                    stub, req, timeout=timeout, operation="while reading table entries"
+                )
+            ) as responses:
+                async for resp in responses:
                     require_current_context("while")
                     for ent in resp.entities:
                         if ent.HasField("table_entry"):
                             yield self._decode_table_entry(ent.table_entry, idx)
                             require_current_context("while")
-                require_current_context("while")
-            except grpc.aio.AioRpcError as exc:
-                raise self._translate_rpc_error(exc) from exc
-            finally:
-                if isinstance(call, grpc.aio.Call) and not call.done():
-                    call.cancel()
+            require_current_context("while")
 
         return _gen()
+
+    async def _read_responses(
+        self, stub: Any, request: Any, *, timeout: float, operation: str
+    ) -> AsyncGenerator[Any, None]:
+        def raise_if_disconnected(exc: BaseException) -> None:
+            if self._stub is not stub or not self.is_connected:
+                raise ConnectionError(f"Connection to {self.target!r} closed {operation}") from exc
+
+        async def receive_next(responses: AsyncIterator[Any]) -> Any:
+            try:
+                return await anext(responses)
+            except asyncio.CancelledError as exc:
+                raise_if_disconnected(exc)
+                raise
+
+        call = None
+        try:
+            call = stub.Read(request, timeout=timeout)
+            responses = aiter(call)
+            while True:
+                receive = asyncio.create_task(receive_next(responses))
+                try:
+                    # Waiting for the task's completion keeps a caller cancellation
+                    # separate from a cancellation reported by the RPC.
+                    await asyncio.wait((receive,))
+                except asyncio.CancelledError:
+                    receive.cancel()
+                    await asyncio.gather(receive, return_exceptions=True)
+                    raise
+                try:
+                    response = receive.result()
+                except StopAsyncIteration:
+                    break
+                yield response
+        except grpc.aio.AioRpcError as exc:
+            if exc.code() == grpc.StatusCode.CANCELLED:
+                raise_if_disconnected(exc)
+            raise self._translate_rpc_error(exc) from exc
+        finally:
+            if isinstance(call, grpc.aio.Call) and not call.done():
+                call.cancel()
 
     @staticmethod
     def _decode_table_entry(entry: Any, idx: P4InfoIndex) -> dict[str, Any]:
@@ -713,6 +752,7 @@ class AsyncP4RuntimeClient:
         A single index returns the cell's packet count, with zero for an
         absent cell. Omitting the index returns ``{cell_index: packet_count}``.
         The read uses the connection and P4Info selected at the start of the call.
+        A closed connection raises ``ConnectionError``.
         """
         self._require_connected_with_index()
         stub, idx = self._stub, self.info_index
@@ -726,24 +766,20 @@ class AsyncP4RuntimeClient:
             entity.counter_entry.index.index = cell
         collected: dict[int, int] = {}
         self._require_same_indexed_context(stub, idx, operation="counter read")
-        call = None
         try:
-            call = stub.Read(req, timeout=timeout)
-            async for resp in call:
-                self._require_same_indexed_context(stub, idx, operation="counter read")
-                for ent in resp.entities:
-                    if not ent.HasField("counter_entry"):
-                        continue
-                    ce = ent.counter_entry
-                    collected[int(ce.index.index)] = int(ce.data.packet_count)
+            async with contextlib.aclosing(
+                self._read_responses(stub, req, timeout=timeout, operation="during a counter read")
+            ) as responses:
+                async for resp in responses:
+                    self._require_same_indexed_context(stub, idx, operation="counter read")
+                    for ent in resp.entities:
+                        if not ent.HasField("counter_entry"):
+                            continue
+                        ce = ent.counter_entry
+                        collected[int(ce.index.index)] = int(ce.data.packet_count)
             self._require_same_indexed_context(stub, idx, operation="counter read")
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError("read_counter cancelled") from exc
-        except grpc.aio.AioRpcError as exc:
-            raise self._translate_rpc_error(exc) from exc
-        finally:
-            if isinstance(call, grpc.aio.Call) and not call.done():
-                call.cancel()
         if cell is not None:
             return collected.get(cell, 0)
         return collected
