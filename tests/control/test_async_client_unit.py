@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,6 +30,8 @@ from p4net.control import (
     P4RuntimeError,
     PipelineError,
 )
+from p4net.network.nodes import RunningSwitch
+from p4net.topo import P4Switch
 
 # ---------------------------------------------------------------------------
 # Helpers: build a minimal P4Info index with a table, an action, and a register.
@@ -174,6 +177,119 @@ def _batch_error(codes: list[int], *, details: str = "batch write failed") -> gr
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------
+
+
+def _managed_client(info: P4InfoIndex) -> AsyncP4RuntimeClient:
+    switch = RunningSwitch(
+        P4Switch(name="s1", p4_src=Path("routing.p4")),
+        MagicMock(device_id=3, grpc_port=50051, thrift_port=9090),
+        MagicMock(_index=info),
+        MagicMock(),
+    )
+    return switch.async_client
+
+
+@pytest.mark.parametrize("p4info", ["same", "changed", "missing"])
+async def test_managed_client_confirms_p4info_on_first_connection(
+    patched_aio: dict[str, Any], p4info: str
+) -> None:
+    previous = _make_p4info_index()
+    client = _managed_client(previous)
+    assert client.info_index is previous
+    reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    if p4info != "missing":
+        reply.config.p4info.CopyFrom(previous.raw)
+        if p4info == "changed":
+            reply.config.p4info.tables[0].preamble.name = "NextIngress.ipv4_lpm"
+    read_started, release = asyncio.Event(), asyncio.Event()
+    stub = patched_aio["stub"]
+
+    async def read_pipeline(request: Any) -> Any:
+        read_started.set()
+        await release.wait()
+        return reply
+
+    stub.GetForwardingPipelineConfig = AsyncMock(side_effect=read_pipeline)
+    connecting = asyncio.create_task(client.connect())
+    waiting = asyncio.create_task(client.connect())
+    try:
+        await patched_aio["stream"].push_arbitration()
+        await asyncio.wait_for(read_started.wait(), timeout=1.0)
+        assert not client.is_connected
+        assert not waiting.done()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(connecting, waiting), timeout=1.0)
+        assert client.is_connected
+        request = stub.GetForwardingPipelineConfig.await_args.args[0]
+        assert request.device_id == 3
+        assert request.response_type == request.P4INFO_AND_COOKIE
+        await client.connect()
+        stub.GetForwardingPipelineConfig.assert_awaited_once()
+        if p4info == "missing":
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
+        else:
+            assert client.info_index.raw == reply.config.p4info
+            assert (client.info_index is previous) == (p4info == "same")
+    finally:
+        release.set()
+        await asyncio.gather(connecting, waiting, return_exceptions=True)
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("ending", ["disconnect", "timeout", "cancel"])
+async def test_failed_managed_p4info_readback_is_retried_on_next_connect(
+    patched_aio: dict[str, Any], mocker: MockerFixture, ending: str
+) -> None:
+    client = _managed_client(_make_p4info_index())
+    stub = patched_aio["stub"]
+    read_started, release = asyncio.Event(), asyncio.Event()
+    reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    reply.config.p4info.CopyFrom(_make_p4info_index().raw)
+    reply.config.p4info.tables[0].preamble.name = "NextIngress.ipv4_lpm"
+
+    async def hold_pipeline(_request: Any) -> Any:
+        read_started.set()
+        await release.wait()
+        return reply
+
+    stub.GetForwardingPipelineConfig = AsyncMock(side_effect=hold_pipeline)
+    await patched_aio["stream"].push_arbitration()
+    pending = asyncio.create_task(client.connect(timeout=0.1 if ending == "timeout" else 3.0))
+    try:
+        await asyncio.wait_for(read_started.wait(), timeout=1.0)
+        if ending == "disconnect":
+            await client.disconnect()
+            release.set()
+            with pytest.raises(ConnectionError, match="closed during initial P4Info readback"):
+                await asyncio.wait_for(pending, timeout=1.0)
+        elif ending == "cancel":
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        else:
+            with pytest.raises(ConnectionError, match="initial P4Info readback timed out"):
+                await pending
+        assert not client.is_connected
+        assert client._channel is None
+
+        retry_stream = _FakeStream()
+        retry_stub = MagicMock(
+            StreamChannel=MagicMock(return_value=retry_stream),
+            GetForwardingPipelineConfig=AsyncMock(return_value=reply),
+        )
+        mocker.patch(
+            "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub", return_value=retry_stub
+        )
+        await retry_stream.push_arbitration()
+        await client.connect()
+        assert client.info_index.raw == reply.config.p4info
+        retry_stub.GetForwardingPipelineConfig.assert_awaited_once()
+    finally:
+        release.set()
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await client.disconnect()
 
 
 async def test_connect_then_disconnect_clean(patched_aio: dict[str, Any]) -> None:

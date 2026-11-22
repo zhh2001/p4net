@@ -46,7 +46,7 @@ from p4net.control.exceptions import (
     P4RuntimeError,
     PipelineError,
 )
-from p4net.control.p4info_index import P4InfoIndex, _index_after_commit
+from p4net.control.p4info_index import P4InfoIndex, _index_after_commit, _index_for_p4info
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,7 @@ class AsyncP4RuntimeClient:
         self._host, self._port = grpc_address
         self._device_id = int(device_id)
         self._info_index = info_index
+        self._read_initial_pipeline = False
         self._thrift_address = thrift_address
         self._election_id = election_id  # resolved at connect() if None
 
@@ -182,7 +183,11 @@ class AsyncP4RuntimeClient:
     # ----------------------------------------------------------------- lifecycle
 
     async def connect(self, *, timeout: float = 10.0) -> None:
-        """Connect and await arbitration. Concurrent callers share the first attempt."""
+        """Connect and await arbitration. Concurrent callers share the first attempt.
+
+        A client from ``RunningSwitch.async_client`` also reads the device's
+        P4Info on its first connection within the same timeout.
+        """
         if self._connected:
             return
         attempt = self._connect_attempt
@@ -211,7 +216,11 @@ class AsyncP4RuntimeClient:
         if self._channel is not None:
             await self._teardown()
         self._closed = False
-        self._loop = asyncio.get_running_loop()
+        loop = self._loop = asyncio.get_running_loop()
+        previous = self._info_index
+        if self._read_initial_pipeline:
+            deadline = loop.time() + timeout
+            self._info_index = None
         self._channel = grpc.aio.insecure_channel(self.target)
         self._stub = p4runtime_pb2_grpc.P4RuntimeStub(self._channel)
         outgoing = self._outgoing = asyncio.Queue()
@@ -257,6 +266,11 @@ class AsyncP4RuntimeClient:
                 f"async client is not primary for device {self._device_id} "
                 f"(status code {status_code})"
             )
+        if self._read_initial_pipeline:
+            self._info_index = await self._read_initial_p4info(
+                stream_call, previous, timeout=deadline - loop.time()
+            )
+            self._read_initial_pipeline = False
         self._connected = True
         logger.info(
             "AsyncP4RuntimeClient %s connected (primary=%s, election=%s)",
@@ -264,6 +278,33 @@ class AsyncP4RuntimeClient:
             self._is_primary,
             self._election_id,
         )
+
+    async def _read_initial_p4info(
+        self, stream_call: Any, previous: P4InfoIndex | None, *, timeout: float
+    ) -> P4InfoIndex | None:
+        stub = self._stub
+        closed = f"Connection to {self.target!r} closed during initial P4Info readback"
+        request = p4runtime_pb2.GetForwardingPipelineConfigRequest(
+            device_id=self._device_id,
+            response_type=p4runtime_pb2.GetForwardingPipelineConfigRequest.P4INFO_AND_COOKIE,
+        )
+        try:
+            response = await self._await_rpc(
+                stub,
+                lambda: stub.GetForwardingPipelineConfig(request),
+                connection_closed=closed,
+                timeout=timeout,
+                connecting_stream=stream_call,
+            )
+        except asyncio.TimeoutError as exc:
+            raise ConnectionError(f"{self.target!r} initial P4Info readback timed out") from exc
+        except grpc.aio.AioRpcError as exc:
+            raise self._translate_rpc_error(exc) from exc
+        if not self._stream_is_current(stream_call):
+            raise ConnectionError(closed)
+        if not response.config.HasField("p4info"):
+            return None
+        return _index_for_p4info(response.config.p4info, previous)
 
     async def disconnect(self) -> None:
         """Close the channel and release connection resources.
@@ -753,9 +794,15 @@ class AsyncP4RuntimeClient:
         *,
         connection_closed: str,
         timeout: float | None = None,
+        connecting_stream: Any = None,
     ) -> Any:
         def require_connection(cause: BaseException | None = None) -> None:
-            if self._stub is not stub or not self.is_connected:
+            current = (
+                self.is_connected
+                if connecting_stream is None
+                else self._stream_is_current(connecting_stream)
+            )
+            if self._stub is not stub or not current:
                 raise ConnectionError(connection_closed) from cause
 
         async def invoke() -> Any:

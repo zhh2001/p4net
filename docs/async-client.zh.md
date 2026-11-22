@@ -66,7 +66,7 @@ sudo "$(command -v python)" async_demo.py
 
 ## 连接与主控权
 
-`net.switch("s1").async_client` 会延迟创建并缓存一个尚未连接的客户端，创建时带入当前同步客户端的 P4Info 索引。调用 `await client.connect()` 后才能使用。同步和异步客户端各有自己的通道与选举 ID，连接其中一个不会关闭另一个。
+`net.switch("s1").async_client` 会延迟创建并缓存一个尚未连接的客户端，初始索引来自同步客户端。首次调用 `await client.connect()` 时，异步客户端会从交换机回读当前 P4Info。同步和异步客户端各有自己的通道与选举 ID，连接其中一个不会关闭另一个。
 
 无论使用同步还是异步客户端，同一实例上的并发 `connect()` 都共用一次连接尝试，仲裁超时由首次调用指定。使用异步客户端时，取消某个等待中的调用，连接尝试会继续。取消发起连接的调用时，客户端会清理连接，并向仍在等待的调用传播 `asyncio.CancelledError`。
 
