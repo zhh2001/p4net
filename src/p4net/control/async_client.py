@@ -740,13 +740,19 @@ class AsyncP4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> None:
+        """Write a register cell through BMv2's Thrift service.
+
+        The connection and P4Info must still match when the Thrift command starts.
+        """
         self._require_connected_with_index()
-        idx = self.info_index
+        stub, idx = self._stub, self.info_index
         spec = idx.register_by_name(name)
         if not 0 <= int(index) < spec.size:
             raise EncodingError(f"register {name!r} index {index} out of range [0, {spec.size})")
         encode_value(int(value), spec.bitwidth)  # pre-flight bitwidth check
-        await self._run_thrift_cli(
+        await self._run_register_command(
+            stub,
+            idx,
             f"register_write {name} {int(index)} {int(value)}",
             timeout=timeout,
             op_description=f"register_write {name}[{index}]",
@@ -759,24 +765,57 @@ class AsyncP4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> int | list[int]:
+        """Read a register cell or its entire array through BMv2's Thrift service.
+
+        The connection and P4Info must still match when the Thrift command starts.
+        """
         self._require_connected_with_index()
-        idx = self.info_index
+        stub, idx = self._stub, self.info_index
         spec = idx.register_by_name(name)
         if index is not None and not 0 <= int(index) < spec.size:
             raise EncodingError(f"register {name!r} index {index} out of range [0, {spec.size})")
         if index is not None:
-            output = await self._run_thrift_cli(
+            output = await self._run_register_command(
+                stub,
+                idx,
                 f"register_read {name} {int(index)}",
                 timeout=timeout,
                 op_description=f"register_read {name}[{index}]",
             )
             return _parse_register_read_single(output, name, int(index))
-        output = await self._run_thrift_cli(
+        output = await self._run_register_command(
+            stub,
+            idx,
             f"register_read {name}",
             timeout=timeout,
             op_description=f"register_read {name}",
         )
         return _parse_register_read_array(output, name, spec.size)
+
+    async def _run_register_command(
+        self,
+        stub: Any,
+        index: P4InfoIndex,
+        command: str,
+        *,
+        timeout: float,
+        op_description: str,
+    ) -> str:
+        try:
+            # The CLI opens a separate connection. Keep the client and its
+            # pipeline stable until the command has finished or been stopped.
+            async with self._pipeline_lock, self._teardown_lock:
+                if self._stub is not stub or not self.is_connected:
+                    raise ConnectionError(
+                        f"Connection to {self.target!r} closed during a register operation"
+                    )
+                if self._info_index is not index:
+                    raise P4RuntimeError("P4Info changed during register operation")
+                return await self._run_thrift_cli(
+                    command, timeout=timeout, op_description=op_description
+                )
+        except asyncio.CancelledError as exc:
+            raise AsyncOperationCancelledError(f"{op_description} cancelled") from exc
 
     async def _run_thrift_cli(
         self,
@@ -792,8 +831,8 @@ class AsyncP4RuntimeClient:
         host, port = self._thrift_address
         if shutil.which("simple_switch_CLI") is None:
             raise P4RuntimeError("simple_switch_CLI not on PATH; required for register ops")
-        try:
-            proc = await asyncio.create_subprocess_exec(
+        launch = asyncio.create_task(
+            asyncio.create_subprocess_exec(
                 "simple_switch_CLI",
                 "--thrift-ip",
                 str(host),
@@ -803,20 +842,40 @@ class AsyncP4RuntimeClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-        except FileNotFoundError as exc:
-            raise P4RuntimeError("simple_switch_CLI not found") from exc
+        )
+        cancelled_on_launch = await self._wait_for_thrift_task(launch)
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=(command + "\n").encode("utf-8")), timeout=timeout
-            )
-        except asyncio.TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
+            proc = launch.result()
+        except FileNotFoundError as exc:
+            if cancelled_on_launch:
+                raise asyncio.CancelledError from exc
+            raise P4RuntimeError("simple_switch_CLI not found") from exc
+
+        timed_out = timeout is not None and timeout <= 0
+        command_input = (
+            b"" if cancelled_on_launch or timed_out else (command + "\n").encode("utf-8")
+        )
+        communication = asyncio.create_task(proc.communicate(input=command_input))
+        try:
+            if cancelled_on_launch:
+                raise asyncio.CancelledError
+            if timed_out:
+                raise asyncio.TimeoutError
+            done, _ = await asyncio.wait((communication,), timeout=timeout)
+            if not done:
+                raise asyncio.TimeoutError
+            stdout, stderr = communication.result()
+        except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            # Draining the pipes lets communicate reap the process even when
+            # stdout or stderr is full. Further cancellations must wait for it.
+            cancelled_while_stopping = await self._wait_for_thrift_task(communication)
+            if not communication.cancelled():
+                communication.exception()
+            if isinstance(exc, asyncio.CancelledError) or cancelled_while_stopping:
+                raise asyncio.CancelledError from exc
             raise P4RuntimeError(f"{op_description} timed out after {timeout}s") from exc
-        except asyncio.CancelledError as exc:
-            proc.kill()
-            await proc.wait()
-            raise AsyncOperationCancelledError(f"{op_description} cancelled") from exc
         if proc.returncode != 0:
             raise P4RuntimeError(
                 f"{op_description} failed (rc={proc.returncode}): "
@@ -828,6 +887,17 @@ class AsyncP4RuntimeClient:
             if stripped.startswith("Error:") or "Invalid" in stripped:
                 raise P4RuntimeError(f"{op_description}: {stripped}")
         return stdout.decode("utf-8", errors="replace")
+
+    @staticmethod
+    async def _wait_for_thrift_task(task: asyncio.Task[Any]) -> bool:
+        """Wait for subprocess launch or cleanup and report caller cancellation."""
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.wait((task,))
+            except asyncio.CancelledError:
+                cancelled = True
+        return cancelled
 
     # ----------------------------------------------------------------- packets
 

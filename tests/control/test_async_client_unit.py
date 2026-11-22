@@ -1944,6 +1944,157 @@ async def test_write_register_shells_out_to_thrift_cli(
         await client.disconnect()
 
 
+@pytest.mark.parametrize("change", ["reconnect", "p4info"])
+@pytest.mark.parametrize(
+    ("method", "args", "stdout", "expected"),
+    [
+        ("write_register", (4, 17), b"", None),
+        ("read_register", (4,), b"RuntimeCmd: MyIngress.test_register[4]= 53\n", 53),
+        (
+            "read_register",
+            (),
+            b"RuntimeCmd: MyIngress.test_register= " + b", ".join([b"53"] * 16) + b"\n",
+            [53] * 16,
+        ),
+    ],
+    ids=["write", "read-cell", "read-all"],
+)
+async def test_async_register_commands_keep_their_connection_and_p4info(
+    patched_aio: dict[str, Any],
+    mocker: MockerFixture,
+    change: str,
+    method: str,
+    args: tuple[int, ...],
+    stdout: bytes,
+    expected: int | list[int] | None,
+) -> None:
+    name = "MyIngress.test_register"
+    client = await _connect(patched_aio)
+    operation = getattr(client, method)
+    started = asyncio.Event()
+    lookup = client.info_index.register_by_name
+
+    def note_preparation(register: str) -> Any:
+        started.set()
+        return lookup(register)
+
+    mocker.patch.object(client.info_index, "register_by_name", side_effect=note_preparation)
+    mocker.patch("p4net.control.async_client.shutil.which", return_value="simple_switch_CLI")
+    proc = MagicMock(returncode=0, communicate=AsyncMock(return_value=(stdout, b"")))
+    spawn = mocker.patch("asyncio.create_subprocess_exec", return_value=proc)
+    pending = None
+    try:
+        async with client._pipeline_lock:
+            pending = asyncio.create_task(operation(name, *args))
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            if change == "reconnect":
+                await client.disconnect()
+                replacement = _FakeStream()
+                await replacement.push_arbitration()
+                stub = MagicMock(StreamChannel=MagicMock(return_value=replacement))
+                channel = MagicMock(close=AsyncMock())
+                mocker.patch(
+                    "p4net.control.async_client.grpc.aio.insecure_channel", return_value=channel
+                )
+                mocker.patch(
+                    "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
+                    return_value=stub,
+                )
+                await client.connect()
+            else:
+                client._info_index = _make_p4info_index()
+
+        error = ConnectionError if change == "reconnect" else P4RuntimeError
+        message = "closed during a register" if change == "reconnect" else "P4Info changed"
+        with pytest.raises(error, match=message):
+            await asyncio.wait_for(pending, timeout=1.0)
+        spawn.assert_not_awaited()
+
+        assert await operation(name, *args) == expected
+        spawn.assert_awaited_once()
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("interrupt", ["launch", "command", "timeout"])
+async def test_async_register_holds_lifecycle_until_thrift_child_exits(
+    patched_aio: dict[str, Any], mocker: MockerFixture, interrupt: str
+) -> None:
+    client = await _connect(patched_aio)
+    launched, entered, killed, finish = (asyncio.Event() for _ in range(4))
+    starting = asyncio.Event()
+    input_bytes = []
+
+    async def communicate(input: bytes | None = None) -> tuple[bytes, bytes]:
+        input_bytes.append(input)
+        entered.set()
+        await killed.wait()
+        await finish.wait()
+        return b"", b""
+
+    proc = MagicMock(returncode=0, communicate=AsyncMock(side_effect=communicate), wait=AsyncMock())
+    proc.kill.side_effect = killed.set
+
+    async def spawn(*args: Any, **kwargs: Any) -> Any:
+        starting.set()
+        await launched.wait()
+        return proc
+
+    mocker.patch("p4net.control.async_client.shutil.which", return_value="simple_switch_CLI")
+    mocker.patch("asyncio.create_subprocess_exec", side_effect=spawn)
+    if interrupt != "launch":
+        launched.set()
+    command = asyncio.create_task(
+        client.write_register(
+            "MyIngress.test_register", 4, 17, timeout=0.05 if interrupt == "timeout" else 5.0
+        )
+    )
+    disconnecting = None
+    try:
+        await asyncio.wait_for(starting.wait(), timeout=1.0)
+        if interrupt == "launch":
+            command.cancel()
+            await asyncio.sleep(0)
+            assert not command.done()
+            launched.set()
+        elif interrupt == "command":
+            await asyncio.wait_for(entered.wait(), timeout=1.0)
+            command.cancel()
+
+        await asyncio.wait_for(killed.wait(), timeout=1.0)
+        disconnecting = asyncio.create_task(client.disconnect())
+        await asyncio.sleep(0)
+        assert client.is_connected and not disconnecting.done()
+        if interrupt != "timeout":
+            command.cancel()
+            await asyncio.sleep(0)
+            assert not command.done()
+        finish.set()
+
+        if interrupt == "timeout":
+            with pytest.raises(P4RuntimeError, match="timed out") as raised:
+                await asyncio.wait_for(command, timeout=1.0)
+            assert type(raised.value) is P4RuntimeError
+        else:
+            with pytest.raises(AsyncOperationCancelledError, match="cancelled"):
+                await asyncio.wait_for(command, timeout=1.0)
+        assert input_bytes == [
+            b"" if interrupt == "launch" else b"register_write MyIngress.test_register 4 17\n"
+        ]
+        proc.kill.assert_called_once()
+        await asyncio.wait_for(disconnecting, timeout=1.0)
+    finally:
+        launched.set()
+        finish.set()
+        await asyncio.gather(command, return_exceptions=True)
+        if disconnecting is not None:
+            await asyncio.gather(disconnecting, return_exceptions=True)
+        await client.disconnect()
+
+
 # ---------------------------------------------------------------------------
 # Cancellation
 # ---------------------------------------------------------------------------
