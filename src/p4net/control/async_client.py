@@ -30,6 +30,7 @@ from google.protobuf import text_format
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2, p4runtime_pb2_grpc
 
+from p4net.control._pipeline_state import _PipelineState
 from p4net.control._rpc_errors import (
     _extract_p4_canonical_codes,
     _grpc_code_for,
@@ -117,7 +118,8 @@ class AsyncP4RuntimeClient:
     ) -> None:
         self._host, self._port = grpc_address
         self._device_id = int(device_id)
-        self._info_index = info_index
+        self._pipeline_state = _PipelineState(info_index)
+        self._p4info_unconfirmed = False
         self._read_pipeline_on_first_connect = False
         self._has_connected = False
         self._thrift_address = thrift_address
@@ -175,12 +177,21 @@ class AsyncP4RuntimeClient:
         return self._is_primary
 
     @property
+    def _info_index(self) -> P4InfoIndex | None:
+        return None if self._p4info_unconfirmed else self._pipeline_state.index
+
+    @_info_index.setter
+    def _info_index(self, index: P4InfoIndex | None) -> None:
+        self._pipeline_state.index = index
+
+    @property
     def info_index(self) -> P4InfoIndex:
-        if self._info_index is None:
+        index = self._info_index
+        if index is None:
             raise P4RuntimeError(
                 "no P4Info index attached; push a pipeline first or pass info_index= to ctor"
             )
-        return self._info_index
+        return index
 
     # ----------------------------------------------------------------- lifecycle
 
@@ -221,10 +232,9 @@ class AsyncP4RuntimeClient:
         self._closed = False
         loop = self._loop = asyncio.get_running_loop()
         read_pipeline = self._has_connected or self._read_pipeline_on_first_connect
-        previous = self._info_index
         if read_pipeline:
             deadline = loop.time() + timeout
-            self._info_index = None
+            self._p4info_unconfirmed = True
         self._channel = grpc.aio.insecure_channel(self.target)
         self._stub = p4runtime_pb2_grpc.P4RuntimeStub(self._channel)
         outgoing = self._outgoing = asyncio.Queue()
@@ -271,9 +281,8 @@ class AsyncP4RuntimeClient:
                 f"(status code {status_code})"
             )
         if read_pipeline:
-            self._info_index = await self._read_p4info_on_connect(
-                stream_call, previous, timeout=deadline - loop.time()
-            )
+            await self._read_p4info_on_connect(stream_call, timeout=deadline - loop.time())
+        self._p4info_unconfirmed = False
         self._has_connected = True
         self._connected = True
         logger.info(
@@ -283,9 +292,7 @@ class AsyncP4RuntimeClient:
             self._election_id,
         )
 
-    async def _read_p4info_on_connect(
-        self, stream_call: Any, previous: P4InfoIndex | None, *, timeout: float
-    ) -> P4InfoIndex | None:
+    async def _read_p4info_on_connect(self, stream_call: Any, *, timeout: float) -> None:
         stub = self._stub
         closed = f"Connection to {self.target!r} closed during P4Info readback"
         request = p4runtime_pb2.GetForwardingPipelineConfigRequest(
@@ -293,15 +300,32 @@ class AsyncP4RuntimeClient:
             response_type=p4runtime_pb2.GetForwardingPipelineConfigRequest.P4INFO_AND_COOKIE,
         )
 
-        async def read() -> Any:
+        async def read() -> None:
             # A pipeline request on the previous connection may still be finishing.
             async with self._pipeline_lock:
-                if not self._stream_is_current(stream_call):
-                    raise ConnectionError(closed)
-                return await stub.GetForwardingPipelineConfig(request)
+                with self._pipeline_state.access():
+                    if not self._stream_is_current(stream_call):
+                        raise ConnectionError(closed)
+                    try:
+                        response = await stub.GetForwardingPipelineConfig(request)
+                    except grpc.aio.AioRpcError as exc:
+                        if not self._stream_is_current(stream_call):
+                            raise ConnectionError(closed) from exc
+                        if not _pipeline_not_configured(exc):
+                            raise self._translate_rpc_error(exc) from exc
+                        self._info_index = None
+                        return
+                    if not self._stream_is_current(stream_call):
+                        raise ConnectionError(closed)
+                    config = response.config
+                    self._info_index = (
+                        _index_for_p4info(config.p4info, self._pipeline_state.index)
+                        if config.HasField("p4info")
+                        else None
+                    )
 
         try:
-            response = await self._await_rpc(
+            await self._await_rpc(
                 stub,
                 read,
                 connection_closed=closed,
@@ -310,17 +334,8 @@ class AsyncP4RuntimeClient:
             )
         except asyncio.TimeoutError as exc:
             raise ConnectionError(f"{self.target!r} P4Info readback timed out") from exc
-        except grpc.aio.AioRpcError as exc:
-            if not self._stream_is_current(stream_call):
-                raise ConnectionError(closed) from exc
-            if _pipeline_not_configured(exc):
-                return None
-            raise self._translate_rpc_error(exc) from exc
         if not self._stream_is_current(stream_call):
             raise ConnectionError(closed)
-        if not response.config.HasField("p4info"):
-            return None
-        return _index_for_p4info(response.config.p4info, previous)
 
     async def disconnect(self) -> None:
         """Close the channel and release connection resources.
@@ -459,9 +474,10 @@ class AsyncP4RuntimeClient:
     async def _dispatch_packet_in(self, packet: Any, stream_call: Any) -> None:
         payload = bytes(packet.payload)
         meta: dict[str, int] = {}
-        if self._info_index is not None:
+        index = None if self._p4info_unconfirmed else self._pipeline_state.packet_in_index()
+        if index is not None:
             try:
-                meta = self._info_index.decode_packet_in_metadata(packet.metadata)
+                meta = index.decode_packet_in_metadata(packet.metadata)
             except Exception as exc:
                 logger.debug("async decode_packet_in_metadata raised: %r", exc)
         # Buffer independently of callback delivery.
@@ -527,8 +543,7 @@ class AsyncP4RuntimeClient:
             req.config.p4_device_config = bytes(json_bytes)
 
         try:
-            async with self._pipeline_lock:
-                await self._indexed_operations_idle.wait()
+            async with self._pipeline_action(action):
                 if self._stub is not stub or not self.is_connected:
                     raise ConnectionError(
                         f"Connection to {self.target!r} closed before pipeline RPC"
@@ -571,10 +586,9 @@ class AsyncP4RuntimeClient:
                         dispatched
                         and action != "VERIFY"
                         and not rejected
-                        and self._info_index is previous
+                        and self._pipeline_state.index is previous
                     ):
                         # A lost reply can leave the switch using a new P4Info.
-                        # Reconnecting alone still leaves the same cached index.
                         self._info_index = None
                     raise
                 if action != "VERIFY":
@@ -583,6 +597,13 @@ class AsyncP4RuntimeClient:
             raise AsyncOperationCancelledError("push_pipeline cancelled") from exc
         except grpc.aio.AioRpcError as exc:
             raise self._translate_rpc_error(exc, pipeline=True) from exc
+
+    @contextlib.asynccontextmanager
+    async def _pipeline_action(self, action: str) -> AsyncIterator[None]:
+        async with self._pipeline_lock:
+            await self._indexed_operations_idle.wait()
+            with self._pipeline_state.access(change=action != "VERIFY"):
+                yield
 
     async def _refresh_committed_pipeline(self, stub: Any, *, timeout: float) -> None:
         connection_closed = "COMMIT succeeded. Connection closed during P4Info refresh."
@@ -728,16 +749,19 @@ class AsyncP4RuntimeClient:
     ) -> AsyncIterator[None]:
         # Operations can overlap once admitted. A push holds the lock while
         # waiting for them to finish and while applying the new P4Info.
-        async with self._pipeline_lock:
-            require_current_context()
-            self._active_indexed_operations += 1
-            self._indexed_operations_idle.clear()
-        try:
-            yield
-        finally:
-            self._active_indexed_operations -= 1
-            if self._active_indexed_operations == 0:
-                self._indexed_operations_idle.set()
+        with contextlib.ExitStack() as active:
+            async with self._pipeline_lock:
+                active.enter_context(self._pipeline_state.access())
+                require_current_context()
+                self._active_indexed_operations += 1
+                self._indexed_operations_idle.clear()
+            try:
+                yield
+            finally:
+                active.close()
+                self._active_indexed_operations -= 1
+                if self._active_indexed_operations == 0:
+                    self._indexed_operations_idle.set()
 
     def list_table_entries(
         self,
@@ -1047,10 +1071,11 @@ class AsyncP4RuntimeClient:
             # The CLI opens a separate connection. Keep the client and its
             # pipeline stable until the command has finished or been stopped.
             async with self._pipeline_lock, self._teardown_lock:
-                self._require_same_indexed_context(stub, index, operation="register operation")
-                return await self._run_thrift_cli(
-                    command, timeout=timeout, op_description=op_description
-                )
+                with self._pipeline_state.access():
+                    self._require_same_indexed_context(stub, index, operation="register operation")
+                    return await self._run_thrift_cli(
+                        command, timeout=timeout, op_description=op_description
+                    )
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError(f"{op_description} cancelled") from exc
 
@@ -1143,21 +1168,22 @@ class AsyncP4RuntimeClient:
         payload: bytes,
         metadata: Mapping[str, object] | None = None,
     ) -> None:
-        self._require_connected()
-        idx = self._info_index
-        encoded = idx.encode_packet_out_metadata(metadata or {}) if idx is not None else []
-        if metadata and idx is None:
-            raise EncodingError("no pipeline set; cannot encode packet_out metadata")
-        if not isinstance(payload, (bytes, bytearray)):
-            raise EncodingError(f"payload must be bytes-like, got {type(payload).__name__}")
-        req = p4runtime_pb2.StreamMessageRequest()
-        req.packet.payload = bytes(payload)
-        for pm in encoded:
-            req.packet.metadata.add().CopyFrom(pm)
-        out = self._outgoing
-        if out is None:
-            raise ConnectionError("client is not connected")
-        await out.put(req)
+        with self._pipeline_state.access():
+            self._require_connected()
+            idx = self._info_index
+            encoded = idx.encode_packet_out_metadata(metadata or {}) if idx is not None else []
+            if metadata and idx is None:
+                raise EncodingError("no pipeline set; cannot encode packet_out metadata")
+            if not isinstance(payload, (bytes, bytearray)):
+                raise EncodingError(f"payload must be bytes-like, got {type(payload).__name__}")
+            req = p4runtime_pb2.StreamMessageRequest()
+            req.packet.payload = bytes(payload)
+            for pm in encoded:
+                req.packet.metadata.add().CopyFrom(pm)
+            out = self._outgoing
+            if out is None:
+                raise ConnectionError("client is not connected")
+            await out.put(req)
 
     async def on_packet_in(
         self,

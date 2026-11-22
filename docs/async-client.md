@@ -66,7 +66,7 @@ The output should contain a `MyIngress.ipv4_lpm` entry with action parameters `{
 
 ## Connections and primary status
 
-`net.switch("s1").async_client` lazily creates and caches an unconnected client. It starts with the sync client's cached P4Info and reads the current P4Info from the switch on its first connection. A client you construct yourself uses the `info_index=` argument on its first connection. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
+`net.switch("s1").async_client` lazily creates and caches an unconnected client. The two clients on a `RunningSwitch` share a P4Info cache. The async client reads the current P4Info from the switch on its first connection. A client you construct yourself uses the `info_index=` argument on its first connection. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
 
 After connecting to a switch with no installed pipeline, the primary client can install one with `push_pipeline()`.
 
@@ -126,6 +126,8 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 This overlaps the time spent waiting for RPC responses across switches. Total time depends on the number of requests and the switches' processing speed.
 
 On either client, a pipeline push waits for active table and counter operations on that client. Queued operations check that their P4Info is still current before sending.
+
+If a pipeline change overlaps an operation on the other `RunningSwitch` connection, the later operation raises `P4RuntimeError`. Retry after the in-progress operation finishes.
 
 Both `on_packet_in()` and the unsubscribe function it returns require `await`. This example waits up to five seconds for the first PacketIn delivered to the new handler and unsubscribes when the wait ends.
 

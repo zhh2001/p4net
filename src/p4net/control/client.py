@@ -25,6 +25,7 @@ from google.protobuf import text_format
 from p4.config.v1 import p4info_pb2
 from p4.v1 import p4runtime_pb2, p4runtime_pb2_grpc
 
+from p4net.control._pipeline_state import _PipelineState
 from p4net.control._rpc_errors import (
     _extract_p4_canonical_codes,
     _grpc_code_for,
@@ -173,7 +174,8 @@ class P4RuntimeClient:
         self._active_indexed_operations = 0
         self._indexed_operations_idle = threading.Event()
         self._indexed_operations_idle.set()
-        self._index: P4InfoIndex | None = None
+        self._pipeline_state = _PipelineState()
+        self._p4info_unconfirmed = False
         # Controller packet I/O. Handlers run on the stream-consumer thread.
         self._packet_in_handlers: list[Callable[[bytes, dict[str, int]], None]] = []
         self._packet_in_lock = threading.Lock()
@@ -196,17 +198,26 @@ class P4RuntimeClient:
         return (self._election_id_high, self._election_id_low)
 
     @property
+    def _index(self) -> P4InfoIndex | None:
+        return None if self._p4info_unconfirmed else self._pipeline_state.index
+
+    @_index.setter
+    def _index(self, index: P4InfoIndex | None) -> None:
+        self._pipeline_state.index = index
+
+    @property
     def index(self) -> P4InfoIndex:
         """The cached :class:`P4InfoIndex` for the device's pipeline.
 
         Raises:
             P4RuntimeError: if no P4Info is cached.
         """
-        if self._index is None:
+        index = self._index
+        if index is None:
             raise P4RuntimeError(
                 "no pipeline is set; call set_pipeline_config or get_pipeline_config first"
             )
-        return self._index
+        return index
 
     def is_connected(self) -> bool:
         """``True`` while the gRPC channel is open and arbitration succeeded."""
@@ -233,9 +244,8 @@ class P4RuntimeClient:
                 if pending is None:
                     attempt = self._connect_attempt = Future()
                     reconnect = self._has_connected
-                    previous = self._index
                     if reconnect:
-                        self._index = None
+                        self._p4info_unconfirmed = True
                     try:
                         stream_call, stream_event = self._start_stream_locked()
                     except BaseException:
@@ -250,11 +260,8 @@ class P4RuntimeClient:
             assert attempt is not None
             deadline = time.monotonic() + timeout if reconnect else None
             self._await_arbitration(stream_call, stream_event, timeout=timeout)
-            index = (
-                self._read_p4info_on_reconnect(stream_call, previous, deadline=deadline)
-                if deadline is not None
-                else previous
-            )
+            if deadline is not None:
+                self._read_p4info_on_reconnect(stream_call, deadline=deadline)
             with self._teardown_lock:
                 self._require_live_stream(
                     stream_call, "P4Runtime connection closed during connection setup"
@@ -265,8 +272,7 @@ class P4RuntimeClient:
                     self._election_id_high,
                     self._election_id_low,
                 )
-                if reconnect:
-                    self._index = index
+                self._p4info_unconfirmed = False
                 self._has_connected = True
                 self._connected = True
                 self._connect_attempt = None
@@ -315,16 +321,16 @@ class P4RuntimeClient:
             f"(status code {int(arbitration.status.code)}, message {arbitration.status.message!r})"
         )
 
-    def _read_p4info_on_reconnect(
-        self, stream_call: Any, previous: P4InfoIndex | None, *, deadline: float
-    ) -> P4InfoIndex | None:
+    def _read_p4info_on_reconnect(self, stream_call: Any, *, deadline: float) -> None:
         closed = f"Connection to {self.target!r} closed during P4Info readback"
         timed_out = f"{self.target!r} P4Info readback timed out"
         # A pipeline request from the previous connection may still be finishing.
         timeout = deadline - time.monotonic()
         if timeout <= 0 or not self._pipeline_lock.acquire(timeout=timeout):
             raise ConnectionError(timed_out)
-        try:
+        with contextlib.ExitStack() as pending:
+            pending.callback(self._pipeline_lock.release)
+            pending.enter_context(self._pipeline_state.access())
             with self._teardown_lock:
                 self._require_live_stream(stream_call, closed)
                 stub = self._stub
@@ -342,17 +348,21 @@ class P4RuntimeClient:
                 if isinstance(exc, ValueError):
                     raise
                 if _pipeline_not_configured(exc):
-                    return None
+                    with self._teardown_lock:
+                        self._require_live_stream(stream_call, closed)
+                        self._index = None
+                    return
                 if _grpc_status_code(exc) == grpc.StatusCode.DEADLINE_EXCEEDED:
                     raise ConnectionError(timed_out) from exc
                 raise self._translate_rpc_error(exc) from exc
             with self._teardown_lock:
                 self._require_live_stream(stream_call, closed)
-            if not response.config.HasField("p4info"):
-                return None
-            return _index_for_p4info(response.config.p4info, previous)
-        finally:
-            self._pipeline_lock.release()
+                config = response.config
+                self._index = (
+                    _index_for_p4info(config.p4info, self._pipeline_state.index)
+                    if config.HasField("p4info")
+                    else None
+                )
 
     def _require_live_stream(self, stream_call: Any, message: str) -> None:
         if self._closed or stream_call is not self._stream_call:
@@ -482,9 +492,10 @@ class P4RuntimeClient:
         """Decode a PacketIn and fan out to registered handlers."""
         payload = bytes(packet.payload)
         metadata: dict[str, int] = {}
-        if self._index is not None:
+        index = None if self._p4info_unconfirmed else self._pipeline_state.packet_in_index()
+        if index is not None:
             try:
-                metadata = self._index.decode_packet_in_metadata(packet.metadata)
+                metadata = index.decode_packet_in_metadata(packet.metadata)
             except Exception as exc:
                 logger.debug("decode_packet_in_metadata raised: %r", exc)
         with self._teardown_lock:
@@ -545,8 +556,9 @@ class P4RuntimeClient:
             req.config.p4info.CopyFrom(p4info_msg)
             req.config.p4_device_config = Path(bmv2_json).read_bytes()
 
-        with self._pipeline_lock:
+        with self._pipeline_lock, contextlib.ExitStack() as pipeline:
             self._indexed_operations_idle.wait()
+            pipeline.enter_context(self._pipeline_state.access(change=action != "VERIFY"))
             with self._teardown_lock:
                 self._require_same_connection(stub, operation="a pipeline operation")
                 previous = self._index
@@ -576,7 +588,7 @@ class P4RuntimeClient:
             finally:
                 if discard_index:
                     with self._teardown_lock:
-                        if self._index is previous:
+                        if self._pipeline_state.index is previous:
                             self._index = None
             logger.debug(
                 "P4Runtime pipeline request succeeded (action=%s, p4info_tables=%d)",
@@ -619,7 +631,7 @@ class P4RuntimeClient:
         with self._teardown_lock:
             self._require_connected()
             stub = self._stub
-        with self._pipeline_lock:
+        with self._pipeline_lock, self._pipeline_state.access():
             with self._teardown_lock:
                 self._require_same_connection(stub, operation="a pipeline operation")
             try:
@@ -827,17 +839,20 @@ class P4RuntimeClient:
     ) -> Iterator[None]:
         # Register under the pipeline lock so a push can wait for these RPCs
         # while reads and writes can still overlap.
-        with self._pipeline_lock, self._teardown_lock:
-            self._require_same_indexed_context(stub, index, operation=operation)
-            self._active_indexed_operations += 1
-            self._indexed_operations_idle.clear()
-        try:
-            yield
-        finally:
-            with self._teardown_lock:
-                self._active_indexed_operations -= 1
-                if self._active_indexed_operations == 0:
-                    self._indexed_operations_idle.set()
+        with contextlib.ExitStack() as active:
+            with self._pipeline_lock, self._teardown_lock:
+                active.enter_context(self._pipeline_state.access())
+                self._require_same_indexed_context(stub, index, operation=operation)
+                self._active_indexed_operations += 1
+                self._indexed_operations_idle.clear()
+            try:
+                yield
+            finally:
+                active.close()
+                with self._teardown_lock:
+                    self._active_indexed_operations -= 1
+                    if self._active_indexed_operations == 0:
+                        self._indexed_operations_idle.set()
 
     def _write_indexed_request(
         self, stub: Any, index: P4InfoIndex, req: Any, *, timeout: float, operation: str
@@ -1196,7 +1211,7 @@ class P4RuntimeClient:
     ) -> str:
         # The CLI opens its own connection, so keep this client's connection
         # and pipeline stable until the command completes.
-        with self._pipeline_lock, self._teardown_lock:
+        with self._pipeline_lock, self._pipeline_state.access(), self._teardown_lock:
             self._require_same_indexed_context(stub, p4info, operation="register operation")
             return self._run_thrift_cli(command, timeout=timeout, op_description=op_description)
 
@@ -1408,7 +1423,7 @@ class P4RuntimeClient:
         req.packet.payload = bytes(payload)
         for pm in encoded:
             req.packet.metadata.add().CopyFrom(pm)
-        with self._teardown_lock:
+        with self._pipeline_state.access(), self._teardown_lock:
             if self._outgoing is not out or not self.is_connected():
                 raise ConnectionError(
                     f"Connection to {self.target!r} closed during PacketOut preparation"

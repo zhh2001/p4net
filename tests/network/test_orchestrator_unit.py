@@ -1371,7 +1371,7 @@ def test_network_boot_timestamps_raises_when_not_running(tmp_path: Path) -> None
 
 
 def test_running_switch_async_client_lazy_cached() -> None:
-    from p4net.control import AsyncP4RuntimeClient
+    from p4net.control import AsyncP4RuntimeClient, P4RuntimeClient
     from p4net.network.nodes import RunningSwitch
     from p4net.topo import P4Switch
 
@@ -1379,7 +1379,7 @@ def test_running_switch_async_client_lazy_cached() -> None:
     bmv2.grpc_port = 50051
     bmv2.thrift_port = 9090
     bmv2.device_id = 0
-    sync_client = MagicMock()
+    sync_client = P4RuntimeClient("127.0.0.1:50051", device_id=0)
     sync_client._index = MagicMock()
     rs = RunningSwitch(
         P4Switch(name="s1", p4_src=Path("p.p4")),
@@ -1396,6 +1396,7 @@ def test_running_switch_async_client_lazy_cached() -> None:
     assert ac.device_id == 0
     assert ac._thrift_address == ("127.0.0.1", 9090)
     assert ac._info_index is sync_client._index
+    assert ac._pipeline_state is sync_client._pipeline_state
 
 
 def test_running_switch_async_client_reset_after_stop(

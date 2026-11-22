@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -27,6 +28,7 @@ from p4net.control import (
     NoSuchRegisterError,
     NotPrimaryError,
     P4InfoIndex,
+    P4RuntimeClient,
     P4RuntimeError,
     PipelineError,
 )
@@ -185,10 +187,12 @@ def _batch_error(codes: list[int], *, details: str = "batch write failed") -> gr
 def _lifecycle_client(info: P4InfoIndex, *, managed: bool) -> AsyncP4RuntimeClient:
     if not managed:
         return AsyncP4RuntimeClient(("127.0.0.1", 50051), device_id=3, info_index=info)
+    sync_client = P4RuntimeClient("127.0.0.1:50051", device_id=3)
+    sync_client._index = info
     switch = RunningSwitch(
         P4Switch(name="s1", p4_src=Path("routing.p4")),
         MagicMock(device_id=3, grpc_port=50051, thrift_port=9090),
-        MagicMock(_index=info),
+        sync_client,
         MagicMock(),
     )
     return switch.async_client
@@ -199,6 +203,170 @@ def _pipeline_reply(info: P4InfoIndex | None = None) -> Any:
     if info is not None:
         reply.config.p4info.CopyFrom(info.raw)
     return reply
+
+
+async def _connect_paired_clients(
+    patched_aio: dict[str, Any],
+) -> tuple[P4RuntimeClient, AsyncP4RuntimeClient]:
+    sync = P4RuntimeClient("127.0.0.1:50051", device_id=0)
+    sync._connected = True
+    sync._stub = MagicMock()
+    sync._index = _make_p4info_index()
+    switch = RunningSwitch(
+        P4Switch(name="s1", p4_src=Path("routing.p4")),
+        MagicMock(device_id=0, grpc_port=50051, thrift_port=9090),
+        sync,
+        MagicMock(),
+    )
+    client = switch.async_client
+    patched_aio["stub"].GetForwardingPipelineConfig.return_value = _pipeline_reply(sync.index)
+    await patched_aio["stream"].push_arbitration()
+    await client.connect()
+    assert sync.index is client.info_index
+    return sync, client
+
+
+def _renamed_pipeline(index: P4InfoIndex) -> P4InfoIndex:
+    info = p4info_pb2.P4Info()
+    info.CopyFrom(index.raw)
+    info.tables[0].preamble.name = "NextIngress.ipv4_lpm"
+    return P4InfoIndex(info)
+
+
+@pytest.mark.parametrize("outcome", ["replace", "commit", "verify", "rejected", "timeout"])
+async def test_paired_clients_share_async_pipeline_outcomes(
+    patched_aio: dict[str, Any], outcome: str
+) -> None:
+    sync, client = await _connect_paired_clients(patched_aio)
+    previous = sync.index
+    updated = _renamed_pipeline(previous)
+    stub = patched_aio["stub"]
+    files = (str(updated.raw).encode(), b"{}")
+    try:
+        if outcome == "commit":
+            stub.GetForwardingPipelineConfig.return_value = _pipeline_reply(updated)
+            await client.push_pipeline(action="COMMIT")
+        elif outcome == "verify":
+            await client.push_pipeline(*files, action="VERIFY")
+        elif outcome == "rejected":
+            stub.SetForwardingPipelineConfig.side_effect = grpc.aio.AioRpcError(
+                grpc.StatusCode.PERMISSION_DENIED, (), (), "not primary"
+            )
+            with pytest.raises(NotPrimaryError, match="not primary"):
+                await client.push_pipeline(*files)
+        elif outcome == "timeout":
+
+            async def hold_reply(_request: Any) -> None:
+                await asyncio.Future()
+
+            stub.SetForwardingPipelineConfig.side_effect = hold_reply
+            with pytest.raises(asyncio.TimeoutError):
+                await client.push_pipeline(*files, timeout=0.05)
+        else:
+            await client.push_pipeline(*files)
+
+        if outcome == "timeout":
+            with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                sync.list_table_entries()
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
+            sync._stub.Read.assert_not_called()
+        else:
+            expected = updated if outcome in ("replace", "commit") else previous
+            assert sync.index is client.info_index
+            assert sync.index.raw == expected.raw
+            response = p4runtime_pb2.ReadResponse()
+            response.entities.add().table_entry.table_id = 2001
+            sync._stub.Read.return_value = iter([response])
+            table = expected.table_names[0]
+            assert [entry["table"] for entry in sync.list_table_entries(table)] == [table]
+    finally:
+        sync.disconnect()
+        await client.disconnect()
+
+
+async def test_paired_read_cannot_pass_an_async_pipeline_change(
+    patched_aio: dict[str, Any],
+) -> None:
+    sync, client = await _connect_paired_clients(patched_aio)
+    updated = _renamed_pipeline(client.info_index)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def hold_reply(_request: Any) -> None:
+        entered.set()
+        await release.wait()
+
+    patched_aio["stub"].SetForwardingPipelineConfig.side_effect = hold_reply
+    changing = asyncio.create_task(client.push_pipeline(str(updated.raw).encode(), b"{}"))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1.0)
+        with pytest.raises(P4RuntimeError, match="pipeline change is in progress"):
+            sync.list_table_entries()
+        sync._stub.Read.assert_not_called()
+        release.set()
+        await asyncio.wait_for(changing, timeout=1.0)
+        assert sync.index.raw == updated.raw
+    finally:
+        release.set()
+        await asyncio.gather(changing, return_exceptions=True)
+        sync.disconnect()
+        await client.disconnect()
+
+
+async def test_pipeline_change_can_retry_after_a_paired_read(patched_aio: dict[str, Any]) -> None:
+    sync, client = await _connect_paired_clients(patched_aio)
+    updated = _renamed_pipeline(client.info_index)
+    entered, release = threading.Event(), threading.Event()
+
+    def hold_read(_request: Any, *, timeout: float) -> Iterator[Any]:
+        entered.set()
+        assert release.wait(timeout=3.0)
+        return iter(())
+
+    sync._stub.Read.side_effect = hold_read
+    reading = asyncio.create_task(asyncio.to_thread(sync.list_table_entries))
+    try:
+        assert await asyncio.to_thread(entered.wait, 1.0)
+        with pytest.raises(P4RuntimeError, match="operations are using P4Info"):
+            await client.push_pipeline(str(updated.raw).encode(), b"{}")
+        patched_aio["stub"].SetForwardingPipelineConfig.assert_not_called()
+        release.set()
+        assert await asyncio.wait_for(reading, timeout=1.0) == []
+        await client.push_pipeline(str(updated.raw).encode(), b"{}")
+        assert sync.index.raw == updated.raw
+    finally:
+        release.set()
+        await asyncio.gather(reading, return_exceptions=True)
+        sync.disconnect()
+        await client.disconnect()
+
+
+async def test_paired_client_reads_sync_pipeline_and_preserves_it_after_failed_reconnect(
+    patched_aio: dict[str, Any], mocker: MockerFixture, tmp_path: Path
+) -> None:
+    sync, client = await _connect_paired_clients(patched_aio)
+    updated = _renamed_pipeline(client.info_index)
+    p4info, bmv2_json = tmp_path / "pipeline.txtpb", tmp_path / "pipeline.json"
+    p4info.write_text(str(updated.raw))
+    bmv2_json.write_text("{}")
+    try:
+        sync.set_pipeline_config(bmv2_json=bmv2_json, p4info=p4info)
+        index = sync.index
+        assert client.info_index is index and index.raw == updated.raw
+        await client.disconnect()
+        stub, stream = _replace_async_stream(mocker)
+        stub.GetForwardingPipelineConfig = AsyncMock(
+            side_effect=grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), "server stopped")
+        )
+        await stream.push_arbitration()
+        with pytest.raises(ConnectionError, match="server stopped"):
+            await client.connect()
+        with pytest.raises(P4RuntimeError, match="no P4Info index"):
+            _ = client.info_index
+        assert sync.index is index
+    finally:
+        sync.disconnect()
+        await client.disconnect()
 
 
 def _replace_async_stream(mocker: MockerFixture) -> tuple[Any, _FakeStream]:
@@ -1345,7 +1513,8 @@ async def test_pipeline_reply_from_an_old_connection_does_not_install_the_candid
         with pytest.raises(ConnectionError, match="closed"):
             await asyncio.wait_for(pending, timeout=1.0)
         await asyncio.wait_for(reconnecting, timeout=1.0)
-        assert client.info_index is current
+        assert client.info_index.raw == current.raw
+        assert (client.info_index is current) == (action == "VERIFY")
         old_stub.GetForwardingPipelineConfig.assert_not_called()
         new_stub.GetForwardingPipelineConfig.assert_awaited_once()
         new_stub.SetForwardingPipelineConfig.assert_not_awaited()

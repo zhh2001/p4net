@@ -66,7 +66,7 @@ sudo "$(command -v python)" async_demo.py
 
 ## 连接与主控权
 
-`net.switch("s1").async_client` 会延迟创建并缓存一个尚未连接的客户端，初始索引来自同步客户端，首次连接时从交换机回读当前 P4Info。手动构造的客户端首次连接时使用 `info_index=` 提供的索引。同步和异步客户端各有自己的通道与选举 ID，连接其中一个不会关闭另一个。
+`net.switch("s1").async_client` 会延迟创建并缓存一个尚未连接的客户端。同一 `RunningSwitch` 的两个客户端共用 P4Info 缓存。异步客户端首次连接时从交换机回读当前 P4Info。手动构造的客户端首次连接时使用 `info_index=` 提供的索引。同步和异步客户端各有自己的通道与选举 ID，连接其中一个不会关闭另一个。
 
 如果交换机还没有安装流水线，主客户端建立连接后可以用 `push_pipeline()` 下发。
 
@@ -126,6 +126,8 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 这样可以让多个交换机的 RPC 同时等待响应，实际耗时取决于请求量和交换机处理速度。
 
 同步和异步客户端下发流水线前都会等待本客户端正在执行的表项和计数器操作。排队的操作在发送前会检查 P4Info 是否仍然有效。
+
+同一 `RunningSwitch` 的两个客户端并发操作时，如果一路的流水线变更与另一路正在执行的操作冲突，后到的操作会抛出 `P4RuntimeError`。等待正在执行的操作结束后即可重试。
 
 `on_packet_in()` 和它返回的注销函数都需要 `await`。下面的示例等待新注册的处理器收到第一条 PacketIn，超时时间为 5 秒。等待结束时注销处理器。
 
