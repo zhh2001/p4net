@@ -92,7 +92,7 @@ For a backup client that only reads, construct it with `election_id=(0, 0)`. Thi
 
 The async client currently has no `get_pipeline_config()`, `clear_table()`, `reset_counter()`, or multicast group operations. See the [control-plane API](api/control.md) for full signatures.
 
-A table iterator uses the connection and P4Info from the call to `list_table_entries()`. If either changes during iteration, start a new query.
+A table iterator uses the connection and P4Info from the call to `list_table_entries()`. A pipeline push can proceed while the iterator is paused between entries. If the connection or P4Info changes, start a new query.
 
 When installing a pipeline yourself, pass text-format P4Info bytes to `push_pipeline()`. On both clients, `action="VERIFY"` checks the candidate pipeline and keeps the current P4Info index. Register operations use `simple_switch_CLI`. Install that tool and pass `thrift_address` when constructing the client.
 
@@ -119,7 +119,7 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 
 This overlaps the time spent waiting for RPC responses across switches. Total time depends on the number of requests and the switches' processing speed.
 
-On either client, a pipeline push waits for that client's table writes already in progress. The sync client also waits for table reads and counter operations. Queued operations check that their P4Info is still current before sending.
+On either client, a pipeline push waits for active table and counter operations on that client. Queued operations check that their P4Info is still current before sending.
 
 Both `on_packet_in()` and the unsubscribe function it returns require `await`. This example waits up to five seconds for the first PacketIn delivered to the new handler and unsubscribes when the wait ends.
 

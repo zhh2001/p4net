@@ -92,7 +92,7 @@ sudo "$(command -v python)" async_demo.py
 
 异步客户端目前没有 `get_pipeline_config()`、`clear_table()`、`reset_counter()` 或组播组操作。完整签名见[控制平面 API](api/control.md)。
 
-异步表项迭代器使用调用 `list_table_entries()` 时的连接和 P4Info。如果迭代期间发生重连或 P4Info 更新，需要重新查询。
+异步表项迭代器使用调用 `list_table_entries()` 时的连接和 P4Info。迭代器在两条表项之间暂停时，可以下发流水线。如果连接或 P4Info 发生变化，需要重新查询。
 
 自行下发流水线时，向 `push_pipeline()` 的第一个参数传入文本格式的 P4Info 字节。同步和异步客户端都可以用 `action="VERIFY"` 验证候选流水线，验证后保留当前 P4Info 索引。寄存器读写通过 `simple_switch_CLI` 执行，需要安装该工具，并在构造客户端时传入 `thrift_address`。
 
@@ -119,7 +119,7 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 
 这样可以让多个交换机的 RPC 同时等待响应，实际耗时取决于请求量和交换机处理速度。
 
-同步和异步客户端下发流水线前都会等待正在执行的表项写入，同步客户端还会等待表项读取和计数器操作。排队的操作在发送前会复核使用的 P4Info。
+同步和异步客户端下发流水线前都会等待本客户端正在执行的表项和计数器操作。排队的操作在发送前会检查 P4Info 是否仍然有效。
 
 `on_packet_in()` 和它返回的注销函数都需要 `await`。下面的示例等待新注册的处理器收到第一条 PacketIn，超时时间为 5 秒。等待结束时注销处理器。
 

@@ -1961,7 +1961,7 @@ async def test_read_iterator_rejects_a_new_p4info(
         if started:
             first = await anext(read)
             assert (first["table"], first["action"]) == (old_table, old_action)
-        await client.push_pipeline(str(new_info).encode(), b"{}")
+        await asyncio.wait_for(client.push_pipeline(str(new_info).encode(), b"{}"), timeout=1.0)
 
         when = "while" if started else "before"
         with pytest.raises(P4RuntimeError, match=f"P4Info changed {when} reading"):
@@ -2026,7 +2026,8 @@ async def test_started_read_iterator_rejects_a_delayed_reply(
             p4info = p4info_pb2.P4Info()
             p4info.CopyFrom(client.info_index.raw)
             p4info.tables[0].preamble.id = active_id
-            await client.push_pipeline(str(p4info).encode(), b"{}")
+            # Simulate replacing the local index while a response is in flight.
+            client._info_index = P4InfoIndex(p4info)
         release.set()
 
         if change == "reconnect":
@@ -2172,6 +2173,172 @@ async def test_read_counter_single_index(patched_aio: dict[str, Any]) -> None:
         await client.disconnect()
 
 
+@pytest.mark.parametrize(
+    ("operation", "action", "empty_result"),
+    [
+        ("table-one", "VERIFY", []),
+        ("table-one", "VERIFY_AND_COMMIT", []),
+        ("table-all", "COMMIT", []),
+        ("counter-cell", "VERIFY_AND_COMMIT", 0),
+        ("counter-all", "VERIFY", {}),
+        ("counter-all", "COMMIT", {}),
+    ],
+)
+async def test_async_indexed_read_waits_for_pipeline_and_rechecks_p4info(
+    patched_aio: dict[str, Any], operation: str, action: str, empty_result: object
+) -> None:
+    info = _make_p4info_index().raw
+    info.counters.add().CopyFrom(_counter_p4info().counters[0])
+    client = await _connect(patched_aio, info_index=P4InfoIndex(info))
+    original = client.info_index
+    candidate = p4info_pb2.P4Info()
+    candidate.CopyFrom(info)
+    candidate.tables[0].preamble.id = 3001
+    candidate.counters[0].preamble.id = 6001
+    stub = patched_aio["stub"]
+    pushing, release_push = asyncio.Event(), asyncio.Event()
+    refreshing, release_refresh = asyncio.Event(), asyncio.Event()
+
+    async def hold_push(_request: Any) -> None:
+        pushing.set()
+        await release_push.wait()
+
+    async def hold_refresh(_request: Any) -> Any:
+        refreshing.set()
+        await release_refresh.wait()
+        response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+        response.config.p4info.CopyFrom(candidate)
+        return response
+
+    async def empty() -> AsyncIterator[Any]:
+        yield p4runtime_pb2.ReadResponse()
+
+    async def read() -> Any:
+        if operation.startswith("counter-"):
+            return await client.read_counter(
+                "MyIngress.pkts", 3 if operation == "counter-cell" else None
+            )
+        table = "MyIngress.ipv4_lpm" if operation == "table-one" else None
+        return [entry async for entry in client.list_table_entries(table)]
+
+    stub.SetForwardingPipelineConfig.side_effect = hold_push
+    stub.GetForwardingPipelineConfig = AsyncMock(side_effect=hold_refresh)
+    stub.Read.side_effect = lambda _request, timeout: empty()
+    files = () if action == "COMMIT" else (str(candidate).encode(), b"{}")
+    pipeline = asyncio.create_task(client.push_pipeline(*files, action=action))
+    pending = None
+    try:
+        await asyncio.wait_for(pushing.wait(), timeout=1.0)
+        pending = asyncio.create_task(read())
+        done, _ = await asyncio.wait((pending,), timeout=0.02)
+        assert not done
+        stub.Read.assert_not_called()
+
+        release_push.set()
+        if action == "COMMIT":
+            await asyncio.wait_for(refreshing.wait(), timeout=1.0)
+            assert not pending.done()
+            stub.Read.assert_not_called()
+            release_refresh.set()
+        await asyncio.wait_for(pipeline, timeout=1.0)
+        if action == "VERIFY":
+            assert await asyncio.wait_for(pending, timeout=1.0) == empty_result
+            assert client.info_index is original
+        else:
+            with pytest.raises(P4RuntimeError, match="P4Info changed"):
+                await asyncio.wait_for(pending, timeout=1.0)
+            stub.Read.assert_not_called()
+            assert await read() == empty_result
+        stub.Read.assert_called_once()
+    finally:
+        release_push.set()
+        release_refresh.set()
+        if pending is not None:
+            await asyncio.gather(pending, return_exceptions=True)
+        await asyncio.gather(pipeline, return_exceptions=True)
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("ending", ["response", "cancel", "deadline"])
+async def test_async_pipeline_waits_for_inflight_table_and_counter_reads(
+    patched_aio: dict[str, Any], ending: str
+) -> None:
+    info = _make_p4info_index().raw
+    info.counters.add().CopyFrom(_counter_p4info().counters[0])
+    client = await _connect(patched_aio, info_index=P4InfoIndex(info))
+    stub = patched_aio["stub"]
+    table_waiting, counter_waiting, release_table, release_counter, push_entered = (
+        asyncio.Event() for _ in range(5)
+    )
+
+    async def hold_response(request: Any, *, timeout: float) -> AsyncIterator[Any]:
+        response = p4runtime_pb2.ReadResponse()
+        if request.entities[0].HasField("table_entry"):
+            table_waiting.set()
+            await release_table.wait()
+            if ending == "deadline":
+                raise grpc.aio.AioRpcError(
+                    grpc.StatusCode.DEADLINE_EXCEEDED, (), (), "read deadline"
+                )
+            response.entities.add().table_entry.table_id = 2001
+            yield response
+        else:
+            cell = response.entities.add().counter_entry
+            cell.counter_id = 5001
+            cell.index.index = 3
+            cell.data.packet_count = 42
+            yield response
+            counter_waiting.set()
+            await release_counter.wait()
+
+    async def push() -> None:
+        push_entered.set()
+        await client.push_pipeline(b"", b"{}")
+
+    stub.Read.side_effect = hold_response
+    iterator = client.list_table_entries()
+    table = asyncio.create_task(anext(iterator))
+    counter = asyncio.create_task(client.read_counter("MyIngress.pkts", 3))
+    pipeline = None
+    try:
+        await asyncio.wait_for(table_waiting.wait(), timeout=1.0)
+        await asyncio.wait_for(counter_waiting.wait(), timeout=1.0)
+        pipeline = asyncio.create_task(push())
+        await asyncio.wait_for(push_entered.wait(), timeout=1.0)
+        stub.SetForwardingPipelineConfig.assert_not_called()
+
+        if ending == "cancel":
+            table.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(table, timeout=1.0)
+        elif ending == "deadline":
+            release_table.set()
+            with pytest.raises(P4RuntimeError, match="read deadline"):
+                await asyncio.wait_for(table, timeout=1.0)
+        else:
+            release_table.set()
+            entry = await asyncio.wait_for(table, timeout=1.0)
+            assert entry["table"] == "MyIngress.ipv4_lpm"
+        stub.SetForwardingPipelineConfig.assert_not_called()
+        assert not pipeline.done()
+
+        release_counter.set()
+        assert await asyncio.wait_for(counter, timeout=1.0) == 42
+        await asyncio.wait_for(pipeline, timeout=1.0)
+        stub.SetForwardingPipelineConfig.assert_awaited_once()
+        if ending == "response":
+            with pytest.raises(P4RuntimeError, match="P4Info changed while reading"):
+                await anext(iterator)
+    finally:
+        release_table.set()
+        release_counter.set()
+        await asyncio.gather(table, counter, return_exceptions=True)
+        await iterator.aclose()
+        if pipeline is not None:
+            await asyncio.gather(pipeline, return_exceptions=True)
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("cell", [3, None], ids=["single-cell", "all-cells"])
 @pytest.mark.parametrize("change", ["reconnect", "p4info"])
 @pytest.mark.parametrize("pause", ["before-response", "after-response", "empty"])
@@ -2229,7 +2396,7 @@ async def test_read_counter_keeps_its_connection_and_p4info(
             await client.connect()
         else:
             active_id = updated_id
-            await client.push_pipeline(str(_counter_p4info(active_id)).encode(), b"{}")
+            client._info_index = P4InfoIndex(_counter_p4info(active_id))
         release.set()
 
         error = ConnectionError if change == "reconnect" else P4RuntimeError

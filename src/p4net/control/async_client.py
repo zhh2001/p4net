@@ -21,6 +21,7 @@ import subprocess
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextvars import ContextVar
+from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -130,9 +131,9 @@ class AsyncP4RuntimeClient:
         self._handlers_lock = asyncio.Lock()
         self._teardown_lock = asyncio.Lock()
         self._pipeline_lock = asyncio.Lock()
-        self._active_table_writes = 0
-        self._table_writes_idle = asyncio.Event()
-        self._table_writes_idle.set()
+        self._active_indexed_operations = 0
+        self._indexed_operations_idle = asyncio.Event()
+        self._indexed_operations_idle.set()
         self._connected = False
         self._is_primary = False
         self._closed = False
@@ -436,7 +437,9 @@ class AsyncP4RuntimeClient:
         ``VERIFY`` validates the candidate and retains the current P4Info index.
         ``COMMIT`` uses the configuration already saved on the switch and reads
         back its P4Info. The bytes arguments are only used for other actions.
-        The timeout applies to each RPC.
+        The push waits for this client's active table and counter operations.
+        A table iterator paused between entries leaves the pipeline free to
+        change. The timeout applies to each RPC.
 
         The client raises ``ConnectionError`` if the connection closes while
         it is waiting for a reply or before it can apply the reply.
@@ -461,7 +464,7 @@ class AsyncP4RuntimeClient:
 
         try:
             async with self._pipeline_lock:
-                await self._table_writes_idle.wait()
+                await self._indexed_operations_idle.wait()
                 if self._stub is not stub or not self.is_connected:
                     raise ConnectionError(
                         f"Connection to {self.target!r} closed before pipeline RPC"
@@ -607,18 +610,10 @@ class AsyncP4RuntimeClient:
         req.updates.add().CopyFrom(upd)
 
         async def write() -> Any:
-            # Admit writes under the pipeline lock. Once admitted, writes can
-            # overlap until a pipeline push takes the lock to drain them.
-            async with self._pipeline_lock:
-                self._require_same_indexed_context(stub, idx, operation="table write")
-                self._active_table_writes += 1
-                self._table_writes_idle.clear()
-            try:
+            async with self._indexed_operation(
+                lambda: self._require_same_indexed_context(stub, idx, operation="table write")
+            ):
                 return await stub.Write(req)
-            finally:
-                self._active_table_writes -= 1
-                if self._active_table_writes == 0:
-                    self._table_writes_idle.set()
 
         try:
             await self._await_rpc(
@@ -632,6 +627,23 @@ class AsyncP4RuntimeClient:
         except grpc.aio.AioRpcError as exc:
             raise self._translate_rpc_error(exc) from exc
 
+    @contextlib.asynccontextmanager
+    async def _indexed_operation(
+        self, require_current_context: Callable[[], None]
+    ) -> AsyncIterator[None]:
+        # Operations can overlap once admitted. A push holds the lock while
+        # waiting for them to finish and while applying the new P4Info.
+        async with self._pipeline_lock:
+            require_current_context()
+            self._active_indexed_operations += 1
+            self._indexed_operations_idle.clear()
+        try:
+            yield
+        finally:
+            self._active_indexed_operations -= 1
+            if self._active_indexed_operations == 0:
+                self._indexed_operations_idle.set()
+
     def list_table_entries(
         self,
         table: str | None = None,
@@ -644,7 +656,8 @@ class AsyncP4RuntimeClient:
         The RPC starts when iteration begins. The iterator becomes invalid
         if its connection closes or its P4Info changes, even after iteration
         has started. A closed connection raises ``ConnectionError``. Create
-        a new iterator to read again.
+        a new iterator to read again. A pipeline push may proceed between
+        entries yielded to the caller.
         """
         self._require_connected_with_index()
         stub = self._stub
@@ -667,8 +680,7 @@ class AsyncP4RuntimeClient:
                     f"P4Info changed {when} reading table entries. Create a new iterator."
                 )
 
-        async def _gen() -> AsyncIterator[dict[str, Any]]:
-            require_current_context("before")
+        async def entries() -> AsyncGenerator[dict[str, Any], None]:
             async with contextlib.aclosing(
                 self._read_responses(
                     stub, req, timeout=timeout, operation="while reading table entries"
@@ -679,8 +691,20 @@ class AsyncP4RuntimeClient:
                     for ent in resp.entities:
                         if ent.HasField("table_entry"):
                             yield self._decode_table_entry(ent.table_entry, idx)
-                            require_current_context("while")
-            require_current_context("while")
+
+        async def _gen() -> AsyncIterator[dict[str, Any]]:
+            when = "before"
+            async with contextlib.aclosing(entries()) as rows:
+                while True:
+                    # Hold admission only while fetching an entry. The caller
+                    # can pause iteration and push a pipeline in the same task.
+                    async with self._indexed_operation(partial(require_current_context, when)):
+                        row = await anext(rows, None)
+                        require_current_context("while")
+                    if row is None:
+                        return
+                    when = "while"
+                    yield row
 
         return _gen()
 
@@ -822,11 +846,17 @@ class AsyncP4RuntimeClient:
         if cell is not None:
             entity.counter_entry.index.index = cell
         collected: dict[int, int] = {}
-        self._require_same_indexed_context(stub, idx, operation="counter read")
         try:
-            async with contextlib.aclosing(
-                self._read_responses(stub, req, timeout=timeout, operation="during a counter read")
-            ) as responses:
+            async with (
+                self._indexed_operation(
+                    lambda: self._require_same_indexed_context(stub, idx, operation="counter read")
+                ),
+                contextlib.aclosing(
+                    self._read_responses(
+                        stub, req, timeout=timeout, operation="during a counter read"
+                    )
+                ) as responses,
+            ):
                 async for resp in responses:
                     self._require_same_indexed_context(stub, idx, operation="counter read")
                     for ent in resp.entities:
@@ -834,7 +864,7 @@ class AsyncP4RuntimeClient:
                             continue
                         ce = ent.counter_entry
                         collected[int(ce.index.index)] = int(ce.data.packet_count)
-            self._require_same_indexed_context(stub, idx, operation="counter read")
+                self._require_same_indexed_context(stub, idx, operation="counter read")
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError("read_counter cancelled") from exc
         if cell is not None:
