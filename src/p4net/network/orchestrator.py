@@ -365,6 +365,10 @@ class Network:
         loop, shutdown runs in a background thread; use :meth:`astop` to
         wait for it. Outside an event loop, this method waits for cleanup.
         Startup already in progress finishes or rolls back before teardown.
+
+        Raises:
+            NetworkError: if waiting for an async client to close times out.
+                Call again to wait for the pending shutdown.
         """
         try:
             asyncio.get_running_loop()
@@ -395,6 +399,7 @@ class Network:
 
     def _finish_stop(self, future: Future[None]) -> None:
         self._stop_thread_id = threading.get_ident()
+        error: BaseException | None = None
         try:
             with self._stop_lock:
                 startup = self._start_future
@@ -402,18 +407,26 @@ class Network:
             if startup is not None and start_thread_id != threading.get_ident():
                 startup.result()
             self._do_stop()
+            if self._async_disconnects:
+                error = NetworkError("async client shutdown did not finish")
         except BaseException as exc:
-            future.set_exception(exc)
-        else:
-            future.set_result(None)
+            error = exc
         finally:
             self._stop_thread_id = None
+        if error is None:
+            future.set_result(None)
+        else:
+            future.set_exception(error)
 
     async def astop(self) -> None:
         """Wait for async clients and network resources to finish shutting down.
 
         Client event loops must remain running until shutdown completes.
         Cancellation is propagated after cleanup finishes.
+
+        Raises:
+            NetworkError: if waiting for an async client to close times out.
+                Call again to wait for the pending shutdown.
         """
         with self._stop_lock:
             self.stop()
@@ -427,8 +440,6 @@ class Network:
             except asyncio.CancelledError:
                 cancelled = True
         shutdown.result()
-        if self._async_disconnects:
-            raise NetworkError("async client shutdown did not finish")
         if cancelled:
             raise asyncio.CancelledError
 

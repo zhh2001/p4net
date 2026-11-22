@@ -41,6 +41,7 @@ from p4net.control import (
     P4InfoIndex,
     P4RuntimeError,
 )
+from p4net.network import NetworkError
 from p4net.runtime import BMv2Switch
 from p4net.topo import Topology
 
@@ -231,6 +232,60 @@ async def test_network_stop_closes_async_connection(
     finally:
         await client.disconnect()
         await asyncio.to_thread(net.stop)
+
+
+async def test_network_stop_reports_pending_async_close_and_can_retry(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(
+        switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+    )
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    closing, release = asyncio.Event(), asyncio.Event()
+    waiters = []
+
+    try:
+        await client.connect()
+        channel = client._channel
+        close = channel.close
+
+        async def pause_close() -> None:
+            closing.set()
+            await release.wait()
+            await close()
+
+        close_spy = mocker.patch.object(channel, "close", side_effect=pause_close)
+        waiters.append(asyncio.create_task(asyncio.to_thread(net.stop)))
+        await asyncio.wait_for(closing.wait(), timeout=2.0)
+        waiters.append(asyncio.create_task(net.astop()))
+        results = await asyncio.wait_for(
+            asyncio.gather(*waiters, return_exceptions=True), timeout=8.0
+        )
+        for result in results:
+            assert isinstance(result, NetworkError), results
+            assert str(result) == "async client shutdown did not finish"
+        assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
+        assert not sw.bmv2.is_running()
+        assert not net.is_running
+
+        release.set()
+        await asyncio.wait_for(asyncio.to_thread(net.stop), timeout=3.0)
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert client._loop is None
+        close_spy.assert_awaited_once()
+    finally:
+        release.set()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        await net.astop()
 
 
 async def test_network_astop_during_async_connect(tmp_path: Path, mocker: MockerFixture) -> None:
