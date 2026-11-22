@@ -34,6 +34,7 @@ from p4net.control._rpc_errors import (
     _extract_p4_canonical_codes,
     _grpc_code_for,
     _pipeline_change_rejected,
+    _pipeline_not_configured,
 )
 from p4net.control.codec import encode_value
 from p4net.control.exceptions import (
@@ -309,11 +310,7 @@ class AsyncP4RuntimeClient:
         except grpc.aio.AioRpcError as exc:
             if not self._stream_is_current(stream_call):
                 raise ConnectionError(closed) from exc
-            if (
-                exc.code() == grpc.StatusCode.FAILED_PRECONDITION
-                and exc.details() == "No forwarding pipeline config set for this device"
-            ):
-                # BMv2 reports an unconfigured switch with this status.
+            if _pipeline_not_configured(exc):
                 return None
             raise self._translate_rpc_error(exc) from exc
         if not self._stream_is_current(stream_call):

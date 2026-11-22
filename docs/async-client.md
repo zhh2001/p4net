@@ -72,6 +72,8 @@ After connecting to a switch with no installed pipeline, the primary client can 
 
 Concurrent `connect()` calls on a single instance share one connection attempt in both clients. The first call sets the timeout for arbitration and any P4Info readback. With the async client, cancelling a waiting call leaves the attempt running. Cancelling the first call cleans up the attempt and propagates `asyncio.CancelledError` to the remaining callers.
 
+The sync client also reads the switch's P4Info when it reconnects. The readback uses the same connection timeout as arbitration.
+
 Without an explicit `election_id`, the async client generates one from the current millisecond timestamp at its first connection. The sync client created by `Network` also uses a timestamp, so do not rely on construction order to assign primary status. Construct a client with an explicit election ID, as in the complete example, when you need to choose which client writes. Election IDs are compared as `(high, low)` pairs.
 
 For a backup client that only reads, construct it with `election_id=(0, 0)`. This value permits a backup connection. With other election IDs, an unsuccessful initial arbitration makes `connect()` raise `NotPrimaryError` and close the connection.

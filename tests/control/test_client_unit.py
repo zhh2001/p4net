@@ -943,6 +943,154 @@ def test_get_pipeline_config_keeps_inflight_reads_when_p4info_matches(
             client.disconnect()
 
 
+def _replacement_connection(mocks: dict[str, Any]) -> tuple[MagicMock, FakeStreamCall]:
+    stream = FakeStreamCall()
+    stream.responses.put(_make_arbitration_response(0, (1, 0)))
+
+    def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+        stream.attach_request_iter(requests)
+        return stream
+
+    stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+    mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
+    mocks["stub_factory"].return_value = stub
+    return stub, stream
+
+
+@pytest.mark.parametrize("p4info", ["same", "changed", "missing", "unconfigured-bmv2"])
+def test_reconnect_reads_current_p4info_before_reporting_connected(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], p4info: str
+) -> None:
+    client = _push_pipeline(connected_client)
+    _, mocks, _, _ = connected_client
+    mocks["stub"].GetForwardingPipelineConfig.assert_not_called()
+    previous = client.index
+    client.disconnect()
+    new_stub, _ = _replacement_connection(mocks)
+    reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    if p4info in ("same", "changed"):
+        reply.config.p4info.CopyFrom(previous.raw)
+        if p4info == "changed":
+            reply.config.p4info.tables[0].preamble.name = "NextIngress.ipv4_lpm"
+    reading, release = threading.Event(), threading.Event()
+
+    def read(_request: Any, *, timeout: float) -> Any:
+        reading.set()
+        assert release.wait(timeout=3.0)
+        if p4info == "unconfigured-bmv2":
+            raise _grpc_error(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "No forwarding pipeline config set for this device",
+            )
+        return reply
+
+    new_stub.GetForwardingPipelineConfig.side_effect = read
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(client.connect, timeout=2.0)
+        try:
+            assert reading.wait(timeout=1.0)
+            second = workers.submit(client.connect, timeout=0.0)
+            assert not client.is_connected()
+            assert not second.done()
+            release.set()
+            first.result(timeout=1.0)
+            second.result(timeout=1.0)
+            assert client.is_connected()
+            client.connect()
+            new_stub.GetForwardingPipelineConfig.assert_called_once()
+            request = new_stub.GetForwardingPipelineConfig.call_args.args[0]
+            assert request.device_id == 0
+            assert request.response_type == request.P4INFO_AND_COOKIE
+            assert 0 < new_stub.GetForwardingPipelineConfig.call_args.kwargs["timeout"] <= 2.0
+            if p4info in ("same", "changed"):
+                assert client.index.raw == reply.config.p4info
+                assert (client.index is previous) == (p4info == "same")
+            else:
+                with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                    _ = client.index
+        finally:
+            release.set()
+            client.disconnect()
+
+
+@pytest.mark.parametrize("ending", ["disconnect", "deadline", "rpc-error"])
+def test_failed_reconnect_readback_does_not_restore_stale_p4info(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], ending: str
+) -> None:
+    client = _push_pipeline(connected_client)
+    _, mocks, _, _ = connected_client
+    reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    reply.config.p4info.CopyFrom(client.index.raw)
+    reply.config.p4info.tables[0].preamble.name = "NextIngress.ipv4_lpm"
+    client.disconnect()
+    new_stub, _ = _replacement_connection(mocks)
+    reading, release = threading.Event(), threading.Event()
+    error = (
+        _grpc_error(grpc.StatusCode.DEADLINE_EXCEEDED, "gRPC deadline")
+        if ending == "deadline"
+        else _grpc_error(grpc.StatusCode.FAILED_PRECONDITION, "pipeline state unavailable")
+    )
+
+    def read(_request: Any, *, timeout: float) -> Any:
+        reading.set()
+        assert release.wait(timeout=3.0)
+        if ending != "disconnect":
+            raise error
+        return reply
+
+    new_stub.GetForwardingPipelineConfig.side_effect = read
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        pending = worker.submit(client.connect, timeout=2.0)
+        try:
+            assert reading.wait(timeout=1.0)
+            if ending == "disconnect":
+                client.disconnect()
+                kind, message = ConnectionError, "closed during P4Info readback"
+            elif ending == "deadline":
+                kind, message = ConnectionError, "P4Info readback timed out"
+            else:
+                kind, message = P4RuntimeError, "pipeline state unavailable"
+            release.set()
+            with pytest.raises(kind, match=message) as raised:
+                pending.result(timeout=1.0)
+            if ending != "disconnect":
+                assert raised.value.__cause__ is error
+            assert not client.is_connected()
+            assert client._channel is None
+            with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+                _ = client.index
+
+            retry_stub, _ = _replacement_connection(mocks)
+            retry_stub.GetForwardingPipelineConfig.return_value = reply
+            client.connect()
+            assert client.index.raw == reply.config.p4info
+            retry_stub.GetForwardingPipelineConfig.assert_called_once()
+        finally:
+            release.set()
+            client.disconnect()
+
+
+def test_reconnect_readback_deadline_includes_waiting_for_pipeline_lock(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+) -> None:
+    client = _push_pipeline(connected_client)
+    _, mocks, _, _ = connected_client
+    client.disconnect()
+    new_stub, _ = _replacement_connection(mocks)
+    try:
+        with (
+            client._pipeline_lock,
+            pytest.raises(ConnectionError, match="P4Info readback timed out"),
+        ):
+            client.connect(timeout=0.1)
+        assert not client.is_connected()
+        new_stub.GetForwardingPipelineConfig.assert_not_called()
+        with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+            _ = client.index
+    finally:
+        client.disconnect()
+
+
 @pytest.mark.parametrize("installed", [False, True])
 def test_verify_pipeline_keeps_the_current_index(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], installed: bool
@@ -1090,15 +1238,11 @@ def test_pipeline_rpc_from_an_old_connection_does_not_install_a_stale_reply(
     )
     rpc.side_effect = hold_reply
     old_stub.SetForwardingPipelineConfig.reset_mock()
-    stream = FakeStreamCall()
-
-    def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
-        stream.attach_request_iter(requests)
-        return stream
-
-    new_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+    current_response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    current_response.config.p4info.CopyFrom(current.raw)
+    current_response.config.p4info.tables[0].preamble.name = "Current.ipv4_lpm"
     files = {} if action == "COMMIT" else {"bmv2_json": json_path, "p4info": p4info_path}
-    with ThreadPoolExecutor(max_workers=1) as worker:
+    with ThreadPoolExecutor(max_workers=2) as worker:
         try:
             if action == "GET":
                 pending = worker.submit(client.get_pipeline_config)
@@ -1106,10 +1250,12 @@ def test_pipeline_rpc_from_an_old_connection_does_not_install_a_stale_reply(
                 pending = worker.submit(client.set_pipeline_config, action=action, **files)
             assert started.wait(timeout=1.0)
             client.disconnect()
-            grpc_mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
-            grpc_mocks["stub_factory"].return_value = new_stub
-            stream.responses.put(_make_arbitration_response(0, (1, 0)))
-            client.connect(timeout=1.0)
+            new_stub, stream = _replacement_connection(grpc_mocks)
+            new_stub.GetForwardingPipelineConfig.return_value = current_response
+            reconnecting = worker.submit(client.connect, timeout=2.0)
+            assert stream.read_started.wait(timeout=1.0)
+            new_stub.GetForwardingPipelineConfig.assert_not_called()
+            assert not reconnecting.done()
             reply.set()
 
             message = (
@@ -1121,17 +1267,14 @@ def test_pipeline_rpc_from_an_old_connection_does_not_install_a_stale_reply(
                 pending.result(timeout=1.0)
             if outcome == "closed-channel":
                 assert raised.value.__context__ is closed_channel
-            if action in ("GET", "VERIFY") or outcome == "closed-channel":
-                assert client.index is current
-            else:
-                with pytest.raises(P4RuntimeError, match="no pipeline is set"):
-                    _ = client.index
+            reconnecting.result(timeout=1.0)
+            assert client.index.raw == current_response.config.p4info
             rpc.assert_called_once()
             if action == "GET":
                 old_stub.SetForwardingPipelineConfig.assert_not_called()
             else:
                 old_stub.GetForwardingPipelineConfig.assert_not_called()
-            new_stub.GetForwardingPipelineConfig.assert_not_called()
+            new_stub.GetForwardingPipelineConfig.assert_called_once()
             new_stub.SetForwardingPipelineConfig.assert_not_called()
 
             client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
@@ -1590,16 +1733,10 @@ def test_table_write_keeps_the_connection_and_p4info_used_to_encode_it(
             assert encoding.wait(timeout=1.0)
             if change == "reconnect":
                 client.disconnect()
-                stream = FakeStreamCall()
-
-                def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
-                    stream.attach_request_iter(requests)
-                    return stream
-
-                current_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
-                grpc_mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
-                grpc_mocks["stub_factory"].return_value = current_stub
-                stream.responses.put(_make_arbitration_response(0, (1, 0)))
+                current_stub, _ = _replacement_connection(grpc_mocks)
+                reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+                reply.config.p4info.CopyFrom(_build_p4info())
+                current_stub.GetForwardingPipelineConfig.return_value = reply
                 client.connect(timeout=1.0)
             else:
                 new_info = _build_p4info()
@@ -1694,27 +1831,20 @@ def test_table_reads_keep_their_connection_and_p4info(
                 requested_table = None if operation == "list-all" else table
                 pending = worker.submit(client.list_table_entries, requested_table)
             assert started.wait(timeout=1.0)
-            if change == "reconnect":
-                client.disconnect()
-                stream = FakeStreamCall()
-
-                def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
-                    stream.attach_request_iter(requests)
-                    return stream
-
-                current_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
-                mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
-                mocks["stub_factory"].return_value = current_stub
-                stream.responses.put(_make_arbitration_response(0, (1, 0)))
-                client.connect(timeout=1.0)
-            else:
+            if change == "p4info":
                 active_id = updated_id
             p4info = _build_p4info()
             p4info.tables[0].preamble.id = active_id
             reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
             reply.config.p4info.CopyFrom(p4info)
-            current_stub.GetForwardingPipelineConfig.return_value = reply
-            client.get_pipeline_config()
+            if change == "reconnect":
+                client.disconnect()
+                current_stub, _ = _replacement_connection(mocks)
+                current_stub.GetForwardingPipelineConfig.return_value = reply
+                client.connect(timeout=1.0)
+            else:
+                current_stub.GetForwardingPipelineConfig.return_value = reply
+                client.get_pipeline_config()
             release.set()
 
             error = ConnectionError if change == "reconnect" else P4RuntimeError
@@ -2337,17 +2467,11 @@ def test_counter_operations_keep_their_connection_and_p4info(
             assert started.wait(timeout=1.0)
             if change == "reconnect":
                 client.disconnect()
-                stream = FakeStreamCall()
-
-                def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
-                    stream.attach_request_iter(requests)
-                    return stream
-
-                current_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+                current_stub, _ = _replacement_connection(mocks)
+                reply = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+                reply.config.p4info.CopyFrom(_build_p4info_with_counter())
+                current_stub.GetForwardingPipelineConfig.return_value = reply
                 current_stub.Read.return_value = response(original_id)
-                mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
-                mocks["stub_factory"].return_value = current_stub
-                stream.responses.put(_make_arbitration_response(0, (1, 0)))
                 client.connect(timeout=1.0)
             else:
                 active_id = 4001

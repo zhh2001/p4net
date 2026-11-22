@@ -18,10 +18,26 @@ _PIPELINE_REJECTIONS = frozenset(
 )
 
 
+def _grpc_status_code(exc: grpc.RpcError) -> grpc.StatusCode | None:
+    try:
+        code: grpc.StatusCode = exc.code()
+        return code
+    except Exception:
+        return None
+
+
 def _pipeline_change_rejected(exc: grpc.RpcError) -> bool:
     """Whether the RPC status confirms rejection before the pipeline changed."""
+    return _grpc_status_code(exc) in _PIPELINE_REJECTIONS
+
+
+def _pipeline_not_configured(exc: grpc.RpcError) -> bool:
+    """Recognize BMv2's response when the switch has no installed pipeline."""
+    if _grpc_status_code(exc) != grpc.StatusCode.FAILED_PRECONDITION:
+        return False
     try:
-        return exc.code() in _PIPELINE_REJECTIONS
+        details: str = exc.details()
+        return details == "No forwarding pipeline config set for this device"
     except Exception:
         return False
 

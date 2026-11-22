@@ -12,6 +12,7 @@ import contextlib
 import logging
 import queue
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -27,7 +28,9 @@ from p4.v1 import p4runtime_pb2, p4runtime_pb2_grpc
 from p4net.control._rpc_errors import (
     _extract_p4_canonical_codes,
     _grpc_code_for,
+    _grpc_status_code,
     _pipeline_change_rejected,
+    _pipeline_not_configured,
 )
 from p4net.control.codec import encode_value
 from p4net.control.exceptions import (
@@ -164,6 +167,7 @@ class P4RuntimeClient:
         self._stream_error: BaseException | None = None
         self._connected = False
         self._closed = False
+        self._has_connected = False
         self._teardown_lock = threading.RLock()
         self._pipeline_lock = threading.Lock()
         self._active_indexed_operations = 0
@@ -211,10 +215,12 @@ class P4RuntimeClient:
     # Lifecycle ----------------------------------------------------------
 
     def connect(self, *, timeout: float = 10.0) -> None:
-        """Connect and await arbitration using the first concurrent caller's timeout.
+        """Connect using the first concurrent caller's timeout.
 
-        During arbitration, a call from a PacketIn handler raises ``ConnectionError``
-        because the receiver thread must keep reading the stream.
+        A reconnect waits for arbitration and reads the current P4Info within
+        that timeout. An unconfigured switch can connect with no cached index.
+        During connection setup, a call from a PacketIn handler raises
+        ``ConnectionError`` because the receiver thread must keep reading the stream.
         """
         attempt: Future[None] | None = None
         stream_call = None
@@ -226,6 +232,10 @@ class P4RuntimeClient:
                 pending = self._connect_attempt
                 if pending is None:
                     attempt = self._connect_attempt = Future()
+                    reconnect = self._has_connected
+                    previous = self._index
+                    if reconnect:
+                        self._index = None
                     try:
                         stream_call, stream_event = self._start_stream_locked()
                     except BaseException:
@@ -238,7 +248,29 @@ class P4RuntimeClient:
                 pending.result()
                 return
             assert attempt is not None
-            self._await_arbitration(stream_call, stream_event, attempt=attempt, timeout=timeout)
+            deadline = time.monotonic() + timeout if reconnect else None
+            self._await_arbitration(stream_call, stream_event, timeout=timeout)
+            index = (
+                self._read_p4info_on_reconnect(stream_call, previous, deadline=deadline)
+                if deadline is not None
+                else previous
+            )
+            with self._teardown_lock:
+                self._require_live_stream(
+                    stream_call, "P4Runtime connection closed during connection setup"
+                )
+                logger.debug(
+                    "P4Runtime client %r connected, election_id=(%d, %d)",
+                    self._target,
+                    self._election_id_high,
+                    self._election_id_low,
+                )
+                if reconnect:
+                    self._index = index
+                self._has_connected = True
+                self._connected = True
+                self._connect_attempt = None
+                attempt.set_result(None)
         except BaseException as exc:
             if attempt is not None:
                 try:
@@ -256,7 +288,6 @@ class P4RuntimeClient:
         stream_call: Any,
         stream_event: threading.Event,
         *,
-        attempt: Future[None],
         timeout: float,
     ) -> None:
         if not stream_event.wait(timeout):
@@ -268,15 +299,6 @@ class P4RuntimeClient:
             arbitration = self._arbitration
             active = stream_call is self._stream_call and not self._closed
             if active and err is None and arbitration is not None and arbitration.status.code == 0:
-                logger.debug(
-                    "P4Runtime client %r connected, election_id=(%d, %d)",
-                    self._target,
-                    self._election_id_high,
-                    self._election_id_low,
-                )
-                self._connected = True
-                self._connect_attempt = None
-                attempt.set_result(None)
                 return
         if err is not None:
             if isinstance(err, grpc.RpcError):
@@ -292,6 +314,49 @@ class P4RuntimeClient:
             f"client is not primary for device {self._device_id} "
             f"(status code {int(arbitration.status.code)}, message {arbitration.status.message!r})"
         )
+
+    def _read_p4info_on_reconnect(
+        self, stream_call: Any, previous: P4InfoIndex | None, *, deadline: float
+    ) -> P4InfoIndex | None:
+        closed = f"Connection to {self.target!r} closed during P4Info readback"
+        timed_out = f"{self.target!r} P4Info readback timed out"
+        # A pipeline request from the previous connection may still be finishing.
+        timeout = deadline - time.monotonic()
+        if timeout <= 0 or not self._pipeline_lock.acquire(timeout=timeout):
+            raise ConnectionError(timed_out)
+        try:
+            with self._teardown_lock:
+                self._require_live_stream(stream_call, closed)
+                stub = self._stub
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                raise ConnectionError(timed_out)
+            try:
+                response = self._read_pipeline_config(
+                    stub, response_type="P4INFO_AND_COOKIE", timeout=timeout
+                )
+            except (grpc.RpcError, ValueError) as exc:
+                with self._teardown_lock:
+                    if self._closed or stream_call is not self._stream_call:
+                        raise ConnectionError(closed) from exc
+                if isinstance(exc, ValueError):
+                    raise
+                if _pipeline_not_configured(exc):
+                    return None
+                if _grpc_status_code(exc) == grpc.StatusCode.DEADLINE_EXCEEDED:
+                    raise ConnectionError(timed_out) from exc
+                raise self._translate_rpc_error(exc) from exc
+            with self._teardown_lock:
+                self._require_live_stream(stream_call, closed)
+            if not response.config.HasField("p4info"):
+                return None
+            return _index_for_p4info(response.config.p4info, previous)
+        finally:
+            self._pipeline_lock.release()
+
+    def _require_live_stream(self, stream_call: Any, message: str) -> None:
+        if self._closed or stream_call is not self._stream_call:
+            raise ConnectionError(message)
 
     def _start_stream_locked(self) -> tuple[Any, threading.Event]:
         self._closed = False

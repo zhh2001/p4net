@@ -26,6 +26,7 @@ from p4net.control import (
     NotPrimaryError,
     P4InfoIndex,
     P4RuntimeClient,
+    P4RuntimeError,
 )
 from p4net.runtime import BMv2Switch
 
@@ -142,6 +143,8 @@ def test_stream_end_clears_state_and_allows_reconnect(
         client.connect(timeout=5.0)
         assert client.is_connected()
         assert client._channel is not channel
+        with pytest.raises(P4RuntimeError, match="no pipeline is set"):
+            _ = client.index
         client.set_pipeline_config(**compiled_artifacts)
         client.insert_table_entry(
             "MyIngress.ipv4_lpm",
