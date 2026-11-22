@@ -1374,6 +1374,127 @@ def test_table_write_keeps_the_connection_and_p4info_used_to_encode_it(
             client.disconnect()
 
 
+@pytest.mark.parametrize(
+    ("operation", "change"),
+    [
+        ("list-one", "reconnect"),
+        ("list-one", "p4info"),
+        ("list-all", "reconnect"),
+        ("list-all", "p4info"),
+        ("clear-empty", "reconnect"),
+        ("clear-empty", "p4info"),
+        ("before-read", "p4info"),
+        ("invalid-reply", "p4info"),
+    ],
+)
+def test_table_reads_keep_their_connection_and_p4info(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    mocker: MockerFixture,
+    operation: str,
+    change: str,
+) -> None:
+    client = _push_pipeline(connected_client)
+    _, mocks, p4info_path, json_path = connected_client
+    original_stub = current_stub = mocks["stub"]
+    table = "MyIngress.ipv4_lpm"
+    original_id, updated_id = 2001, 4001
+    active_id = original_id
+    started, release = threading.Event(), threading.Event()
+
+    def response(table_id: int) -> Any:
+        reply = p4runtime_pb2.ReadResponse()
+        entry = reply.entities.add().table_entry
+        entry.table_id = table_id
+        field = entry.match.add()
+        field.field_id = 1
+        field.lpm.value = b"\x0a\x00\x01\x00"
+        field.lpm.prefix_len = 24
+        return reply
+
+    def wait_for_change() -> None:
+        started.set()
+        assert release.wait(timeout=3.0)
+
+    def hold_response(_request: Any, *, timeout: float) -> Iterator[Any]:
+        if operation == "invalid-reply":
+            wait_for_change()
+            yield response(updated_id)
+            return
+        if operation != "clear-empty":
+            yield response(original_id)
+        if operation != "before-read":
+            wait_for_change()
+
+    original_stub.Read.side_effect = hold_response
+    if operation == "before-read":
+        index = client.index
+        lookup = index.table_id
+
+        def hold_lookup(name: str) -> int:
+            wait_for_change()
+            return lookup(name)
+
+        mocker.patch.object(index, "table_id", side_effect=hold_lookup)
+
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            if operation == "clear-empty":
+                pending = worker.submit(client.clear_table, table)
+            else:
+                requested_table = None if operation == "list-all" else table
+                pending = worker.submit(client.list_table_entries, requested_table)
+            assert started.wait(timeout=1.0)
+            if change == "reconnect":
+                client.disconnect()
+                stream = FakeStreamCall()
+
+                def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+                    stream.attach_request_iter(requests)
+                    return stream
+
+                current_stub = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+                mocks["channel_factory"].return_value = MagicMock(name="replacement-channel")
+                mocks["stub_factory"].return_value = current_stub
+                stream.responses.put(_make_arbitration_response(0, (1, 0)))
+                client.connect(timeout=1.0)
+            else:
+                active_id = updated_id
+                p4info = _build_p4info()
+                p4info.tables[0].preamble.id = active_id
+                p4info_path.write_text(str(p4info))
+            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+            release.set()
+
+            error = ConnectionError if change == "reconnect" else P4RuntimeError
+            message = "closed during a table read" if change == "reconnect" else "P4Info changed"
+            with pytest.raises(error, match=message):
+                pending.result(timeout=1.0)
+            assert original_stub.Read.call_count == int(operation != "before-read")
+            original_stub.Write.assert_not_called()
+            if change == "reconnect":
+                current_stub.Read.assert_not_called()
+                current_stub.Write.assert_not_called()
+
+            current_stub.Read.side_effect = None
+            current_stub.Read.return_value = iter([response(active_id)])
+            if operation == "clear-empty":
+                assert client.clear_table(table) == 1
+                current_stub.Write.assert_called_once()
+                update = current_stub.Write.call_args.args[0].updates[0]
+                assert update.entity.table_entry.table_id == active_id
+            else:
+                entries = client.list_table_entries(None if operation == "list-all" else table)
+                assert [entry["table"] for entry in entries] == [table]
+                current_stub.Write.assert_not_called()
+            request = current_stub.Read.call_args.args[0]
+            assert request.entities[0].table_entry.table_id == (
+                0 if operation == "list-all" else active_id
+            )
+        finally:
+            release.set()
+            client.disconnect()
+
+
 @pytest.mark.parametrize("operation", ["insert", "modify", "delete"])
 @pytest.mark.parametrize("wildcard", [False, True])
 @pytest.mark.parametrize("priority", [1, 17, (1 << 31) - 1])

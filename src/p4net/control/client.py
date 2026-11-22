@@ -748,6 +748,9 @@ class P4RuntimeClient:
         stripped. They round-trip correctly through ``insert_table_entry``,
         ``modify_table_entry``, and ``delete_table_entry`` because
         ``encode_value`` accepts shorter ``bytes`` inputs.
+
+        Raises ``ConnectionError`` if the connection closes during the read
+        and ``P4RuntimeError`` if P4Info changes during the read.
         """
         stub, index = self._indexed_context()
         return self._read_table_entries(stub, index, table, timeout=timeout)
@@ -763,7 +766,7 @@ class P4RuntimeClient:
         else:
             entity.table_entry.table_id = 0
         with self._teardown_lock:
-            self._require_same_connection(stub, operation="a table read")
+            self._require_same_indexed_context(stub, index, operation="table read")
         try:
             response_iter = stub.Read(req, timeout=timeout)
             entries: list[dict[str, Any]] = []
@@ -771,18 +774,23 @@ class P4RuntimeClient:
                 for ent in resp.entities:
                     if ent.HasField("table_entry"):
                         entries.append(self._decode_table_entry(ent.table_entry, index=index))
-            return entries
         except grpc.RpcError as exc:
             raise self._translate_rpc_error(exc) from exc
-        except ValueError:
+        except (P4RuntimeError, ValueError):
             with self._teardown_lock:
-                self._require_same_connection(stub, operation="a table read")
+                self._require_same_indexed_context(stub, index, operation="table read")
             raise
+        with self._teardown_lock:
+            self._require_same_indexed_context(stub, index, operation="table read")
+        return entries
 
     def clear_table(self, table: str, *, timeout: float = 10.0) -> int:
         """Read and delete all entries from `table` on the same connection.
 
         Return the number of deleted entries.
+        The read and delete use the same P4Info.
+        If the connection or P4Info changes during the read, even an empty
+        response raises an error.
         """
         stub, index = self._indexed_context()
         entries = self._read_table_entries(stub, index, table, timeout=timeout)
