@@ -984,19 +984,21 @@ class P4RuntimeClient:
             NoSuchRegisterError: if the register doesn't exist.
             EncodingError: if ``index`` is out of range or ``value``
                 exceeds the register's bitwidth.
+            ConnectionError: if the connection closes during preparation.
             P4RuntimeError: if the underlying control channel returns
-                an error or this client has no Thrift address configured.
+                an error, no Thrift address is configured, or P4Info changes
+                during preparation.
         """
-        self._require_connected_with_index()
-        idx = self._index
-        assert idx is not None
-        spec = idx.register_by_name(name)
+        stub, p4info = self._indexed_context()
+        spec = p4info.register_by_name(name)
         if not 0 <= int(index) < spec.size:
             raise EncodingError(f"register {name!r} index {index} out of range [0, {spec.size})")
         # Force bitwidth validation. Result bytes are unused — the Thrift
         # CLI takes a decimal integer.
         encode_value(int(value), spec.bitwidth)
-        self._run_thrift_cli(
+        self._run_register_command(
+            stub,
+            p4info,
             f"register_write {name} {int(index)} {int(value)}",
             timeout=timeout,
             op_description=f"register_write {name}[{index}]",
@@ -1031,28 +1033,47 @@ class P4RuntimeClient:
         Raises:
             NoSuchRegisterError: if the register doesn't exist.
             EncodingError: if ``index`` is out of range.
+            ConnectionError: if the connection closes during preparation.
             P4RuntimeError: if the underlying control channel returns
-                an error or this client has no Thrift address configured.
+                an error, no Thrift address is configured, or P4Info changes
+                during preparation.
         """
-        self._require_connected_with_index()
-        idx = self._index
-        assert idx is not None
-        spec = idx.register_by_name(name)
+        stub, p4info = self._indexed_context()
+        spec = p4info.register_by_name(name)
         if index is not None and not 0 <= int(index) < spec.size:
             raise EncodingError(f"register {name!r} index {index} out of range [0, {spec.size})")
         if index is not None:
-            output = self._run_thrift_cli(
+            output = self._run_register_command(
+                stub,
+                p4info,
                 f"register_read {name} {int(index)}",
                 timeout=timeout,
                 op_description=f"register_read {name}[{index}]",
             )
             return _parse_register_read_single(output, name, int(index))
-        output = self._run_thrift_cli(
+        output = self._run_register_command(
+            stub,
+            p4info,
             f"register_read {name}",
             timeout=timeout,
             op_description=f"register_read {name}",
         )
         return _parse_register_read_array(output, name, spec.size)
+
+    def _run_register_command(
+        self,
+        stub: Any,
+        p4info: P4InfoIndex,
+        command: str,
+        *,
+        timeout: float,
+        op_description: str,
+    ) -> str:
+        # The CLI opens its own connection, so keep this client's connection
+        # and pipeline stable until the command completes.
+        with self._pipeline_lock, self._teardown_lock:
+            self._require_same_indexed_context(stub, p4info, operation="register operation")
+            return self._run_thrift_cli(command, timeout=timeout, op_description=op_description)
 
     def _run_thrift_cli(
         self,
@@ -1322,13 +1343,6 @@ class P4RuntimeClient:
     def _require_connected(self) -> None:
         if not self.is_connected():
             raise ConnectionError("client is not connected; call connect() first")
-
-    def _require_connected_with_index(self) -> None:
-        self._require_connected()
-        if self._index is None:
-            raise P4RuntimeError(
-                "no pipeline is set; call set_pipeline_config or get_pipeline_config first"
-            )
 
     def _translate_rpc_error(self, exc: grpc.RpcError, *, pipeline: bool = False) -> P4RuntimeError:
         try:

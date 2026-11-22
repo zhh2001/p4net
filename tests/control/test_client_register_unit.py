@@ -10,6 +10,7 @@ from __future__ import annotations
 import queue
 import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -21,6 +22,7 @@ from pytest_mock import MockerFixture
 
 import p4net.control  # noqa: F401  (sets protobuf python-impl env var)
 from p4net.control import (
+    ConnectionError,
     EncodingError,
     NoSuchRegisterError,
     P4RuntimeClient,
@@ -325,3 +327,125 @@ def test_read_register_array_size_mismatch_raises(
             client.read_register("MyIngress.test_register")
     finally:
         client.disconnect()
+
+
+@pytest.mark.parametrize("change", ["reconnect", "p4info"])
+@pytest.mark.parametrize(
+    ("method", "args", "stdout", "expected"),
+    [
+        ("write_register", (5, 17), "RuntimeCmd:\n", None),
+        ("read_register", (5,), "RuntimeCmd: MyIngress.test_register[5]= 53\n", 53),
+        (
+            "read_register",
+            (),
+            "RuntimeCmd: MyIngress.test_register= " + ", ".join(["53"] * 16) + "\n",
+            [53] * 16,
+        ),
+    ],
+    ids=["write", "read-cell", "read-all"],
+)
+def test_register_operations_keep_their_connection_and_p4info(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    mocker: MockerFixture,
+    change: str,
+    method: str,
+    args: tuple[int, ...],
+    stdout: str,
+    expected: int | list[int] | None,
+) -> None:
+    client = _push_pipeline(connected_client)
+    _, _, p4info_path, json_path = connected_client
+    name = "MyIngress.test_register"
+    original_index = client.index
+    lookup = original_index.register_by_name
+    preparing, release = threading.Event(), threading.Event()
+    run = _patch_thrift_cli(mocker, stdout)
+
+    def hold_lookup(register: str) -> Any:
+        preparing.set()
+        assert release.wait(timeout=3.0)
+        return lookup(register)
+
+    mocker.patch.object(original_index, "register_by_name", side_effect=hold_lookup)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        try:
+            operation = getattr(client, method)
+            pending = worker.submit(operation, name, *args)
+            assert preparing.wait(timeout=1.0)
+            if change == "reconnect":
+                client.disconnect()
+                stream = FakeStreamCall()
+                stream.responses.put(_make_arbitration_response(0, (1, 0)))
+
+                def open_stream(requests: Iterator[Any]) -> FakeStreamCall:
+                    stream.attach_request_iter(requests)
+                    return stream
+
+                replacement = MagicMock(StreamChannel=MagicMock(side_effect=open_stream))
+                mocker.patch("p4net.control.client.grpc.insecure_channel", return_value=MagicMock())
+                mocker.patch(
+                    "p4net.control.client.p4runtime_pb2_grpc.P4RuntimeStub",
+                    return_value=replacement,
+                )
+                client.connect(timeout=1.0)
+            else:
+                p4info_path.write_text(str(_build_p4info_with_register(bitwidth=24)))
+            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+            release.set()
+
+            error = ConnectionError if change == "reconnect" else P4RuntimeError
+            message = "closed during a register" if change == "reconnect" else "P4Info changed"
+            with pytest.raises(error, match=message):
+                pending.result(timeout=1.0)
+            run.assert_not_called()
+
+            assert operation(name, *args) == expected
+            run.assert_called_once()
+        finally:
+            release.set()
+            client.disconnect()
+
+
+@pytest.mark.parametrize("change", ["disconnect", "pipeline"])
+def test_register_command_finishes_before_connection_or_pipeline_changes(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path],
+    mocker: MockerFixture,
+    change: str,
+) -> None:
+    client = _push_pipeline(connected_client)
+    _, _, p4info_path, json_path = connected_client
+    running, release = threading.Event(), threading.Event()
+    changing, changed = threading.Event(), threading.Event()
+
+    def hold_thrift(*args: Any, **kwargs: Any) -> Any:
+        running.set()
+        assert release.wait(timeout=3.0)
+        return MagicMock(
+            stdout="RuntimeCmd: MyIngress.test_register[5]= 53\n", stderr="", returncode=0
+        )
+
+    mocker.patch("subprocess.run", side_effect=hold_thrift)
+
+    def change_context() -> None:
+        changing.set()
+        if change == "disconnect":
+            client.disconnect()
+        else:
+            client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+        changed.set()
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        try:
+            read = workers.submit(client.read_register, "MyIngress.test_register", 5)
+            assert running.wait(timeout=1.0)
+            transition = workers.submit(change_context)
+            assert changing.wait(timeout=1.0)
+            assert not changed.wait(timeout=0.1)
+            release.set()
+
+            assert read.result(timeout=1.0) == 53
+            transition.result(timeout=1.0)
+            assert changed.is_set()
+        finally:
+            release.set()
+            client.disconnect()
