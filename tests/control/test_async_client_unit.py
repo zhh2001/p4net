@@ -1812,13 +1812,16 @@ async def test_reads_across_clients_progress_concurrently() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _counter_p4info(counter_id: int = 5001) -> p4info_pb2.P4Info:
+    p4info = p4info_pb2.P4Info()
+    counter = p4info.counters.add()
+    counter.preamble.id = counter_id
+    counter.preamble.name = "MyIngress.pkts"
+    return p4info
+
+
 async def test_read_counter_single_index(patched_aio: dict[str, Any]) -> None:
-    # Add a counter to the P4Info first.
-    p = p4info_pb2.P4Info()
-    c = p.counters.add()
-    c.preamble.id = 5001
-    c.preamble.name = "MyIngress.pkts"
-    client = await _connect(patched_aio, info_index=P4InfoIndex(p))
+    client = await _connect(patched_aio, info_index=P4InfoIndex(_counter_p4info()))
     try:
 
         async def _async_iter() -> AsyncIterator[Any]:
@@ -1833,6 +1836,125 @@ async def test_read_counter_single_index(patched_aio: dict[str, Any]) -> None:
         out = await client.read_counter("MyIngress.pkts", index=3)
         assert out == 42
     finally:
+        await client.disconnect()
+
+
+@pytest.mark.parametrize("cell", [3, None], ids=["single-cell", "all-cells"])
+@pytest.mark.parametrize("change", ["reconnect", "p4info"])
+@pytest.mark.parametrize("pause", ["before-response", "after-response", "empty"])
+async def test_read_counter_keeps_its_connection_and_p4info(
+    patched_aio: dict[str, Any],
+    mocker: MockerFixture,
+    cell: int | None,
+    change: str,
+    pause: str,
+) -> None:
+    original_id, updated_id = 5001, 6001
+    client = await _connect(patched_aio, info_index=P4InfoIndex(_counter_p4info(original_id)))
+    original_stub = current_stub = patched_aio["stub"]
+    waiting, release = asyncio.Event(), asyncio.Event()
+    counter = "MyIngress.pkts"
+
+    def response(counter_id: int, packets: int) -> Any:
+        result = p4runtime_pb2.ReadResponse()
+        indices = (3, 7) if cell is None else (cell,)
+        for index in indices:
+            entry = result.entities.add().counter_entry
+            entry.counter_id = counter_id
+            entry.index.index = index
+            entry.data.packet_count = packets
+        return result
+
+    async def delayed() -> AsyncIterator[Any]:
+        if pause == "after-response":
+            yield response(original_id, 42)
+        waiting.set()
+        await release.wait()
+        if pause == "before-response":
+            yield response(original_id, 42)
+
+    call = MagicMock(spec=grpc.aio.UnaryStreamCall)
+    call.__aiter__.side_effect = delayed
+    call.done.return_value = False
+    original_stub.Read.return_value = call
+    pending = asyncio.create_task(client.read_counter(counter, cell))
+
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=1.0)
+        request = original_stub.Read.call_args.args[0]
+        assert request.entities[0].counter_entry.counter_id == original_id
+        active_id = original_id
+        if change == "reconnect":
+            await client.disconnect()
+            stream = _FakeStream()
+            await stream.push_arbitration()
+            current_stub = MagicMock(StreamChannel=MagicMock(return_value=stream))
+            mocker.patch(
+                "p4net.control.async_client.p4runtime_pb2_grpc.P4RuntimeStub",
+                return_value=current_stub,
+            )
+            await client.connect()
+        else:
+            active_id = updated_id
+            await client.push_pipeline(str(_counter_p4info(active_id)).encode(), b"{}")
+        release.set()
+
+        error = ConnectionError if change == "reconnect" else P4RuntimeError
+        message = "closed during a counter read" if change == "reconnect" else "P4Info changed"
+        with pytest.raises(error, match=message):
+            await asyncio.wait_for(pending, timeout=1.0)
+        call.cancel.assert_called_once()
+        if change == "reconnect":
+            current_stub.Read.assert_not_called()
+
+        async def fresh() -> AsyncIterator[Any]:
+            yield response(active_id, 53)
+
+        current_stub.Read.return_value = fresh()
+        assert await client.read_counter(counter, cell) == (
+            53 if cell is not None else {3: 53, 7: 53}
+        )
+        entry = current_stub.Read.call_args.args[0].entities[0].counter_entry
+        assert entry.counter_id == active_id
+        assert entry.HasField("index") == (cell is not None)
+        if cell is not None:
+            assert entry.index.index == cell
+
+        async def empty() -> AsyncIterator[Any]:
+            yield p4runtime_pb2.ReadResponse()
+
+        current_stub.Read.return_value = empty()
+        assert await client.read_counter(counter, cell) == (0 if cell is not None else {})
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_cancelling_counter_read_ends_unfinished_rpc(patched_aio: dict[str, Any]) -> None:
+    client = await _connect(patched_aio, info_index=P4InfoIndex(_counter_p4info()))
+    waiting = asyncio.Event()
+
+    async def responses() -> AsyncIterator[Any]:
+        waiting.set()
+        await asyncio.Future()
+        yield p4runtime_pb2.ReadResponse()
+
+    call = MagicMock(spec=grpc.aio.UnaryStreamCall)
+    call.__aiter__.side_effect = responses
+    call.done.return_value = False
+    patched_aio["stub"].Read.return_value = call
+    pending = asyncio.create_task(client.read_counter("MyIngress.pkts"))
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=1.0)
+        pending.cancel()
+        with pytest.raises(AsyncOperationCancelledError, match="read_counter cancelled"):
+            await pending
+        call.cancel.assert_called_once()
+        assert client.is_connected
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
         await client.disconnect()
 
 

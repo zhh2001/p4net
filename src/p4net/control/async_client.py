@@ -708,35 +708,44 @@ class AsyncP4RuntimeClient:
         *,
         timeout: float = 5.0,
     ) -> int | dict[int, int]:
-        """Read indirect counter. Returns packet_count only for simplicity.
+        """Read packet counts from an indirect counter.
 
-        Single-index returns the cell's packet_count (int). No index returns
-        ``{cell_index: packet_count}``. The sync client returns the richer
-        ``CounterData`` dataclass; the async API keeps things simple per spec.
+        A single index returns the cell's packet count, with zero for an
+        absent cell. Omitting the index returns ``{cell_index: packet_count}``.
+        The read uses the connection and P4Info selected at the start of the call.
         """
         self._require_connected_with_index()
-        idx = self.info_index
+        stub, idx = self._stub, self.info_index
         counter_id = idx.counter_id(counter)
+        cell = int(index) if index is not None else None
         req = p4runtime_pb2.ReadRequest()
         req.device_id = self._device_id
         entity = req.entities.add()
         entity.counter_entry.counter_id = counter_id
-        if index is not None:
-            entity.counter_entry.index.index = int(index)
+        if cell is not None:
+            entity.counter_entry.index.index = cell
         collected: dict[int, int] = {}
+        self._require_same_indexed_context(stub, idx, operation="counter read")
+        call = None
         try:
-            async for resp in self._stub.Read(req, timeout=timeout):
+            call = stub.Read(req, timeout=timeout)
+            async for resp in call:
+                self._require_same_indexed_context(stub, idx, operation="counter read")
                 for ent in resp.entities:
                     if not ent.HasField("counter_entry"):
                         continue
                     ce = ent.counter_entry
                     collected[int(ce.index.index)] = int(ce.data.packet_count)
+            self._require_same_indexed_context(stub, idx, operation="counter read")
         except asyncio.CancelledError as exc:
             raise AsyncOperationCancelledError("read_counter cancelled") from exc
         except grpc.aio.AioRpcError as exc:
             raise self._translate_rpc_error(exc) from exc
-        if index is not None:
-            return collected.get(int(index), 0)
+        finally:
+            if isinstance(call, grpc.aio.Call) and not call.done():
+                call.cancel()
+        if cell is not None:
+            return collected.get(cell, 0)
         return collected
 
     # ----------------------------------------------------------------- registers
@@ -814,12 +823,7 @@ class AsyncP4RuntimeClient:
             # The CLI opens a separate connection. Keep the client and its
             # pipeline stable until the command has finished or been stopped.
             async with self._pipeline_lock, self._teardown_lock:
-                if self._stub is not stub or not self.is_connected:
-                    raise ConnectionError(
-                        f"Connection to {self.target!r} closed during a register operation"
-                    )
-                if self._info_index is not index:
-                    raise P4RuntimeError("P4Info changed during register operation")
+                self._require_same_indexed_context(stub, index, operation="register operation")
                 return await self._run_thrift_cli(
                     command, timeout=timeout, op_description=op_description
                 )
@@ -993,6 +997,14 @@ class AsyncP4RuntimeClient:
             raise P4RuntimeError(
                 "no P4Info index; pass info_index= to ctor or call push_pipeline first"
             )
+
+    def _require_same_indexed_context(
+        self, stub: Any, index: P4InfoIndex, *, operation: str
+    ) -> None:
+        if self._stub is not stub or not self.is_connected:
+            raise ConnectionError(f"Connection to {self.target!r} closed during a {operation}")
+        if self._info_index is not index:
+            raise P4RuntimeError(f"P4Info changed during {operation}")
 
     def _translate_rpc_error(
         self,
