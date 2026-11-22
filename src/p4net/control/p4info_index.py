@@ -429,6 +429,10 @@ class P4InfoIndex:
 def _index_after_commit(config: Any, previous: P4InfoIndex | None) -> P4InfoIndex:
     if not config.HasField("p4info"):
         raise P4RuntimeError("COMMIT succeeded. The device returned no P4Info.")
-    if previous is not None and previous.raw == config.p4info:
+    return _index_for_p4info(config.p4info, previous)
+
+
+def _index_for_p4info(p4info: Any, previous: P4InfoIndex | None) -> P4InfoIndex:
+    if previous is not None and previous.raw == p4info:
         return previous
-    return P4InfoIndex(config.p4info)
+    return P4InfoIndex(p4info)

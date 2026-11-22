@@ -881,6 +881,68 @@ def test_get_pipeline_config_accepts_p4info_without_tables_or_device_config(
         client.disconnect()
 
 
+@pytest.mark.parametrize("p4info_changed", [False, True])
+def test_get_pipeline_config_keeps_inflight_reads_when_p4info_matches(
+    connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], p4info_changed: bool
+) -> None:
+    client, mocks, p4info_path, json_path = connected_client
+    p4info = _build_p4info_with_counter()
+    p4info_path.write_text(str(p4info))
+    client.set_pipeline_config(bmv2_json=json_path, p4info=p4info_path)
+    previous = client.index
+    if p4info_changed:
+        p4info.tables[0].preamble.id = 4001
+        p4info.counters[0].preamble.id = 5001
+    readback = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    readback.config.p4info.CopyFrom(p4info)
+    readback.config.p4_device_config = b'{"updated":"json"}'
+    readback.config.cookie.cookie = 12
+    stub = mocks["stub"]
+    stub.GetForwardingPipelineConfig.return_value = readback
+    table_reading, counter_reading, release = (threading.Event() for _ in range(3))
+    table, counter = "MyIngress.ipv4_lpm", "MyIngress.ingress_pkts"
+
+    def hold_read(request: Any, *, timeout: float) -> Iterator[Any]:
+        response = p4runtime_pb2.ReadResponse()
+        entity = response.entities.add()
+        query = request.entities[0]
+        if query.HasField("table_entry"):
+            entity.table_entry.table_id = query.table_entry.table_id
+            waiting = table_reading
+        else:
+            entity.counter_entry.counter_id = query.counter_entry.counter_id
+            entity.counter_entry.index.index = 4
+            entity.counter_entry.data.packet_count = 13
+            waiting = counter_reading
+        yield response
+        waiting.set()
+        assert release.wait(timeout=3.0)
+
+    stub.Read.side_effect = hold_read
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        try:
+            entries = workers.submit(client.list_table_entries, table)
+            count = workers.submit(client.read_counter, counter, 4)
+            assert table_reading.wait(timeout=1.0)
+            assert counter_reading.wait(timeout=1.0)
+            device_config, index = client.get_pipeline_config()
+            assert device_config == b'{"updated":"json"}'
+            assert client.index is index and index.raw == p4info
+            release.set()
+            if p4info_changed:
+                assert index is not previous
+                for pending in (entries, count):
+                    with pytest.raises(P4RuntimeError, match="P4Info changed"):
+                        pending.result(timeout=1.0)
+            else:
+                assert [entry["table"] for entry in entries.result(timeout=1.0)] == [table]
+                assert count.result(timeout=1.0).packet_count == 13
+                assert index is previous
+        finally:
+            release.set()
+            client.disconnect()
+
+
 @pytest.mark.parametrize("installed", [False, True])
 def test_verify_pipeline_keeps_the_current_index(
     connected_client: tuple[P4RuntimeClient, dict[str, Any], Path, Path], installed: bool

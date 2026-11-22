@@ -39,7 +39,7 @@ from p4net.control.exceptions import (
     P4RuntimeError,
     PipelineError,
 )
-from p4net.control.p4info_index import P4InfoIndex, _index_after_commit
+from p4net.control.p4info_index import P4InfoIndex, _index_after_commit, _index_for_p4info
 
 logger = logging.getLogger(__name__)
 
@@ -545,6 +545,7 @@ class P4RuntimeClient:
     def get_pipeline_config(self, *, timeout: float = 10.0) -> tuple[bytes, P4InfoIndex]:
         """Read the current pipeline back from the device.
 
+        The client keeps its cached index when the returned P4Info matches.
         A response without P4Info clears the cached index and raises
         ``P4RuntimeError``. The device configuration bytes may be empty.
         The client raises ``ConnectionError`` if the channel closes before
@@ -576,7 +577,7 @@ class P4RuntimeClient:
                     raise P4RuntimeError(
                         f"Device {self.target!r} returned no P4Info for its pipeline"
                     )
-                index = P4InfoIndex(config.p4info)
+                index = _index_for_p4info(config.p4info, self._index)
                 self._index = index
         return config.p4_device_config, index
 
