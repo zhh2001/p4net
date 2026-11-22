@@ -197,7 +197,7 @@ Connect, use, and close an async client on the same event loop. The [gRPC AsyncI
 
 Outside an event loop, `net.stop()` waits for cleanup. Inside an event loop, it starts cleanup in a background thread and returns. Use `await net.astop()` when you need to wait for shutdown.
 
-If a cached async client takes too long to close, the remaining network resources are released and the waiting call raises `NetworkError`. Keep the client's event loop running and call `net.stop()` or `await net.astop()` again to wait for the pending close.
+If a cached async client takes too long to close, the remaining network resources are released and the waiting call raises `NetworkError`. Keep the client's event loop running and call `net.stop()` or `await net.astop()` again to wait for the pending close. Both `net.start()` and `await net.astart()` raise `NetworkError` while a client from the previous run is still closing.
 
 With a running event loop, the SIGINT/SIGTERM handler awaits network cleanup before restoring the previous handler and delivering the signal again. Outside an event loop, it uses synchronous cleanup.
 

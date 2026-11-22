@@ -271,8 +271,9 @@ class Network:
 
         Raises:
             NetworkAlreadyRunningError: if already running or starting.
-            NetworkError: if shutdown interrupts startup, or configured IPv6
-                addresses fail duplicate address detection or remain unready.
+            NetworkError: if shutdown is in progress or interrupts startup,
+                or configured IPv6 addresses fail duplicate address detection
+                or remain unready.
         """
         self._run_start(self._prepare_start())
 
@@ -280,8 +281,10 @@ class Network:
         with self._stop_lock:
             if self._running or self._start_future is not None:
                 raise NetworkAlreadyRunningError("Network is already running or starting")
-            if self._stop_future is not None and not self._stop_future.done():
+            stopping = self._stop_future is not None and not self._stop_future.done()
+            if stopping or any(not future.done() for _, _, future in self._async_disconnects):
                 raise NetworkError("Network shutdown is still running")
+            self._async_disconnects.clear()
             self._stop_future = None
             self._start_thread_id = None if background else threading.get_ident()
             self._start_future = Future()

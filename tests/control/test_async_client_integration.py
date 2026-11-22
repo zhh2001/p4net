@@ -234,8 +234,9 @@ async def test_network_stop_closes_async_connection(
         await asyncio.to_thread(net.stop)
 
 
-async def test_network_stop_reports_pending_async_close_and_can_retry(
-    tmp_path: Path, mocker: MockerFixture
+@pytest.mark.parametrize("retry_shutdown", [True, False])
+async def test_network_stop_timeout_blocks_restart_until_async_close_finishes(
+    tmp_path: Path, mocker: MockerFixture, retry_shutdown: bool
 ) -> None:
     suffix = _suffix()
     switch, host = f"s{suffix}", f"h{suffix}"
@@ -276,12 +277,25 @@ async def test_network_stop_reports_pending_async_close_and_can_retry(
         assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
         assert not sw.bmv2.is_running()
         assert not net.is_running
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            await net.astart()
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            await asyncio.to_thread(net.start)
+        assert not net.switches
 
         release.set()
-        await asyncio.wait_for(asyncio.to_thread(net.stop), timeout=3.0)
+        if retry_shutdown:
+            await asyncio.wait_for(asyncio.to_thread(net.stop), timeout=3.0)
+        else:
+            ((_, _, disconnect),) = net._async_disconnects
+            await asyncio.wait_for(asyncio.wrap_future(disconnect), timeout=3.0)
         assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
         assert client._loop is None
         close_spy.assert_awaited_once()
+
+        await net.astart()
+        assert net.switch(switch) is not sw
+        assert not net._async_disconnects
     finally:
         release.set()
         await asyncio.gather(*waiters, return_exceptions=True)
