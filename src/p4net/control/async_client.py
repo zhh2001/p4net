@@ -49,6 +49,17 @@ logger = logging.getLogger(__name__)
 _PIPELINE_ACTIONS: frozenset[str] = frozenset(
     {"VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"}
 )
+_PIPELINE_REJECTIONS = frozenset(
+    {
+        grpc.StatusCode.ALREADY_EXISTS,
+        grpc.StatusCode.FAILED_PRECONDITION,
+        grpc.StatusCode.INVALID_ARGUMENT,
+        grpc.StatusCode.NOT_FOUND,
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.UNIMPLEMENTED,
+    }
+)
 _PACKET_IN_QUEUE_CAPACITY = 256
 _PacketIn = tuple[bytes, dict[str, int]]
 _PACKET_IN_CALLBACK: ContextVar[tuple[AsyncP4RuntimeClient, Any] | None] = ContextVar(
@@ -443,6 +454,9 @@ class AsyncP4RuntimeClient:
 
         The client raises ``ConnectionError`` if the connection closes while
         it is waiting for a reply or before it can apply the reply.
+        When the result of a dispatched pipeline change is uncertain, the
+        client clears its cached P4Info. Push a pipeline successfully before
+        resuming operations that use P4Info.
         """
         self._require_connected()
         stub = self._stub
@@ -469,19 +483,50 @@ class AsyncP4RuntimeClient:
                     raise ConnectionError(
                         f"Connection to {self.target!r} closed before pipeline RPC"
                     )
-                await self._await_rpc(
-                    stub,
-                    lambda: stub.SetForwardingPipelineConfig(req),
-                    connection_closed=f"Connection to {self.target!r} closed during pipeline RPC",
-                    timeout=timeout,
-                )
-                if msg is None:
-                    await self._refresh_committed_pipeline(stub, timeout=timeout)
-                    return
-                if self._stub is not stub or not self.is_connected:
-                    raise ConnectionError(
-                        f"Connection to {self.target!r} closed before applying pipeline reply"
+                previous = self._info_index
+                dispatched = False
+
+                def start() -> Awaitable[Any]:
+                    nonlocal dispatched
+                    call: Awaitable[Any] = stub.SetForwardingPipelineConfig(req)
+                    dispatched = True
+                    return call
+
+                try:
+                    await self._await_rpc(
+                        stub,
+                        start,
+                        connection_closed=(
+                            f"Connection to {self.target!r} closed during pipeline RPC"
+                        ),
+                        timeout=timeout,
                     )
+                    if msg is None:
+                        await self._refresh_committed_pipeline(stub, timeout=timeout)
+                        return
+                    if self._stub is not stub or not self.is_connected:
+                        raise ConnectionError(
+                            f"Connection to {self.target!r} closed before applying pipeline reply"
+                        )
+                except (
+                    asyncio.CancelledError,
+                    asyncio.TimeoutError,
+                    ConnectionError,
+                    grpc.aio.AioRpcError,
+                ) as exc:
+                    rejected = (
+                        isinstance(exc, grpc.aio.AioRpcError) and exc.code() in _PIPELINE_REJECTIONS
+                    )
+                    if (
+                        dispatched
+                        and action != "VERIFY"
+                        and not rejected
+                        and self._info_index is previous
+                    ):
+                        # A lost reply can leave the switch using a new P4Info.
+                        # Reconnecting alone still leaves the same cached index.
+                        self._info_index = None
+                    raise
                 if action != "VERIFY":
                     self._info_index = P4InfoIndex(msg)
         except asyncio.CancelledError as exc:

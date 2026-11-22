@@ -98,6 +98,8 @@ sudo "$(command -v python)" async_demo.py
 
 用 `set_pipeline_config(action="COMMIT")` 或 `await push_pipeline(action="COMMIT")` 启用通过 `VERIFY_AND_SAVE` 保存的流水线。提交成功后，客户端会回读 P4Info。如果回读失败，客户端会报告错误并清除本地索引。
 
+异步客户端发出流水线变更请求后，即使等待超时，交换机也可能已经应用变更。无法确认结果时，客户端会清除缓存的 P4Info。重新下发所需的流水线，成功后即可继续执行依赖 P4Info 的操作。`VERIFY` 失败或交换机明确拒绝变更时，客户端会保留当前索引。
+
 ## 并发操作与 PacketIn
 
 对已连接且拥有主控权的多个客户端，可并发下发表项：

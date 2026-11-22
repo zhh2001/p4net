@@ -1054,7 +1054,7 @@ async def test_commit_refresh_cannot_overwrite_a_later_pipeline(
 
 
 @pytest.mark.parametrize("action", ["VERIFY_AND_COMMIT", "VERIFY", "COMMIT"])
-async def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
+async def test_pipeline_reply_from_an_old_connection_does_not_install_the_candidate(
     patched_aio: dict[str, Any], mocker: MockerFixture, action: str
 ) -> None:
     client = await _connect(patched_aio)
@@ -1095,7 +1095,11 @@ async def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
 
         with pytest.raises(ConnectionError, match="closed"):
             await asyncio.wait_for(pending, timeout=1.0)
-        assert client.info_index is current
+        if action == "VERIFY":
+            assert client.info_index is current
+        else:
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
         old_stub.GetForwardingPipelineConfig.assert_not_called()
         new_stub.GetForwardingPipelineConfig.assert_not_called()
         new_stub.SetForwardingPipelineConfig.assert_not_awaited()
@@ -1111,25 +1115,26 @@ async def test_pipeline_reply_from_an_old_connection_keeps_the_current_index(
 
 @pytest.mark.parametrize("empty_details", [False, True])
 @pytest.mark.parametrize(
-    ("code", "expected"),
+    ("code", "expected", "clears_index"),
     [
-        (grpc.StatusCode.PERMISSION_DENIED, NotPrimaryError),
-        (grpc.StatusCode.UNAVAILABLE, ConnectionError),
-        (grpc.StatusCode.CANCELLED, AsyncOperationCancelledError),
-        (grpc.StatusCode.INVALID_ARGUMENT, PipelineError),
-        (grpc.StatusCode.FAILED_PRECONDITION, PipelineError),
-        (grpc.StatusCode.NOT_FOUND, EntryNotFoundError),
-        (grpc.StatusCode.ALREADY_EXISTS, DuplicateEntryError),
-        (grpc.StatusCode.DEADLINE_EXCEEDED, P4RuntimeError),
-        (grpc.StatusCode.UNKNOWN, P4RuntimeError),
-        (grpc.StatusCode.UNIMPLEMENTED, P4RuntimeError),
-        (grpc.StatusCode.INTERNAL, P4RuntimeError),
+        (grpc.StatusCode.PERMISSION_DENIED, NotPrimaryError, False),
+        (grpc.StatusCode.UNAVAILABLE, ConnectionError, True),
+        (grpc.StatusCode.CANCELLED, AsyncOperationCancelledError, True),
+        (grpc.StatusCode.INVALID_ARGUMENT, PipelineError, False),
+        (grpc.StatusCode.FAILED_PRECONDITION, PipelineError, False),
+        (grpc.StatusCode.NOT_FOUND, EntryNotFoundError, False),
+        (grpc.StatusCode.ALREADY_EXISTS, DuplicateEntryError, False),
+        (grpc.StatusCode.DEADLINE_EXCEEDED, P4RuntimeError, True),
+        (grpc.StatusCode.UNKNOWN, P4RuntimeError, True),
+        (grpc.StatusCode.UNIMPLEMENTED, P4RuntimeError, False),
+        (grpc.StatusCode.INTERNAL, P4RuntimeError, True),
     ],
 )
-async def test_push_pipeline_preserves_rpc_error_type_and_index(
+async def test_push_pipeline_preserves_rpc_error_type_and_discards_uncertain_index(
     patched_aio: dict[str, Any],
     code: grpc.StatusCode,
     expected: type[P4RuntimeError],
+    clears_index: bool,
     empty_details: bool,
 ) -> None:
     client = await _connect(patched_aio)
@@ -1147,7 +1152,11 @@ async def test_push_pipeline_preserves_rpc_error_type_and_index(
         assert raised.value.__cause__ is error
         if details:
             assert details in str(raised.value)
-        assert client.info_index is index
+        if clears_index:
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
+        else:
+            assert client.info_index is index
         assert client.is_connected
         assert client._channel is channel
         assert client._stream_call is stream
@@ -1162,8 +1171,11 @@ async def test_push_pipeline_preserves_rpc_error_type_and_index(
 
 
 @pytest.mark.parametrize("ending", ["cancel", "timeout"])
-async def test_push_pipeline_cancel_or_timeout_preserves_index(
-    patched_aio: dict[str, Any], ending: str
+@pytest.mark.parametrize(
+    "action", ["VERIFY", "VERIFY_AND_SAVE", "VERIFY_AND_COMMIT", "COMMIT", "RECONCILE_AND_COMMIT"]
+)
+async def test_push_pipeline_cancel_or_timeout_after_dispatch(
+    patched_aio: dict[str, Any], action: str, ending: str
 ) -> None:
     client = await _connect(patched_aio)
     index = client.info_index
@@ -1175,18 +1187,36 @@ async def test_push_pipeline_cancel_or_timeout_preserves_index(
 
     rpc = patched_aio["stub"].SetForwardingPipelineConfig
     rpc.side_effect = hold_response
+    files = () if action == "COMMIT" else (b"", b"{}")
     task = asyncio.create_task(
-        client.push_pipeline(b"", b"{}", timeout=0.05 if ending == "timeout" else 30.0)
+        client.push_pipeline(*files, action=action, timeout=0.1 if ending == "timeout" else 5.0)
     )
+    read = None
+    table = "MyIngress.ipv4_lpm"
+    stub = patched_aio["stub"]
     try:
         await asyncio.wait_for(started.wait(), timeout=2.0)
+        iterator = client.list_table_entries(table)
+        read = asyncio.create_task(anext(iterator, None))
+        await asyncio.sleep(0)
+        stub.Read.assert_not_called()
         if ending == "cancel":
             task.cancel()
         with pytest.raises(
             AsyncOperationCancelledError if ending == "cancel" else asyncio.TimeoutError
         ):
             await task
-        assert client.info_index is index
+        if action == "VERIFY":
+            assert client.info_index is index
+            assert await read is None
+            stub.Read.assert_called_once()
+        else:
+            with pytest.raises(P4RuntimeError, match="P4Info changed"):
+                await read
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                client.list_table_entries(table)
+            stub.Read.assert_not_called()
+            stub.GetForwardingPipelineConfig.assert_not_called()
         assert client.is_connected
         rpc.side_effect = None
         await client.push_pipeline(b"", b"{}")
@@ -1194,6 +1224,26 @@ async def test_push_pipeline_cancel_or_timeout_preserves_index(
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        if read is not None:
+            await asyncio.gather(read, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_cancelled_pipeline_waiting_for_dispatch_keeps_the_index(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = await _connect(patched_aio)
+    original = client.info_index
+    try:
+        async with client._pipeline_lock:
+            pending = asyncio.create_task(client.push_pipeline(b"", b"{}"))
+            await asyncio.sleep(0)
+            pending.cancel()
+            with pytest.raises(AsyncOperationCancelledError, match="push_pipeline cancelled"):
+                await pending
+            patched_aio["stub"].SetForwardingPipelineConfig.assert_not_called()
+        assert client.info_index is original
+    finally:
         await client.disconnect()
 
 
@@ -1275,9 +1325,14 @@ async def test_async_write_rpcs_distinguish_disconnect_from_cancellation(
             assert "COMMIT succeeded." in str(raised.value)
             with pytest.raises(P4RuntimeError, match="no P4Info index"):
                 _ = client.info_index
-        else:
+        elif operation == "table":
             assert "COMMIT succeeded." not in str(raised.value)
             assert client.info_index is original_index
+            stub.GetForwardingPipelineConfig.assert_not_called()
+        else:
+            assert "COMMIT succeeded." not in str(raised.value)
+            with pytest.raises(P4RuntimeError, match="no P4Info index"):
+                _ = client.info_index
             stub.GetForwardingPipelineConfig.assert_not_called()
         assert finished.is_set()
     finally:
@@ -1498,6 +1553,7 @@ async def test_expired_write_deadline_does_not_dispatch_rpc(
     patched_aio: dict[str, Any], operation: str
 ) -> None:
     client = await _connect(patched_aio)
+    original = client.info_index
     try:
         with pytest.raises(asyncio.TimeoutError):
             if operation == "table":
@@ -1509,6 +1565,7 @@ async def test_expired_write_deadline_does_not_dispatch_rpc(
         stub = patched_aio["stub"]
         stub.Write.assert_not_called()
         stub.SetForwardingPipelineConfig.assert_not_called()
+        assert client.info_index is original
     finally:
         await client.disconnect()
 
