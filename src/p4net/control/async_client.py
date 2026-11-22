@@ -130,6 +130,9 @@ class AsyncP4RuntimeClient:
         self._handlers_lock = asyncio.Lock()
         self._teardown_lock = asyncio.Lock()
         self._pipeline_lock = asyncio.Lock()
+        self._active_table_writes = 0
+        self._table_writes_idle = asyncio.Event()
+        self._table_writes_idle.set()
         self._connected = False
         self._is_primary = False
         self._closed = False
@@ -458,6 +461,7 @@ class AsyncP4RuntimeClient:
 
         try:
             async with self._pipeline_lock:
+                await self._table_writes_idle.wait()
                 if self._stub is not stub or not self.is_connected:
                     raise ConnectionError(
                         f"Connection to {self.target!r} closed before pipeline RPC"
@@ -603,8 +607,18 @@ class AsyncP4RuntimeClient:
         req.updates.add().CopyFrom(upd)
 
         async def write() -> Any:
-            self._require_same_indexed_context(stub, idx, operation="table write")
-            return await stub.Write(req)
+            # Admit writes under the pipeline lock. Once admitted, writes can
+            # overlap until a pipeline push takes the lock to drain them.
+            async with self._pipeline_lock:
+                self._require_same_indexed_context(stub, idx, operation="table write")
+                self._active_table_writes += 1
+                self._table_writes_idle.clear()
+            try:
+                return await stub.Write(req)
+            finally:
+                self._active_table_writes -= 1
+                if self._active_table_writes == 0:
+                    self._table_writes_idle.set()
 
         try:
             await self._await_rpc(

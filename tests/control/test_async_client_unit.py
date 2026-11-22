@@ -1312,6 +1312,187 @@ async def test_table_write_rechecks_p4info_before_dispatch(
         await client.disconnect()
 
 
+@pytest.mark.parametrize("action", ["VERIFY", "VERIFY_AND_COMMIT", "COMMIT"])
+async def test_async_table_write_waits_for_pipeline_and_rechecks_p4info(
+    patched_aio: dict[str, Any], mocker: MockerFixture, action: str
+) -> None:
+    client = await _connect(patched_aio)
+    stub = patched_aio["stub"]
+    original = client.info_index
+    candidate = _make_p4info_index().raw
+    candidate.tables[0].preamble.id = 3001
+    response = p4runtime_pb2.GetForwardingPipelineConfigResponse()
+    response.config.p4info.CopyFrom(candidate)
+    pushing, release_push = asyncio.Event(), asyncio.Event()
+    refreshing, release_refresh = asyncio.Event(), asyncio.Event()
+    prepared = asyncio.Event()
+    lookup = original.table_id
+
+    async def hold_push(_request: Any) -> None:
+        pushing.set()
+        await release_push.wait()
+
+    async def hold_refresh(_request: Any) -> Any:
+        refreshing.set()
+        await release_refresh.wait()
+        return response
+
+    def note_preparation(table: str) -> int:
+        prepared.set()
+        return lookup(table)
+
+    stub.SetForwardingPipelineConfig.side_effect = hold_push
+    stub.GetForwardingPipelineConfig = AsyncMock(side_effect=hold_refresh)
+    mocker.patch.object(original, "table_id", side_effect=note_preparation)
+    files = () if action == "COMMIT" else (str(candidate).encode(), b"{}")
+    pipeline = asyncio.create_task(client.push_pipeline(*files, action=action))
+    table_write = None
+    table = "MyIngress.ipv4_lpm"
+    try:
+        await asyncio.wait_for(pushing.wait(), timeout=1.0)
+        table_write = asyncio.create_task(
+            client.delete_table_entry(table, {"hdr.ipv4.dstAddr": "10.0.0.1/32"})
+        )
+        await asyncio.wait_for(prepared.wait(), timeout=1.0)
+        done, _ = await asyncio.wait((table_write,), timeout=0.02)
+        assert not done
+        stub.Write.assert_not_called()
+
+        release_push.set()
+        if action == "COMMIT":
+            await asyncio.wait_for(refreshing.wait(), timeout=1.0)
+            assert not table_write.done()
+            stub.Write.assert_not_called()
+            release_refresh.set()
+        await asyncio.wait_for(pipeline, timeout=1.0)
+
+        if action == "VERIFY":
+            await asyncio.wait_for(table_write, timeout=1.0)
+            assert client.info_index is original
+            assert stub.Write.call_args.args[0].updates[0].entity.table_entry.table_id == 2001
+        else:
+            with pytest.raises(P4RuntimeError, match="P4Info changed during table write"):
+                await asyncio.wait_for(table_write, timeout=1.0)
+            stub.Write.assert_not_called()
+            await client.delete_table_entry(table, {"hdr.ipv4.dstAddr": "10.0.0.1/32"})
+            assert stub.Write.call_args.args[0].updates[0].entity.table_entry.table_id == 3001
+        stub.Write.assert_awaited_once()
+    finally:
+        release_push.set()
+        release_refresh.set()
+        if table_write is not None:
+            await asyncio.gather(table_write, return_exceptions=True)
+        await asyncio.gather(pipeline, return_exceptions=True)
+        await client.disconnect()
+
+
+async def test_async_pipeline_waits_for_all_inflight_table_writes(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = await _connect(patched_aio)
+    stub = patched_aio["stub"]
+    other = AsyncP4RuntimeClient(
+        ("127.0.0.1", 50052), device_id=0, info_index=_make_p4info_index(), election_id=(1, 0)
+    )
+    other._connected = True
+    other._stub = MagicMock(Write=AsyncMock())
+    both_writing = asyncio.Event()
+    release = (asyncio.Event(), asyncio.Event())
+    entered = 0
+
+    async def hold_write(_request: Any) -> None:
+        nonlocal entered
+        entry = entered
+        entered += 1
+        if entered == 2:
+            both_writing.set()
+        await release[entry].wait()
+
+    stub.Write.side_effect = hold_write
+    table = "MyIngress.ipv4_lpm"
+    writes = [
+        asyncio.create_task(
+            client.delete_table_entry(table, {"hdr.ipv4.dstAddr": f"10.0.0.{cell}/32"})
+        )
+        for cell in (1, 2)
+    ]
+    pipeline = None
+    try:
+        await asyncio.wait_for(both_writing.wait(), timeout=1.0)
+        pipeline = asyncio.create_task(client.push_pipeline(b"", b"{}"))
+        await asyncio.wait_for(
+            other.delete_table_entry(table, {"hdr.ipv4.dstAddr": "10.0.0.3/32"}), timeout=1.0
+        )
+        assert not pipeline.done()
+        stub.SetForwardingPipelineConfig.assert_not_called()
+
+        release[0].set()
+        await asyncio.wait_for(writes[0], timeout=1.0)
+        assert not pipeline.done()
+        stub.SetForwardingPipelineConfig.assert_not_called()
+
+        release[1].set()
+        await asyncio.wait_for(writes[1], timeout=1.0)
+        await asyncio.wait_for(pipeline, timeout=1.0)
+        stub.SetForwardingPipelineConfig.assert_awaited_once()
+    finally:
+        for event in release:
+            event.set()
+        await asyncio.gather(*writes, return_exceptions=True)
+        if pipeline is not None:
+            await asyncio.gather(pipeline, return_exceptions=True)
+        await asyncio.gather(client.disconnect(), other.disconnect())
+
+
+@pytest.mark.parametrize("ending", ["cancel", "timeout"])
+async def test_async_pipeline_proceeds_when_an_inflight_table_write_aborts(
+    patched_aio: dict[str, Any], ending: str
+) -> None:
+    client = await _connect(patched_aio)
+    stub = patched_aio["stub"]
+    started, finished = asyncio.Event(), asyncio.Event()
+
+    async def hold_write(_request: Any) -> None:
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            finished.set()
+
+    async def push(_request: Any) -> None:
+        assert finished.is_set()
+
+    stub.Write.side_effect = hold_write
+    stub.SetForwardingPipelineConfig.side_effect = push
+    table = "MyIngress.ipv4_lpm"
+    writing = asyncio.create_task(
+        client.delete_table_entry(
+            table,
+            {"hdr.ipv4.dstAddr": "10.0.0.1/32"},
+            timeout=0.05 if ending == "timeout" else 5.0,
+        )
+    )
+    pipeline = None
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        pipeline = asyncio.create_task(client.push_pipeline(b"", b"{}"))
+        await asyncio.sleep(0)
+        if ending == "cancel":
+            writing.cancel()
+        error = AsyncOperationCancelledError if ending == "cancel" else asyncio.TimeoutError
+        with pytest.raises(error):
+            await asyncio.wait_for(writing, timeout=1.0)
+        await asyncio.wait_for(pipeline, timeout=1.0)
+        stub.SetForwardingPipelineConfig.assert_awaited_once()
+    finally:
+        if not writing.done():
+            writing.cancel()
+        await asyncio.gather(writing, return_exceptions=True)
+        if pipeline is not None:
+            await asyncio.gather(pipeline, return_exceptions=True)
+        await client.disconnect()
+
+
 @pytest.mark.parametrize("operation", ["table", "pipeline"])
 async def test_expired_write_deadline_does_not_dispatch_rpc(
     patched_aio: dict[str, Any], operation: str
@@ -1328,6 +1509,23 @@ async def test_expired_write_deadline_does_not_dispatch_rpc(
         stub = patched_aio["stub"]
         stub.Write.assert_not_called()
         stub.SetForwardingPipelineConfig.assert_not_called()
+    finally:
+        await client.disconnect()
+
+
+async def test_table_write_times_out_while_waiting_for_pipeline(
+    patched_aio: dict[str, Any],
+) -> None:
+    client = await _connect(patched_aio)
+    stub = patched_aio["stub"]
+    table, key = "MyIngress.ipv4_lpm", {"hdr.ipv4.dstAddr": "10.0.0.1/32"}
+    try:
+        async with client._pipeline_lock:
+            with pytest.raises(asyncio.TimeoutError):
+                await client.delete_table_entry(table, key, timeout=0.02)
+            stub.Write.assert_not_called()
+        await client.delete_table_entry(table, key)
+        stub.Write.assert_awaited_once()
     finally:
         await client.disconnect()
 

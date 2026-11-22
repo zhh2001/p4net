@@ -119,6 +119,8 @@ async def program_switches(clients: list[AsyncP4RuntimeClient]) -> None:
 
 这样可以让多个交换机的 RPC 同时等待响应，实际耗时取决于请求量和交换机处理速度。
 
+同一客户端下发流水线前，会等待正在执行的表项写入。流水线下发结束后，排队的写入会先确认编码使用的 P4Info 仍然有效。
+
 `on_packet_in()` 和它返回的注销函数都需要 `await`。下面的示例等待新注册的处理器收到第一条 PacketIn，超时时间为 5 秒。等待结束时注销处理器。
 
 ```python
