@@ -352,8 +352,9 @@ class Network:
             self._end_start(future)
 
     def _register_cleanup(self) -> None:
-        if not self._registered:
+        if not self._registered or threading.current_thread() is threading.main_thread():
             install_handlers()
+        if not self._registered:
             register(self)
             self._registered = True
 
@@ -421,16 +422,7 @@ class Network:
 
         with self._stop_lock:
             if self._stop_future is None or (
-                self._stop_future.done()
-                and (
-                    self._clients
-                    or self._async_disconnects
-                    or self._bmv2_switches
-                    or self._veth_pairs
-                    or self._namespaces
-                    or self._host_commands
-                    or self._spawned_processes
-                )
+                self._stop_future.done() and self._has_pending_cleanup()
             ):
                 self._stop_future = Future()
                 initiate = True
@@ -1044,6 +1036,17 @@ class Network:
         self._async_disconnects = pending
         return failed_channels
 
+    def _has_pending_cleanup(self) -> bool:
+        return bool(
+            self._clients
+            or self._async_disconnects
+            or self._bmv2_switches
+            or self._veth_pairs
+            or self._namespaces
+            or self._host_commands
+            or self._spawned_processes
+        )
+
     def _do_stop(self) -> _ShutdownFailures:
         if self._running:
             logger.info("Network.stop: tearing down")
@@ -1154,13 +1157,7 @@ class Network:
         self._namespaces = pending_namespaces
 
         # 5. unregister hooks
-        if self._registered and not (
-            self._bmv2_switches
-            or self._veth_pairs
-            or self._namespaces
-            or self._host_commands
-            or self._spawned_processes
-        ):
+        if self._registered and not self._has_pending_cleanup():
             with contextlib.suppress(Exception):
                 unregister(self)
             self._registered = False

@@ -35,7 +35,7 @@ from p4net import Network
 from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
 from p4net.control import ConnectionError
-from p4net.network import NetworkError, RunningHost
+from p4net.network import NetworkError, RunningHost, _cleanup
 from p4net.runtime import BMv2StartupError, LinkError
 from p4net.topo import Topology
 
@@ -143,9 +143,9 @@ def test_single_host_loopback(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("retry_through_network", [True, False])
+@pytest.mark.parametrize("retry", ["network", "client", "hook"])
 def test_network_shutdown_reports_and_retries_sync_channel_close_failure(
-    tmp_path: Path, mocker: MockerFixture, retry_through_network: bool
+    tmp_path: Path, mocker: MockerFixture, retry: str
 ) -> None:
     suffix = _suffix()
     switch, host = f"s{suffix}", f"h{suffix}"
@@ -187,14 +187,28 @@ def test_network_shutdown_reports_and_retries_sync_channel_close_failure(
         with pytest.raises(NetworkError, match="Network shutdown is still running"):
             net.start()
 
-        if retry_through_network:
+        if retry == "hook":
+            _cleanup._run_cleanup()
+        elif retry == "network":
             net.stop()
         else:
             client.disconnect()
         assert client._channel is None
         assert close_calls == 2
-        net.start()
-        assert net.switch(switch) is not sw
+
+        if retry != "client":
+            assert net not in _cleanup._ACTIVE
+
+        async def restart() -> None:
+            await net.astart()
+            try:
+                assert net.switch(switch) is not sw
+                assert _cleanup._SIGNAL_LOOPS[signal.SIGTERM] is asyncio.get_running_loop()
+            finally:
+                await net.astop()
+
+        asyncio.run(restart())
+        assert net not in _cleanup._ACTIVE
     finally:
         net.stop()
         close()

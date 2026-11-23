@@ -14,6 +14,7 @@ Run with:
 from __future__ import annotations
 
 import asyncio
+import signal
 import socket
 import threading
 import uuid
@@ -41,7 +42,7 @@ from p4net.control import (
     P4InfoIndex,
     P4RuntimeError,
 )
-from p4net.network import NetworkError
+from p4net.network import NetworkError, _cleanup
 from p4net.runtime import BMv2Switch
 from p4net.topo import Topology
 
@@ -281,10 +282,13 @@ async def test_network_shutdown_reports_and_retries_channel_close_failure(
         with pytest.raises(NetworkError, match="Network shutdown is still running"):
             await net.astart()
 
-        await asyncio.to_thread(net.stop)
+        redeliver = mocker.patch.object(_cleanup, "_redeliver")
+        await _cleanup._cleanup_before_signal(signal.SIGTERM)
+        redeliver.assert_called_once_with(signal.SIGTERM)
         assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
         assert close_calls == 2
         assert client._channel is None and client._loop is None
+        assert net not in _cleanup._ACTIVE
     finally:
         await net.astop()
         if channel is not None and original_close is not None:
