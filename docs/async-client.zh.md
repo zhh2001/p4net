@@ -193,7 +193,7 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 在同一事件循环中连接、使用和关闭异步客户端。[gRPC AsyncIO 文档](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats)也要求异步对象在创建它们的线程中使用。
 
-`await net.astop()` 会关闭网络缓存的异步客户端，再释放网络资源。自行构造的客户端需要用 `async with` 或 `await client.disconnect()` 关闭，完整示例使用了前一种方式。保持客户端所属的事件循环运行，直到关闭完成。`astop()` 被取消时会先完成清理，再传播 `CancelledError`。
+`await net.astop()` 会关闭网络缓存的异步客户端，再释放网络资源。自行构造的客户端需要用 `async with` 或 `await client.disconnect()` 关闭，完整示例使用了前一种方式。保持客户端所属的事件循环运行，直到关闭完成。取消 `astop()` 后，它会等待本次清理结束，再传播 `CancelledError`。如果清理失败，清理错误会保留在异常链中。
 
 `net.stop()` 在事件循环之外会等待清理完成，在事件循环内则启动后台清理并返回。需要等待关闭时，使用 `await net.astop()`。
 

@@ -505,7 +505,8 @@ class Network:
         """Wait for async clients and network resources to finish shutting down.
 
         Client event loops must remain running until shutdown completes.
-        Cancellation of this call is propagated after cleanup finishes.
+        Cancellation of this call is propagated after the cleanup attempt.
+        If cleanup fails, the cancellation carries the failure as its cause.
 
         Raises:
             NetworkError: if host process, BMv2, veth, or namespace cleanup
@@ -518,15 +519,21 @@ class Network:
             future = self._stop_future
         assert future is not None
         shutdown = asyncio.wrap_future(future)
-        cancelled = False
-        while not shutdown.done():
-            try:
-                await asyncio.shield(shutdown)
-            except asyncio.CancelledError:
-                cancelled = True
-        shutdown.result()
-        if cancelled:
-            raise asyncio.CancelledError
+        cancellation: asyncio.CancelledError | None = None
+        try:
+            while not shutdown.done():
+                try:
+                    await asyncio.shield(shutdown)
+                except asyncio.CancelledError as exc:
+                    if cancellation is None:
+                        cancellation = exc
+            shutdown.result()
+        except Exception as exc:
+            if cancellation is not None:
+                raise cancellation from exc
+            raise
+        if cancellation is not None:
+            raise cancellation
 
     # Ping helpers -------------------------------------------------------
 

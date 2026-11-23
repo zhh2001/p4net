@@ -193,7 +193,7 @@ If `astart()` is cancelled, it waits for the startup worker and closes the netwo
 
 Connect, use, and close an async client on the same event loop. The [gRPC AsyncIO documentation](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats) also requires async objects to be used on the thread where they were created.
 
-`await net.astop()` closes the network's cached async clients before releasing network resources. Close clients you construct yourself with `async with` or `await client.disconnect()`, as the complete example does. Keep the clients' event loops running until shutdown finishes. If `astop()` is cancelled, it finishes cleanup before propagating `CancelledError`.
+`await net.astop()` closes the network's cached async clients before releasing network resources. Close clients you construct yourself with `async with` or `await client.disconnect()`, as the complete example does. Keep the clients' event loops running until shutdown finishes. If `astop()` is cancelled, it waits for the cleanup attempt before propagating `CancelledError`. If cleanup fails, `CancelledError` carries the cleanup error as its cause.
 
 Outside an event loop, `net.stop()` waits for cleanup. Inside an event loop, it starts cleanup in a background thread and returns. Use `await net.astop()` when you need to wait for shutdown.
 

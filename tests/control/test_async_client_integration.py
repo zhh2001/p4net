@@ -239,8 +239,9 @@ async def test_network_stop_closes_async_connection(
         await asyncio.to_thread(net.stop)
 
 
+@pytest.mark.parametrize("cancel_waiter", [False, True])
 async def test_network_shutdown_reports_and_retries_channel_close_failure(
-    tmp_path: Path, mocker: MockerFixture
+    tmp_path: Path, mocker: MockerFixture, cancel_waiter: bool
 ) -> None:
     suffix = _suffix()
     switch, host = f"s{suffix}", f"h{suffix}"
@@ -257,6 +258,18 @@ async def test_network_shutdown_reports_and_retries_channel_close_failure(
     client._election_id = (0, 0)
     channel = None
     original_close = None
+    closing, release = asyncio.Event(), asyncio.Event()
+    waiters = []
+    cancellation = None
+
+    async def observe_cancelled_shutdown() -> None:
+        nonlocal cancellation
+        try:
+            await net.astop()
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            raise
+
     try:
         await client.connect()
         owner = asyncio.get_running_loop()
@@ -270,16 +283,37 @@ async def test_network_shutdown_reports_and_retries_channel_close_failure(
             close_calls += 1
             assert asyncio.get_running_loop() is owner
             if close_calls == 1:
+                closing.set()
+                await release.wait()
                 raise failure
             await original_close()
 
         mocker.patch.object(channel, "close", side_effect=close_once_failed)
+        shutdown = asyncio.create_task(net.astop())
+        waiters.append(shutdown)
+        await asyncio.wait_for(closing.wait(), timeout=2)
+        if cancel_waiter:
+            cancelled_shutdown = asyncio.create_task(observe_cancelled_shutdown())
+            waiters.append(cancelled_shutdown)
+            await asyncio.sleep(0)
+            assert cancelled_shutdown.cancel("shutdown waiter cancelled")
+            await asyncio.sleep(0)
+            assert not cancelled_shutdown.done()
+        release.set()
+        _, pending = await asyncio.wait(waiters, timeout=3)
+        assert not pending
         with pytest.raises(
             NetworkError, match=f"could not close gRPC channel for '{switch}'"
         ) as raised:
-            await net.astop()
+            await shutdown
         assert isinstance(raised.value.__cause__, ConnectionError)
         assert raised.value.__cause__.__cause__ is failure
+        if cancel_waiter:
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_shutdown
+            assert cancellation is not None and cancellation.args == ("shutdown waiter cancelled",)
+            assert cancellation.__cause__ is raised.value
+            assert cancelled_shutdown.cancelled()
         assert not net.is_running and not sw.bmv2.is_running()
         assert client._channel is channel
         assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
@@ -294,9 +328,13 @@ async def test_network_shutdown_reports_and_retries_channel_close_failure(
         assert client._channel is None and client._loop is None
         assert net not in _cleanup._ACTIVE
     finally:
-        await net.astop()
-        if channel is not None and original_close is not None:
-            await original_close()
+        release.set()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        try:
+            await net.astop()
+        finally:
+            if channel is not None and original_close is not None:
+                await original_close()
 
 
 @pytest.mark.parametrize("failure_stage", ["schedule", "disconnect", "timeout"])

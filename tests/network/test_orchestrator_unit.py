@@ -1733,15 +1733,26 @@ async def test_cancelled_astop_finishes_cleanup(patched: dict[str, Any], tmp_pat
     client = _LoopBoundClient()
     client.allow_disconnect.clear()
     net.switch("s1")._async_client = client  # type: ignore[assignment]
-    task = asyncio.create_task(net.astop())
+    cancellation = None
+
+    async def observe_shutdown() -> None:
+        nonlocal cancellation
+        try:
+            await net.astop()
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            raise
+
+    task = asyncio.create_task(observe_shutdown())
     try:
         await asyncio.wait_for(client.disconnect_started.wait(), timeout=2.0)
-        task.cancel()
+        task.cancel("shutdown waiter cancelled")
         await asyncio.sleep(0)
         assert not task.done()
         client.allow_disconnect.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=2.0)
+        assert cancellation is not None and cancellation.args == ("shutdown waiter cancelled",)
         assert client.closed
         assert not net.is_running
         patched["bmv2s"][0].stop.assert_called_once()
