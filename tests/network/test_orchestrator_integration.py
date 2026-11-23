@@ -214,6 +214,71 @@ def test_network_shutdown_reports_and_retries_sync_channel_close_failure(
         close()
 
 
+@pytest.mark.parametrize("closed_before_error", [False, True])
+def test_network_shutdown_handles_unexpected_sync_disconnect_errors(
+    tmp_path: Path, mocker: MockerFixture, closed_before_error: bool
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    sw = net.switch(switch)
+    client = sw.client
+    channel = client._channel
+    disconnect, close = client.disconnect, channel.close
+    failure = OSError("unexpected synchronous disconnect failure")
+    allow_close = threading.Event()
+
+    def close_for_retry() -> None:
+        if not allow_close.is_set():
+            raise RuntimeError("hold the channel open during automatic stream teardown")
+        close()
+
+    def disconnect_with_error() -> None:
+        if closed_before_error or attempt.call_count > 1:
+            disconnect()
+        if attempt.call_count == 1:
+            raise failure
+
+    try:
+        if not closed_before_error:
+            mocker.patch.object(channel, "close", side_effect=close_for_retry)
+        attempt = mocker.patch.object(client, "disconnect", side_effect=disconnect_with_error)
+        if closed_before_error:
+            net.stop()
+            assert client._channel is None and net not in _cleanup._ACTIVE
+        else:
+            with pytest.raises(
+                NetworkError, match=f"could not close gRPC channel for '{switch}'"
+            ) as raised:
+                net.stop()
+            assert isinstance(raised.value.__cause__, ConnectionError)
+            assert raised.value.__cause__.__cause__ is failure
+            assert net._clients == {switch: client} and net in _cleanup._ACTIVE
+            assert client._channel is channel
+            assert (
+                channel._channel.check_connectivity_state(False)
+                != grpc.ChannelConnectivity.SHUTDOWN.value[0]
+            )
+
+        assert not net.is_running and not sw.bmv2.is_running()
+        assert host not in _list_netns()
+        allow_close.set()
+        net.stop()
+        assert attempt.call_count == (1 if closed_before_error else 2)
+        assert client._channel is None and not net._clients and net not in _cleanup._ACTIVE
+    finally:
+        allow_close.set()
+        try:
+            net.stop()
+        finally:
+            disconnect()
+
+
 def test_shutdown_refuses_connect_on_retained_sync_client(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:

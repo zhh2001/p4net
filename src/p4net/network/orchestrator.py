@@ -1128,12 +1128,20 @@ class Network:
         for sw_name, client in list(self._clients.items()):
             try:
                 client.disconnect()
-            except ConnectionError as exc:
-                pending_clients[sw_name] = client
-                failed_channels.setdefault(sw_name, exc)
-                logger.warning("disconnect %r: %s", sw_name, exc)
             except Exception as exc:
-                logger.warning("disconnect %r: %r", sw_name, exc)
+                if isinstance(exc, ConnectionError):
+                    failure = exc
+                elif client._has_channel:
+                    failure = ConnectionError(
+                        f"Could not close gRPC channel for {client.target!r}: {exc!r}"
+                    )
+                    failure.__cause__ = exc
+                else:
+                    logger.warning("disconnect %r: %r", sw_name, exc)
+                    continue
+                pending_clients[sw_name] = client
+                failed_channels.setdefault(sw_name, failure)
+                logger.warning("disconnect %r: %s", sw_name, failure)
         self._clients = pending_clients
 
         # 2. BMv2 switches
