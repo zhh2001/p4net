@@ -1003,8 +1003,15 @@ class Network:
                     raise
                 scheduled.append(close)
             except Exception as exc:
-                if not self._settle_closed_async_loop(close):
-                    logger.warning("async client disconnect %r: %r", close.switch, exc)
+                if self._settle_closed_async_loop(close) or close.done():
+                    continue
+                failure = ConnectionError(
+                    f"Could not schedule async gRPC disconnect for {close.client.target!r}"
+                )
+                failure.__cause__ = exc
+                pending.append(close)
+                failed_channels[close.switch] = failure
+                logger.warning("could not schedule async disconnect %r: %r", close.switch, exc)
 
         try:
             current_loop = asyncio.get_running_loop()

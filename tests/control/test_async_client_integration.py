@@ -18,8 +18,11 @@ import signal
 import socket
 import threading
 import uuid
+from collections.abc import Coroutine
 from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import Future
 from contextlib import ExitStack
+from inspect import CORO_CLOSED, getcoroutinestate
 from pathlib import Path
 from runpy import run_path
 from typing import Any
@@ -294,6 +297,75 @@ async def test_network_shutdown_reports_and_retries_channel_close_failure(
         await net.astop()
         if channel is not None and original_close is not None:
             await original_close()
+
+
+async def test_network_shutdown_reports_and_retries_async_disconnect_scheduling_error(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    retry = None
+    try:
+        await client.connect()
+        channel = client._channel
+        owner = asyncio.get_running_loop()
+        schedule = asyncio.run_coroutine_threadsafe
+        failure = OSError("async disconnect scheduling failed")
+        attempts: list[Coroutine[Any, Any, None]] = []
+        retry_scheduled = asyncio.Event()
+
+        def fail_once(
+            coroutine: Coroutine[Any, Any, None], loop: asyncio.AbstractEventLoop
+        ) -> Future[None]:
+            assert loop is owner and loop.is_running()
+            attempts.append(coroutine)
+            if len(attempts) == 1:
+                raise failure
+            result = schedule(coroutine, loop)
+            loop.call_soon_threadsafe(retry_scheduled.set)
+            return result
+
+        mocker.patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fail_once)
+        # Keep the reader from closing the channel after BMv2 exits.
+        async with client._teardown_lock:
+            with pytest.raises(
+                NetworkError, match=f"could not close gRPC channel for '{switch}'"
+            ) as raised:
+                await net.astop()
+            assert isinstance(raised.value.__cause__, ConnectionError)
+            assert raised.value.__cause__.__cause__ is failure
+            (unscheduled,) = attempts
+            assert getcoroutinestate(unscheduled) == CORO_CLOSED
+            assert client._channel is channel
+            assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
+            assert not net.is_running and not sw.bmv2.is_running()
+            (pending,) = net._async_disconnects
+            assert pending.client is client and pending.future is None
+            assert net in _cleanup._ACTIVE
+
+            retry = asyncio.create_task(net.astop())
+            await asyncio.wait_for(retry_scheduled.wait(), timeout=3)
+        await asyncio.wait_for(retry, timeout=3)
+        assert len(attempts) == 2 and attempts[1] is not unscheduled
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert client._channel is None and client._loop is None
+        assert not net._async_disconnects and net not in _cleanup._ACTIVE
+    finally:
+        if retry is not None:
+            await asyncio.gather(retry, return_exceptions=True)
+        try:
+            await client.disconnect()
+        finally:
+            await net.astop()
 
 
 @pytest.mark.parametrize("during_close", [False, True])
