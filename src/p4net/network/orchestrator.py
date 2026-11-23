@@ -91,6 +91,7 @@ class _ShutdownFailures:
     switches: dict[str, Exception]
     veth_pairs: dict[VethPair, Exception]
     namespaces: dict[str, Exception]
+    host_commands: dict[int, Exception]
 
 
 def _hosts_with_ip(hosts: Mapping[str, RunningHost], *, ipv6: bool) -> dict[str, RunningHost]:
@@ -310,6 +311,7 @@ class Network:
                 or self._bmv2_switches
                 or self._veth_pairs
                 or self._namespaces
+                or self._host_commands
                 or any(client._has_channel for client in self._clients.values())
                 or any(not close.done() for close in self._async_disconnects)
             ):
@@ -402,9 +404,10 @@ class Network:
         Startup already in progress finishes or rolls back before teardown.
 
         Raises:
-            NetworkError: if BMv2, veth, or namespace cleanup fails, a gRPC
-                channel close fails or times out, or an async client's event
-                loop is paused or closed. Call again to retry pending cleanup.
+            NetworkError: if host command, BMv2, veth, or namespace cleanup
+                fails, a gRPC channel close fails or times out, or an async
+                client's event loop is paused or closed. Call again to retry
+                pending cleanup.
         """
         try:
             asyncio.get_running_loop()
@@ -422,6 +425,7 @@ class Network:
                     or self._bmv2_switches
                     or self._veth_pairs
                     or self._namespaces
+                    or self._host_commands
                 )
             ):
                 self._stop_future = Future()
@@ -466,6 +470,13 @@ class Network:
                     f"shutdown failed: could not destroy host namespaces {namespaces}"
                 )
                 error.__cause__ = next(iter(failures.namespaces.values()))
+            elif failures.host_commands:
+                pids = sorted(failures.host_commands)
+                error = NetworkError(
+                    "shutdown failed: could not stop host command processes "
+                    f"{', '.join(map(str, pids))}"
+                )
+                error.__cause__ = failures.host_commands[pids[0]]
             elif self._closed_async_client_loops:
                 switches = ", ".join(repr(name) for name in sorted(self._closed_async_client_loops))
                 error = NetworkError(
@@ -495,9 +506,10 @@ class Network:
         Cancellation is propagated after cleanup finishes.
 
         Raises:
-            NetworkError: if BMv2, veth, or namespace cleanup fails, a gRPC
-                channel close fails or times out, or an async client's event
-                loop is paused or closed. Call again to retry pending cleanup.
+            NetworkError: if host command, BMv2, veth, or namespace cleanup
+                fails, a gRPC channel close fails or times out, or an async
+                client's event loop is paused or closed. Call again to retry
+                pending cleanup.
         """
         with self._stop_lock:
             self.stop()
@@ -570,7 +582,9 @@ class Network:
         """Track the command group until the interactive caller finishes with it."""
         process: NSProcess | None = None
         try:
-            with defer_cleanup_signals():
+            with defer_cleanup_signals(), self._stop_lock:
+                if self._stop_future is not None:
+                    raise NetworkError("Network is shutting down or has stopped")
                 process = host.namespace.popen(
                     argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
                 )
@@ -578,11 +592,22 @@ class Network:
             yield process
         except BaseException:
             if process is not None:
-                process._stop_group()
+                with defer_cleanup_signals(), self._stop_lock:
+                    # The shutdown worker owns these handles once stop() starts.
+                    if self._stop_future is None and process in self._host_commands:
+                        try:
+                            process._stop_group()
+                        except Exception as exc:
+                            logger.warning("host command cleanup (pid=%s): %r", process.pid, exc)
+                        else:
+                            self._host_commands.discard(process)
             raise
+        else:
+            with self._stop_lock:
+                if self._stop_future is None:
+                    self._host_commands.discard(process)
         finally:
             if process is not None:
-                self._host_commands.discard(process)
                 for pipe in (process.stdout, process.stderr):
                     if pipe is not None:
                         pipe.close()
@@ -1012,12 +1037,18 @@ class Network:
         if self._running:
             logger.info("Network.stop: tearing down")
         # 0. user-spawned processes (xterm, etc.) — reap before namespaces vanish.
-        for command in tuple(self._host_commands):
+        failed_host_commands: dict[int, Exception] = {}
+        with self._stop_lock:
+            commands = tuple(self._host_commands)
+        for command in commands:
             try:
                 command._stop_group()
             except Exception as exc:
+                failed_host_commands[command.pid] = exc
                 logger.warning("host command cleanup (pid=%s): %r", command.pid, exc)
-        self._host_commands.clear()
+            else:
+                with self._stop_lock:
+                    self._host_commands.discard(command)
 
         for proc in list(self._spawned_processes):
             try:
@@ -1105,7 +1136,9 @@ class Network:
         self._namespaces = pending_namespaces
 
         # 5. unregister hooks
-        if self._registered and not (self._bmv2_switches or self._veth_pairs or self._namespaces):
+        if self._registered and not (
+            self._bmv2_switches or self._veth_pairs or self._namespaces or self._host_commands
+        ):
             with contextlib.suppress(Exception):
                 unregister(self)
             self._registered = False
@@ -1118,7 +1151,11 @@ class Network:
         self._host_iface_ip6.clear()
         self._running = False
         return _ShutdownFailures(
-            failed_channels, failed_switches, failed_veth_pairs, failed_namespaces
+            failed_channels,
+            failed_switches,
+            failed_veth_pairs,
+            failed_namespaces,
+            failed_host_commands,
         )
 
     # Context manager ----------------------------------------------------

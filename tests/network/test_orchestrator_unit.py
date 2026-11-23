@@ -1222,6 +1222,24 @@ def test_host_command_reaps_group_if_interrupted_while_spawning() -> None:
     assert not net._host_commands
 
 
+def test_interrupted_host_command_keeps_failed_cleanup_for_shutdown() -> None:
+    net = Network(Topology())
+    host = MagicMock()
+    process = host.namespace.popen.return_value
+    process._stop_group.side_effect = [PermissionError("could not stop command"), None]
+
+    with pytest.raises(KeyboardInterrupt), net._host_command(host, ["sleep", "60"]):
+        raise KeyboardInterrupt
+
+    assert net._host_commands == {process}
+    process.stdout.close.assert_called_once_with()
+    process.stderr.close.assert_called_once_with()
+
+    net.stop()
+    assert process._stop_group.call_count == 2
+    assert not net._host_commands
+
+
 def test_pingall6_skips_v4_only_hosts(patched: dict[str, Any], tmp_path: Path) -> None:
     topo = Topology()
     topo.add_host("h1", ip="10.0.0.1/24", ip6="fd00::1/64")
