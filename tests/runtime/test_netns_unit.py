@@ -45,6 +45,7 @@ def test_valid_name_accepted() -> None:
 def mock_netns(mocker: MockerFixture) -> MagicMock:
     fake = mocker.patch("p4net.runtime.netns._netns")
     fake.listnetns.return_value = []
+    mocker.patch("p4net.runtime.netns._namespace_identity", return_value=(4, 101, 1000))
     return fake
 
 
@@ -81,6 +82,40 @@ def test_destroy_raises_when_missing(mock_netns: MagicMock) -> None:
     with pytest.raises(NamespaceError):
         ns.destroy()
     mock_netns.remove.assert_not_called()
+
+
+def test_destroy_retry_leaves_a_replacement_namespace(
+    mock_netns: MagicMock, mocker: MockerFixture
+) -> None:
+    mock_netns.listnetns.return_value = ["alpha"]
+    mocker.patch(
+        "p4net.runtime.netns._namespace_identity",
+        side_effect=[(4, 101, 1000), (4, 456, 2000), (4, 456, 2000)],
+    )
+    mock_netns.remove.side_effect = PermissionError("could not remove namespace")
+    ns = NetworkNamespace("alpha")
+    with pytest.raises(PermissionError, match="could not remove namespace"):
+        ns.destroy()
+
+    ns.destroy()
+    mock_netns.remove.assert_called_once_with("alpha")
+
+
+def test_destroy_retry_removes_the_name_after_a_partial_failure(
+    mock_netns: MagicMock, mocker: MockerFixture
+) -> None:
+    mock_netns.listnetns.return_value = ["alpha"]
+    detached = (15, 322, 2000)
+    mocker.patch(
+        "p4net.runtime.netns._namespace_identity", side_effect=[(4, 101, 1000), detached, detached]
+    )
+    mock_netns.remove.side_effect = [PermissionError("could not unlink namespace name"), None]
+    ns = NetworkNamespace("alpha")
+    with pytest.raises(PermissionError, match="could not unlink namespace name"):
+        ns.destroy()
+
+    ns.destroy()
+    assert mock_netns.remove.call_count == 2
 
 
 def test_context_manager_creates_and_destroys(mock_netns: MagicMock) -> None:

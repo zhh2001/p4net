@@ -187,6 +187,8 @@ If a BMv2 process fails to stop, `Network` finishes the remaining cleanup and ra
 
 If deleting a veth pair fails, `Network` raises `NetworkError` naming the interfaces. It keeps the pair and its host namespaces for a retry and cleans up unrelated resources. Retry shutdown before restarting the network.
 
+If deleting a host namespace fails, `Network` raises `NetworkError` naming the namespace and retains it for the next shutdown attempt. Other host namespaces are still cleaned up.
+
 Repeated cleanup calls share the shutdown operation. Cleanup logs an error from one resource and continues with the others. After `fork()`, the child has an empty network registry and its own signal-cleanup state, so its cleanup does not stop the parent's networks. See the [fork limitation](known-limitations.md#1-grpc-connections-and-process-creation) for gRPC connections.
 
 ### IPv6 sysctl gating before interface up

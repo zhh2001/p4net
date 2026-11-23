@@ -27,6 +27,7 @@ from pathlib import Path
 
 import grpc
 import pytest
+from pyroute2 import netns as namespace_backend
 from pytest_mock import MockerFixture
 
 from p4net import Network
@@ -456,6 +457,60 @@ def test_stop_after_external_bmv2_kill(tmp_path: Path) -> None:
         # stop() must not raise even though BMv2 is already gone.
         net.stop()
     assert h1 not in _list_netns()
+
+
+def test_network_reports_and_retries_namespace_destroy_failure(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    host, other_host, switch = f"h{suffix}a", f"h{suffix}b", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_host(other_host, ip="10.0.0.2/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    topo.add_link(other_host, switch, port_b=2)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    ns = net.host(host).namespace
+    bmv2 = net.switch(switch).bmv2
+    remove = namespace_backend.remove
+    attempts = 0
+    failure = PermissionError("could not remove namespace")
+
+    def fail_first_remove(name: str) -> None:
+        nonlocal attempts
+        if name == host:
+            attempts += 1
+            if attempts == 1:
+                raise failure
+        remove(name)
+
+    try:
+        mocker.patch.object(namespace_backend, "remove", side_effect=fail_first_remove)
+        with pytest.raises(
+            NetworkError, match=f"could not destroy host namespaces '{host}'"
+        ) as raised:
+            net.stop()
+        assert raised.value.__cause__ is failure
+        assert net._namespaces == {host: ns}
+        assert ns.exists and other_host not in _list_netns()
+        assert not net.is_running and not bmv2.is_running()
+        assert not net._veth_pairs
+        assert f"{switch}-eth1" not in _list_iface_names_root()
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+
+        asyncio.run(net.astop())
+        assert attempts == 2 and not ns.exists
+        net.start()
+        assert net.host(host).namespace is not ns
+    finally:
+        try:
+            net.stop()
+        finally:
+            if ns.exists:
+                remove(host)
 
 
 @pytest.mark.parametrize("host_link", [False, True])

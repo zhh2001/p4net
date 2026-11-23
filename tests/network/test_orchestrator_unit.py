@@ -33,6 +33,7 @@ from p4net.network.orchestrator import (
     _parse_duration_ns,
     _ShutdownFailures,
 )
+from p4net.runtime import NamespaceError
 from p4net.topo import Link, LinkEndpoint, Topology, TopologyError
 
 # ---------------------------------------------------------------------------
@@ -535,7 +536,20 @@ def test_extra_compile_args_default_is_empty_tuple(patched: dict[str, Any], tmp_
 # ---------------------------------------------------------------------------
 
 
-def test_rollback_on_link_creation_failure(patched: dict[str, Any], tmp_path: Path) -> None:
+@pytest.mark.parametrize("namespace_delete_fails", [False, True])
+def test_rollback_on_link_creation_failure(
+    patched: dict[str, Any], tmp_path: Path, namespace_delete_fails: bool
+) -> None:
+    namespaces = {}
+    make_ns = patched["ns_factory"].side_effect
+
+    def make_namespace(name: str) -> MagicMock:
+        ns = namespaces[name] = make_ns(name)
+        if namespace_delete_fails and name == "h1":
+            ns.destroy.side_effect = [NamespaceError("could not remove namespace"), None]
+        return ns
+
+    patched["ns_factory"].side_effect = make_namespace
     veth = MagicMock()
     veth.create.side_effect = RuntimeError("veth create failed")
     patched["veth_factory"].side_effect = lambda *a, **kw: veth
@@ -544,6 +558,14 @@ def test_rollback_on_link_creation_failure(patched: dict[str, Any], tmp_path: Pa
         net.start()
     # The Network is left not-running.
     assert net.is_running is False
+    if namespace_delete_fails:
+        assert net._namespaces == {"h1": namespaces["h1"]}
+        patched["unregister"].assert_not_called()
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+        net.stop()
+        assert namespaces["h1"].destroy.call_count == 2
+        namespaces["h2"].destroy.assert_called_once()
     patched["unregister"].assert_called()
 
 

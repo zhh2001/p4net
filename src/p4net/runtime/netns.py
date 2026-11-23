@@ -47,6 +47,11 @@ def _validate_name(name: str) -> None:
         raise ValueError(f"namespace name longer than {_NAME_MAX_LEN} characters")
 
 
+def _namespace_identity(name: str) -> tuple[int, int, int]:
+    entry = os.stat(os.path.join(_netns.NETNS_RUN_DIR, name))
+    return entry.st_dev, entry.st_ino, entry.st_ctime_ns
+
+
 class NetworkNamespace:
     """A named Linux network namespace with explicit lifecycle.
 
@@ -58,6 +63,7 @@ class NetworkNamespace:
     def __init__(self, name: str) -> None:
         _validate_name(name)
         self._name = name
+        self._removal_identity: tuple[int, int, int] | None = None
 
     @property
     def name(self) -> str:
@@ -78,17 +84,38 @@ class NetworkNamespace:
         if self.exists:
             raise NamespaceError(f"namespace {self._name!r} already exists")
         _netns.create(self._name)
+        self._removal_identity = None
         logger.debug("created network namespace %r", self._name)
 
     def destroy(self) -> None:
         """Remove the namespace.
+
+        A retry leaves a replacement namespace with the same name alone.
 
         Raises:
             NamespaceError: if the namespace does not exist.
         """
         if not self.exists:
             raise NamespaceError(f"namespace {self._name!r} does not exist")
-        _netns.remove(self._name)
+        try:
+            identity = _namespace_identity(self._name)
+        except FileNotFoundError as exc:
+            raise NamespaceError(f"namespace {self._name!r} does not exist") from exc
+        if self._removal_identity is not None and self._removal_identity != identity:
+            logger.debug(
+                "network namespace %r was replaced since removal was attempted", self._name
+            )
+            return
+        self._removal_identity = identity
+        try:
+            _netns.remove(self._name)
+        except OSError:
+            # The bind mount may have been detached before removing the name failed.
+            with contextlib.suppress(OSError):
+                remaining = _namespace_identity(self._name)
+                if remaining[0] != identity[0]:
+                    self._removal_identity = remaining
+            raise
         logger.debug("destroyed network namespace %r", self._name)
 
     def exec(
