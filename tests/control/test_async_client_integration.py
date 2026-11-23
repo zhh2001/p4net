@@ -654,9 +654,9 @@ async def test_network_shutdown_reports_and_retries_async_disconnect_errors(
             await net.astop()
 
 
-@pytest.mark.parametrize("during_close", [False, True])
+@pytest.mark.parametrize("phase", ["before_close", "close_succeeds", "close_fails"])
 async def test_network_shutdown_handles_cancelled_async_disconnect(
-    tmp_path: Path, mocker: MockerFixture, during_close: bool
+    tmp_path: Path, mocker: MockerFixture, phase: str
 ) -> None:
     suffix = _suffix()
     switch, host = f"s{suffix}", f"h{suffix}"
@@ -673,6 +673,7 @@ async def test_network_shutdown_handles_cancelled_async_disconnect(
     closing, release = asyncio.Event(), asyncio.Event()
     scheduled = asyncio.get_running_loop().create_future()
     tasks = []
+    before_close = phase == "before_close"
     try:
         await client.connect()
         channel = client._channel
@@ -682,7 +683,7 @@ async def test_network_shutdown_handles_cancelled_async_disconnect(
         async def close_after_release() -> None:
             closing.set()
             await release.wait()
-            if not during_close and close_spy.await_count == 1:
+            if phase != "close_succeeds" and close_spy.await_count == 1:
                 raise failure
             await close()
 
@@ -692,7 +693,7 @@ async def test_network_shutdown_handles_cancelled_async_disconnect(
             await disconnect()
 
         close_spy = mocker.patch.object(channel, "close", side_effect=close_after_release)
-        if not during_close:
+        if before_close:
             concurrent_close = asyncio.create_task(disconnect())
             tasks.append(concurrent_close)
             await asyncio.wait_for(closing.wait(), timeout=2)
@@ -701,12 +702,15 @@ async def test_network_shutdown_handles_cancelled_async_disconnect(
         shutdown = asyncio.create_task(net.astop())
         tasks.append(shutdown)
         network_disconnect = await asyncio.wait_for(scheduled, timeout=2)
-        if during_close:
+        if not before_close:
             await asyncio.wait_for(closing.wait(), timeout=2)
-        assert network_disconnect.cancel()
-
-        if during_close:
+        assert network_disconnect.cancel("cancel network disconnect")
+        if not before_close:
+            await asyncio.sleep(0)
+            assert not shutdown.done()
             release.set()
+
+        if phase == "close_succeeds":
             await asyncio.wait_for(shutdown, timeout=3)
             disconnect_spy.assert_awaited_once()
         else:
@@ -714,15 +718,23 @@ async def test_network_shutdown_handles_cancelled_async_disconnect(
                 NetworkError, match=f"could not close gRPC channel for '{switch}'"
             ) as shutdown_error:
                 await asyncio.wait_for(shutdown, timeout=3)
-            assert isinstance(shutdown_error.value.__cause__, ConnectionError)
-            assert isinstance(shutdown_error.value.__cause__.__cause__, FutureCancelledError)
+            error = shutdown_error.value.__cause__
+            assert isinstance(error, ConnectionError)
+            cause = error.__cause__
+            if before_close:
+                assert isinstance(cause, FutureCancelledError)
+                release.set()
+                with pytest.raises(ConnectionError) as concurrent_error:
+                    await asyncio.wait_for(concurrent_close, timeout=3)
+                assert concurrent_error.value.__cause__ is failure
+            else:
+                assert isinstance(cause, asyncio.CancelledError)
+                assert cause.args == ("cancel network disconnect",)
+                assert isinstance(cause.__cause__, ConnectionError)
+                assert cause.__cause__.__cause__ is failure
             (pending,) = net._async_disconnects
             assert pending.client is client and pending.future is None
             assert net in _cleanup._ACTIVE
-            release.set()
-            with pytest.raises(ConnectionError) as concurrent_error:
-                await asyncio.wait_for(concurrent_close, timeout=3)
-            assert concurrent_error.value.__cause__ is failure
             assert client._channel is channel
             assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
             await asyncio.wait_for(net.astop(), timeout=3)

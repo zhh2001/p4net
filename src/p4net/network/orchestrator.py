@@ -85,6 +85,17 @@ class _AsyncDisconnect:
         # A finished future can still leave the client owning an open channel.
         return (self.future is None or self.future.done()) and self.client._owning_loop is None
 
+    async def disconnect(self) -> None:
+        try:
+            await self.client.disconnect()
+        except asyncio.CancelledError as exc:
+            # A cancelled cross-thread future discards the exception's cause.
+            if exc.__cause__ is None:
+                raise
+            raise ConnectionError(
+                f"Async disconnect for {self.client.target!r} was cancelled"
+            ) from exc
+
 
 @dataclass
 class _ShutdownFailures:
@@ -1018,7 +1029,7 @@ class Network:
                 )
                 continue
             try:
-                disconnect = close.client.disconnect()
+                disconnect = close.disconnect()
                 try:
                     close.future = asyncio.run_coroutine_threadsafe(disconnect, loop)
                 except BaseException:
