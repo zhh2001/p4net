@@ -81,9 +81,8 @@ class _AsyncDisconnect:
     future: Future[None] | None = None
 
     def done(self) -> bool:
-        if self.future is None:
-            return self.client._retire() is None
-        return self.future.done()
+        # A finished future can still leave the client owning an open channel.
+        return (self.future is None or self.future.done()) and self.client._retire() is None
 
 
 @dataclass

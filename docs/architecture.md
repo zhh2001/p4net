@@ -181,7 +181,7 @@ The cleanup order is:
 4. Veth pairs, then host namespaces.
 5. Cleanup registry entries and running-node handles.
 
-When a P4Runtime channel still needs to close, the network stays registered for cleanup at process exit or on a signal. Async channels close on their owning event loops.
+When a P4Runtime channel still needs to close, the network stays registered for cleanup at process exit or on a signal. Async channels close on their owning event loops. If an async channel times out during shutdown and later fails to close, retry shutdown before restarting.
 
 If shutdown fails to stop an interactive host command or a terminal opened with `net.xterm()`, `Network` finishes the remaining cleanup and raises `NetworkError` with the process ID. It keeps the process handle so the next `stop()` or `astop()` call can retry.
 
