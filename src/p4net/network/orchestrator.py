@@ -299,6 +299,7 @@ class Network:
             stopping = self._stop_future is not None and not self._stop_future.done()
             if (
                 stopping
+                or self._bmv2_switches
                 or any(client._has_channel for client in self._clients.values())
                 or any(not close.done() for close in self._async_disconnects)
             ):
@@ -391,9 +392,9 @@ class Network:
         Startup already in progress finishes or rolls back before teardown.
 
         Raises:
-            NetworkError: if a gRPC channel close fails or times out, or an async
-                client's event loop is paused or closed. After a pause, timeout,
-                or channel close error, call again to wait for shutdown.
+            NetworkError: if BMv2 fails to stop, a gRPC channel close fails or
+                times out, or an async client's event loop is paused or closed.
+                Call again to retry pending cleanup.
         """
         try:
             asyncio.get_running_loop()
@@ -404,7 +405,8 @@ class Network:
 
         with self._stop_lock:
             if self._stop_future is None or (
-                self._stop_future.done() and (self._clients or self._async_disconnects)
+                self._stop_future.done()
+                and (self._clients or self._async_disconnects or self._bmv2_switches)
             ):
                 self._stop_future = Future()
                 initiate = True
@@ -433,8 +435,12 @@ class Network:
                 start_thread_id = self._start_thread_id
             if startup is not None and start_thread_id != threading.get_ident():
                 startup.result()
-            failed_channels = self._do_stop()
-            if self._closed_async_client_loops:
+            failed_channels, failed_switches = self._do_stop()
+            if failed_switches:
+                switches = ", ".join(repr(name) for name in sorted(failed_switches))
+                error = NetworkError(f"shutdown failed: could not stop BMv2 process for {switches}")
+                error.__cause__ = next(iter(failed_switches.values()))
+            elif self._closed_async_client_loops:
                 switches = ", ".join(repr(name) for name in sorted(self._closed_async_client_loops))
                 error = NetworkError(
                     f"async client shutdown failed: event loop is closed for {switches}"
@@ -463,9 +469,9 @@ class Network:
         Cancellation is propagated after cleanup finishes.
 
         Raises:
-            NetworkError: if a gRPC channel close fails or times out, or an async
-                client's event loop is paused or closed. After a pause, timeout,
-                or channel close error, call again to wait for shutdown.
+            NetworkError: if BMv2 fails to stop, a gRPC channel close fails or
+                times out, or an async client's event loop is paused or closed.
+                Call again to retry pending cleanup.
         """
         with self._stop_lock:
             self.stop()
@@ -976,7 +982,7 @@ class Network:
         self._async_disconnects = pending
         return failed_channels
 
-    def _do_stop(self) -> dict[str, ConnectionError]:
+    def _do_stop(self) -> tuple[dict[str, ConnectionError], dict[str, Exception]]:
         if self._running:
             logger.info("Network.stop: tearing down")
         # 0. user-spawned processes (xterm, etc.) — reap before namespaces vanish.
@@ -1027,12 +1033,18 @@ class Network:
         self._clients = pending_clients
 
         # 2. BMv2 switches
+        pending_switches = {}
+        failed_switches: dict[str, Exception] = {}
         for sw_name, bmv2 in list(self._bmv2_switches.items()):
             try:
                 bmv2.stop()
+                if bmv2.is_running():
+                    raise RuntimeError(f"BMv2 process for {sw_name!r} is still running")
             except Exception as exc:
+                pending_switches[sw_name] = bmv2
+                failed_switches[sw_name] = exc
                 logger.warning("BMv2 stop %r: %r", sw_name, exc)
-        self._bmv2_switches.clear()
+        self._bmv2_switches = pending_switches
 
         # 3. veth pairs
         for veth in list(self._veth_pairs):
@@ -1052,7 +1064,7 @@ class Network:
         self._namespaces.clear()
 
         # 5. unregister hooks
-        if self._registered:
+        if self._registered and not self._bmv2_switches:
             with contextlib.suppress(Exception):
                 unregister(self)
             self._registered = False
@@ -1064,7 +1076,7 @@ class Network:
         self._host_iface_ip.clear()
         self._host_iface_ip6.clear()
         self._running = False
-        return failed_channels
+        return failed_channels, failed_switches
 
     # Context manager ----------------------------------------------------
 

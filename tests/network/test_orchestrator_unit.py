@@ -283,6 +283,7 @@ def patched(mocker: MockerFixture, tmp_path: Path) -> dict[str, Any]:
         m = MagicMock(name=f"bmv2-{name}")
         m.name = name
         m.grpc_address = f"127.0.0.1:{kw.get('grpc_port', 50051)}"
+        m.is_running.return_value = False
         bmv2_instances.append(m)
         return m
 
@@ -406,6 +407,30 @@ def test_stop_is_idempotent(patched: dict[str, Any], tmp_path: Path) -> None:
         assert v.destroy.call_count == 1
 
 
+def test_stop_retries_bmv2_process_that_stayed_alive(
+    patched: dict[str, Any], tmp_path: Path
+) -> None:
+    net = Network(_make_multi_link_host_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    pending, stopped = patched["bmv2s"]
+    pending.is_running.side_effect = [True, False]
+
+    with pytest.raises(NetworkError, match="could not stop BMv2 process for 's1'") as raised:
+        net.stop()
+    assert isinstance(raised.value.__cause__, RuntimeError)
+    assert "still running" in str(raised.value.__cause__)
+    assert not net.is_running
+    stopped.stop.assert_called_once()
+    patched["unregister"].assert_not_called()
+    for veth in patched["veths"]:
+        veth.destroy.assert_called_once()
+
+    net.stop()
+    assert pending.stop.call_count == 2
+    stopped.stop.assert_called_once()
+    patched["unregister"].assert_called_once_with(net)
+
+
 def test_start_already_running_raises(patched: dict[str, Any], tmp_path: Path) -> None:
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     net.start()
@@ -521,13 +546,19 @@ def test_rollback_on_link_creation_failure(patched: dict[str, Any], tmp_path: Pa
     patched["unregister"].assert_called()
 
 
-def test_rollback_on_bmv2_startup_failure(patched: dict[str, Any], tmp_path: Path) -> None:
+@pytest.mark.parametrize("stop_fails", [False, True])
+def test_rollback_on_bmv2_startup_failure(
+    patched: dict[str, Any], tmp_path: Path, stop_fails: bool
+) -> None:
     # Make wait_until_ready raise on the first BMv2.
     def make_bmv2(name: str, **kw: Any) -> MagicMock:
         m = MagicMock()
         m.name = name
         m.grpc_address = "127.0.0.1:0"
         m.wait_until_ready.side_effect = RuntimeError("bmv2 not ready")
+        m.is_running.return_value = False
+        if stop_fails:
+            m.stop.side_effect = [PermissionError("could not signal BMv2"), None]
         patched["bmv2s"].append(m)
         return m
 
@@ -539,6 +570,11 @@ def test_rollback_on_bmv2_startup_failure(patched: dict[str, Any], tmp_path: Pat
     for v in patched["veths"]:
         v.destroy.assert_called()
     assert net.is_running is False
+    if stop_fails:
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+        net.stop()
+        assert patched["bmv2s"][0].stop.call_count == 2
 
 
 @pytest.mark.parametrize("close_fails", [False, True])
@@ -1520,9 +1556,9 @@ async def test_astop_closes_the_client_if_creation_already_started(
         assert release.wait(timeout=3.0)
         return client
 
-    def begin_stop() -> None:
+    def begin_stop() -> tuple[dict[str, ConnectionError], dict[str, Exception]]:
         stopping.set()
-        do_stop()
+        return do_stop()
 
     factory = mocker.patch("p4net.network.nodes.AsyncP4RuntimeClient", side_effect=construct)
     mocker.patch.object(net, "_do_stop", side_effect=begin_stop)

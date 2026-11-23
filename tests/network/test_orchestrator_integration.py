@@ -14,6 +14,7 @@ failure of an earlier run does not collide with this one.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
 import socket
@@ -455,6 +456,57 @@ def test_stop_after_external_bmv2_kill(tmp_path: Path) -> None:
         # stop() must not raise even though BMv2 is already gone.
         net.stop()
     assert h1 not in _list_netns()
+
+
+def test_network_reports_and_retries_bmv2_stop_failure(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    host, switch = f"h{suffix}", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    bmv2 = net.switch(switch).bmv2
+    proc = bmv2._proc
+    assert proc is not None
+    terminate = proc.terminate
+    failure = PermissionError("could not signal BMv2")
+    attempts = 0
+
+    def fail_first_terminate() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise failure
+        terminate()
+
+    try:
+        mocker.patch.object(proc, "terminate", side_effect=fail_first_terminate)
+        with pytest.raises(
+            NetworkError, match=f"could not stop BMv2 process for '{switch}'"
+        ) as raised:
+            net.stop()
+        assert raised.value.__cause__ is failure
+        assert bmv2.is_running() and bmv2._proc is proc
+        assert not net.is_running and not net.switches
+        assert host not in _list_netns()
+        assert f"{switch}-eth1" not in _list_iface_names_root()
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+
+        asyncio.run(net.astop())
+        assert attempts == 2
+        assert proc.poll() is not None
+        net.start()
+        assert net.switch(switch).bmv2 is not bmv2
+    finally:
+        try:
+            net.stop()
+        finally:
+            bmv2.stop()
 
 
 # ---------------------------------------------------------------------------
