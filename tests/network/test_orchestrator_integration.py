@@ -34,7 +34,7 @@ from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
 from p4net.control import ConnectionError
 from p4net.network import NetworkError, RunningHost
-from p4net.runtime import BMv2StartupError
+from p4net.runtime import BMv2StartupError, LinkError
 from p4net.topo import Topology
 
 pytestmark = [
@@ -456,6 +456,65 @@ def test_stop_after_external_bmv2_kill(tmp_path: Path) -> None:
         # stop() must not raise even though BMv2 is already gone.
         net.stop()
     assert h1 not in _list_netns()
+
+
+@pytest.mark.parametrize("host_link", [False, True])
+def test_network_reports_and_retries_veth_destroy_failure(
+    tmp_path: Path, mocker: MockerFixture, host_link: bool
+) -> None:
+    suffix = _suffix()
+    host, other_host = f"h{suffix}a", f"h{suffix}b"
+    switch, other_switch = f"s{suffix}a", f"s{suffix}b"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_host(other_host, ip="10.0.0.2/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    topo.add_link(other_host, switch, port_b=2)
+    if not host_link:
+        topo.add_switch(
+            other_switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+        )
+        topo.add_link(switch, other_switch, port_a=3, port_b=1)
+
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    pair = net._veth_pairs[0 if host_link else -1]
+    destroy = pair.destroy
+    failure = LinkError("injected interface deletion failure")
+    switches = tuple(net.switches.values())
+
+    def fail_once() -> None:
+        if attempt.call_count == 1:
+            raise failure
+        destroy()
+
+    attempt = mocker.patch.object(pair, "destroy", side_effect=fail_once)
+    try:
+        with pytest.raises(NetworkError, match="could not destroy veth") as raised:
+            net.stop()
+        assert pair.name_a in str(raised.value) and pair.name_b in str(raised.value)
+        assert raised.value.__cause__ is failure
+        assert net._veth_pairs == [pair]
+        assert all(not sw.bmv2.is_running() for sw in switches)
+        assert other_host not in _list_netns()
+        assert (host in _list_netns()) == host_link
+        assert pair.name_b in _list_iface_names_root()
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+
+        asyncio.run(net.astop())
+        assert attempt.call_count == 2
+        assert host not in _list_netns()
+        assert pair.name_b not in _list_iface_names_root()
+        net.start()
+        assert net.is_running
+    finally:
+        try:
+            net.stop()
+        finally:
+            if pair.name_b in _list_iface_names_root():
+                destroy()
 
 
 def test_network_reports_and_retries_bmv2_stop_failure(

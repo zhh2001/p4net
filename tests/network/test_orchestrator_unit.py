@@ -31,6 +31,7 @@ from p4net.network.orchestrator import (
     _add_durations,
     _format_duration_ns,
     _parse_duration_ns,
+    _ShutdownFailures,
 )
 from p4net.topo import Link, LinkEndpoint, Topology, TopologyError
 
@@ -1556,7 +1557,7 @@ async def test_astop_closes_the_client_if_creation_already_started(
         assert release.wait(timeout=3.0)
         return client
 
-    def begin_stop() -> tuple[dict[str, ConnectionError], dict[str, Exception]]:
+    def begin_stop() -> _ShutdownFailures:
         stopping.set()
         return do_stop()
 

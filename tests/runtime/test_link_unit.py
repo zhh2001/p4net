@@ -363,6 +363,35 @@ def test_failed_destroy_retains_positions_for_retry(patch_netlink: MagicMock) ->
     assert pair.namespace_of("a") is ns_a and pair.namespace_of("b") is ns_b
 
 
+def test_destroy_retry_does_not_remove_a_replacement_interface(patch_netlink: MagicMock) -> None:
+    pair = VethPair("va", "vb")
+    _force_created(pair)
+    patch_netlink.link_lookup.side_effect = [[21], [84]]
+    patch_netlink.link.side_effect = OSError("delete failed")
+    with pytest.raises(LinkError, match="delete failed"):
+        pair.destroy()
+
+    pair.destroy()
+    patch_netlink.link.assert_called_once_with("del", index=21)
+    assert not pair._created
+
+
+def test_destroy_can_finish_if_kernel_already_removed_the_pair(
+    patch_netlink: MagicMock, mocker: MockerFixture
+) -> None:
+    ns_a = NetworkNamespace("nsA")
+    pair = VethPair("va", "vb")
+    pair._ns["a"] = ns_a
+    _force_created(pair)
+    netns = mocker.patch("p4net.runtime.link.NetNS", side_effect=FileNotFoundError())
+
+    pair.destroy()
+    netns.assert_called_once_with("nsA", flags=0)
+    patch_netlink.link_lookup.assert_called_once_with(ifname="vb")
+    patch_netlink.link.assert_not_called()
+    assert not pair._created
+
+
 @pytest.mark.parametrize("names", [("va", "vb"), ("甲", "乙")])
 def test_recreate_after_manual_moves_starts_in_configured_root(
     patch_netlink: MagicMock, mocker: MockerFixture, names: tuple[str, str]
@@ -583,7 +612,7 @@ def test_lookup_failure_raises_link_error(patch_netlink: MagicMock) -> None:
 def test_netns_handle_used_when_side_is_in_namespace(
     patch_netlink: MagicMock, mocker: MockerFixture
 ) -> None:
-    """After moving side 'a' into nsZ, follow-up ops should target NetNS('nsZ')."""
+    """After moving side 'a' into nsZ, follow-up ops should target that namespace."""
     netns_factory = mocker.patch("p4net.runtime.link.NetNS", return_value=patch_netlink)
     patch_netlink.link_lookup.return_value = [10]
     v = VethPair("va", "vb")
@@ -592,4 +621,4 @@ def test_netns_handle_used_when_side_is_in_namespace(
     v.move_to_namespace("a", target)
     netns_factory.reset_mock()
     v.set_up("a")
-    netns_factory.assert_called_with("nsZ")
+    netns_factory.assert_called_with("nsZ", flags=0)

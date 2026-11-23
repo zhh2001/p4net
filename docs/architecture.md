@@ -185,6 +185,8 @@ The cleanup order is:
 
 If a BMv2 process fails to stop, `Network` finishes the remaining cleanup and raises `NetworkError` naming the affected switch. It keeps the process handle for a retry. Call `net.stop()` or `await net.astop()` again to finish cleanup before restarting the network.
 
+If deleting a veth pair fails, `Network` raises `NetworkError` naming the interfaces. It keeps the pair and its host namespaces for a retry and cleans up unrelated resources. Retry shutdown before restarting the network.
+
 Repeated cleanup calls share the shutdown operation. Cleanup logs an error from one resource and continues with the others. After `fork()`, the child has an empty network registry and its own signal-cleanup state, so its cleanup does not stop the parent's networks. See the [fork limitation](known-limitations.md#1-grpc-connections-and-process-creation) for gRPC connections.
 
 ### IPv6 sysctl gating before interface up

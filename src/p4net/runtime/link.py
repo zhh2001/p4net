@@ -67,6 +67,7 @@ class VethPair:
         self._targets: dict[Side, NetworkNamespace | None] = {"a": namespace_a, "b": namespace_b}
         self._ns: dict[Side, NetworkNamespace | str | None] = {"a": None, "b": None}
         self._created = False
+        self._destroy_index: int | None = None
 
     @property
     def name_a(self) -> str:
@@ -94,14 +95,20 @@ class VethPair:
         return None if isinstance(ns, str) else ns
 
     @contextmanager
-    def _netlink_for(self, side: Side) -> Iterator[Any]:
+    def _netlink_for(self, side: Side, *, allow_missing: bool = False) -> Iterator[Any]:
         ns = self._ns[side]
-        if ns is None:
-            ipr: Any = IPRoute()
-        elif isinstance(ns, str):
-            ipr = NetNS(ns, flags=0)
-        else:
-            ipr = NetNS(ns.name)
+        try:
+            if ns is None:
+                ipr: Any = IPRoute()
+            elif isinstance(ns, str):
+                ipr = NetNS(ns, flags=0)
+            else:
+                ipr = NetNS(ns.name, flags=0)
+        except FileNotFoundError:
+            if not allow_missing:
+                raise
+            yield None
+            return
         try:
             yield ipr
         finally:
@@ -203,20 +210,28 @@ class VethPair:
             raise
 
     def destroy(self) -> None:
-        """Delete both ends and clear their positions, retaining creation targets."""
+        """Delete the pair if it still exists and keep the creation targets."""
         if not self._created:
             raise LinkError("veth pair has not been created (or already destroyed)")
-        # Deleting either side deletes both ends. We delete from side 'a'.
-        side: Side = "a"
         try:
-            with self._netlink_for(side) as ipr:
-                idx = self._index(ipr, self._names[side])
-                ipr.link("del", index=idx)
+            with self._netlink_for("a", allow_missing=True) as ipr:
+                indexes = ipr.link_lookup(ifname=self.name_a) if ipr is not None else []
+                if indexes:
+                    index = int(indexes[0])
+                    # A retry must target the interface observed on the first attempt.
+                    if self._destroy_index is None or self._destroy_index == index:
+                        self._destroy_index = index
+                        ipr.link("del", index=index)
+                else:
+                    with self._netlink_for("b", allow_missing=True) as peer:
+                        if peer is not None and peer.link_lookup(ifname=self.name_b):
+                            raise LinkError(f"interface {self.name_a!r} not found in its namespace")
         except LinkError:
             raise
         except Exception as exc:
             raise LinkError(f"failed to destroy veth pair: {exc}") from exc
         self._created = False
+        self._destroy_index = None
         self._ns = {"a": None, "b": None}
         logger.debug("destroyed veth pair %r <-> %r", self._names["a"], self._names["b"])
 
@@ -237,6 +252,8 @@ class VethPair:
                 # to open the destination namespace itself.
                 ipr.link("set", index=idx, net_ns_fd=f"/var/run/netns/{ns.name}")
                 self._ns[side] = ns
+        if side == "a":
+            self._destroy_index = None
         logger.debug(
             "moved %r to namespace %r", ifname, ns.name if ns is not None else _PID_ONE_NETNS
         )
