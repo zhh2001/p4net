@@ -202,6 +202,7 @@ class Network:
         self._host_iface_ip6: dict[str, dict[str, str | None]] = {}
         self._spawned_processes: list[NSProcess] = []
         self._host_commands: set[NSProcess] = set()
+        self._pending_async_retirements: dict[str, RunningSwitch] = {}
         self._async_disconnects: list[_AsyncDisconnect] = []
         self._closed_async_client_loops: set[str] = set()
         self._stop_lock = threading.RLock()
@@ -318,6 +319,7 @@ class Network:
                 or any(
                     client._has_channel or not client._retired for client in self._clients.values()
                 )
+                or self._pending_async_retirements
                 or any(not close.done() for close in self._async_disconnects)
             ):
                 raise NetworkError("Network shutdown is still running")
@@ -1086,6 +1088,7 @@ class Network:
     def _has_pending_cleanup(self) -> bool:
         return bool(
             self._clients
+            or self._pending_async_retirements
             or self._async_disconnects
             or self._bmv2_switches
             or self._veth_pairs
@@ -1146,13 +1149,23 @@ class Network:
                 logger.warning("retire client %r: %s", sw_name, failure)
 
         # 1a. Close async clients on the loops that own their gRPC resources.
-        for sw_name, rs in list(self._running_switches.items()):
-            cleanup = rs._take_async_client_for_stop()
+        pending_async_retirements: dict[str, RunningSwitch] = {}
+        for sw_name, rs in (self._pending_async_retirements | self._running_switches).items():
+            try:
+                cleanup = rs._take_async_client_for_stop()
+            except Exception as exc:
+                failure = ConnectionError(f"Could not retire async P4Runtime client: {exc!r}")
+                failure.__cause__ = exc
+                pending_async_retirements[sw_name] = rs
+                failed_channels[sw_name] = failure
+                logger.warning("retire async client %r: %s", sw_name, failure)
+                continue
             if cleanup is None:
                 continue
             ac, loop = cleanup
             if loop is not None:
                 self._async_disconnects.append(_AsyncDisconnect(sw_name, ac, loop))
+        self._pending_async_retirements = pending_async_retirements
         failed_channels.update(self._close_async_clients())
 
         # 1. P4Runtime clients

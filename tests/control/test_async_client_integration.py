@@ -46,7 +46,7 @@ from p4net.control import (
     P4InfoIndex,
     P4RuntimeError,
 )
-from p4net.network import NetworkError, _cleanup
+from p4net.network import NetworkError, NetworkNotRunningError, _cleanup
 from p4net.runtime import BMv2Switch
 from p4net.topo import Topology
 
@@ -318,6 +318,82 @@ async def test_network_stop_closes_async_connection(
     finally:
         await client.disconnect()
         await asyncio.to_thread(net.stop)
+
+
+@pytest.mark.parametrize("channel_closed_before_retry", [False, True])
+async def test_shutdown_continues_after_async_client_retirement_fails(
+    tmp_path: Path, mocker: MockerFixture, channel_closed_before_retry: bool
+) -> None:
+    suffix = _suffix()
+    switch, peer, hostname = f"s{suffix}a", f"s{suffix}b", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(hostname, ip="10.0.0.1/24")
+    for name in (switch, peer):
+        topo.add_switch(name, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(hostname, switch, port_b=1)
+    topo.add_link(switch, peer, port_a=2, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    failing_switch, peer_switch = net.switch(switch), net.switch(peer)
+    client, peer_client = failing_switch.async_client, peer_switch.async_client
+    client._election_id = peer_client._election_id = (0, 0)
+    namespace = net.host(hostname).namespace
+    owner = asyncio.get_running_loop()
+    retried = asyncio.Event()
+    failure = OSError("async client retirement failed")
+    retire = client._retire
+    retry = None
+
+    def fail_once() -> asyncio.AbstractEventLoop | None:
+        if attempt.call_count == 1:
+            raise failure
+        loop = retire()
+        owner.call_soon_threadsafe(retried.set)
+        return loop
+
+    try:
+        await client.connect()
+        await peer_client.connect()
+        channel = client._channel
+        attempt = mocker.patch.object(client, "_retire", side_effect=fail_once)
+        # Keep the failed client's reader from closing its channel after BMv2 exits.
+        async with client._teardown_lock:
+            with pytest.raises(
+                NetworkError, match=f"could not close gRPC channel for '{switch}'"
+            ) as raised:
+                await net.astop()
+            assert isinstance(raised.value.__cause__, ConnectionError)
+            assert raised.value.__cause__.__cause__ is failure
+            attempt.assert_called_once_with()
+            assert peer_client._channel is None and peer_switch.client._has_channel is False
+            assert not net.is_running and not net.switches and not net._veth_pairs
+            assert not namespace.exists
+            assert not failing_switch.bmv2.is_running() and not peer_switch.bmv2.is_running()
+            assert client._channel is channel and net in _cleanup._ACTIVE
+            assert failing_switch._async_client is client
+            with pytest.raises(NetworkNotRunningError):
+                _ = failing_switch.async_client
+
+            if not channel_closed_before_retry:
+                retry = asyncio.create_task(net.astop())
+                await asyncio.wait_for(retried.wait(), timeout=3)
+
+        if channel_closed_before_retry:
+            await client.disconnect()
+            assert client._channel is None and not client._retired
+            with pytest.raises(NetworkError, match="Network shutdown is still running"):
+                await net.astart()
+            await net.astop()
+        else:
+            assert retry is not None
+            await asyncio.wait_for(retry, timeout=3)
+        assert client._retired and failing_switch._async_client is None
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert client._channel is None and net not in _cleanup._ACTIVE
+    finally:
+        if retry is not None:
+            await asyncio.gather(retry, return_exceptions=True)
+        await net.astop()
 
 
 @pytest.mark.parametrize("cancel_waiter", [False, True])
