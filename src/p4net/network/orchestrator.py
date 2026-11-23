@@ -1026,31 +1026,39 @@ class Network:
                 pending.append(close)
                 continue
             try:
-                future.result(timeout=5.0)
+                # Read the task's exception separately from a timeout waiting for it.
+                error = future.exception(timeout=5.0)
             except FutureTimeoutError:
                 if not self._settle_closed_async_loop(close):
                     pending.append(close)
                     logger.warning("async client disconnect %r timed out", close.switch)
-            except (ConnectionError, FutureCancelledError) as exc:
-                if self._settle_closed_async_loop(close):
-                    continue
-                if isinstance(exc, ConnectionError):
-                    failure = exc
-                else:
-                    if close.done():
-                        continue
-                    failure = ConnectionError(
-                        f"Async disconnect cancelled before closing gRPC channel for "
-                        f"{close.client.target!r}"
-                    )
-                    failure.__cause__ = exc
-                close.future = None
-                pending.append(close)
-                failed_channels[close.switch] = failure
-                logger.warning("async client disconnect %r: %s", close.switch, failure)
-            except Exception as exc:
-                if not self._settle_closed_async_loop(close):
-                    logger.warning("async client disconnect %r: %r", close.switch, exc)
+                continue
+            except FutureCancelledError as exc:
+                error = exc
+            if error is None:
+                continue
+            if not isinstance(error, Exception):
+                raise error
+            if self._settle_closed_async_loop(close):
+                continue
+            if isinstance(error, ConnectionError):
+                failure = error
+            elif close.done():
+                if not isinstance(error, FutureCancelledError):
+                    logger.warning("async client disconnect %r: %r", close.switch, error)
+                continue
+            else:
+                reason = (
+                    "was cancelled"
+                    if isinstance(error, FutureCancelledError)
+                    else f"failed with {error!r}"
+                )
+                failure = ConnectionError(f"Async disconnect for {close.client.target!r} {reason}")
+                failure.__cause__ = error
+            close.future = None
+            pending.append(close)
+            failed_channels[close.switch] = failure
+            logger.warning("async client disconnect %r: %s", close.switch, failure)
         self._async_disconnects = pending
         return failed_channels
 

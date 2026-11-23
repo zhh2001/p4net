@@ -1608,8 +1608,8 @@ class _LoopBoundClient:
     async def create(cls) -> _LoopBoundClient:
         return cls()
 
-    def _retire(self) -> asyncio.AbstractEventLoop:
-        return self._loop
+    def _retire(self) -> asyncio.AbstractEventLoop | None:
+        return None if self.closed else self._loop
 
     async def disconnect(self) -> None:
         assert asyncio.get_running_loop() is self._loop
@@ -1836,22 +1836,49 @@ def test_closed_loop_error_persists_when_other_async_client_finishes(
         loop.close()
 
 
+@pytest.mark.parametrize("closed_before_error", [False, True])
 async def test_astop_continues_cleanup_after_client_error(
-    patched: dict[str, Any], tmp_path: Path, caplog: pytest.LogCaptureFixture
+    patched: dict[str, Any],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    closed_before_error: bool,
 ) -> None:
+    error = RuntimeError("disconnect failed")
+
     class FailingClient(_LoopBoundClient):
+        target = "127.0.0.1:50051"
+        fail = True
+
         async def disconnect(self) -> None:
-            assert asyncio.get_running_loop() is self._loop
-            raise RuntimeError("disconnect failed")
+            if closed_before_error or not self.fail:
+                await super().disconnect()
+            if self.fail:
+                raise error
 
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     net.start()
-    net.switch("s1")._async_client = FailingClient()  # type: ignore[assignment]
-    await net.astop()
+    client = FailingClient()
+    net.switch("s1")._async_client = client  # type: ignore[assignment]
+    if closed_before_error:
+        await net.astop()
+    else:
+        with pytest.raises(NetworkError, match="could not close gRPC channel for 's1'") as raised:
+            await net.astop()
+        assert isinstance(raised.value.__cause__, ConnectionError)
+        assert raised.value.__cause__.__cause__ is error
+        (pending,) = net._async_disconnects
+        assert pending.client is client and pending.future is None
+        patched["unregister"].assert_not_called()
+
     assert "disconnect failed" in caplog.text
     assert not net.is_running
     patched["clients"][0].disconnect.assert_called_once()
     patched["bmv2s"][0].stop.assert_called_once()
+
+    client.fail = False
+    await net.astop()
+    assert client.disconnect_count == 1
+    assert not net._async_disconnects
     patched["unregister"].assert_called_once_with(net)
 
 

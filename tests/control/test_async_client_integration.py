@@ -299,8 +299,9 @@ async def test_network_shutdown_reports_and_retries_channel_close_failure(
             await original_close()
 
 
-async def test_network_shutdown_reports_and_retries_async_disconnect_scheduling_error(
-    tmp_path: Path, mocker: MockerFixture
+@pytest.mark.parametrize("failure_stage", ["schedule", "disconnect", "timeout"])
+async def test_network_shutdown_reports_and_retries_async_disconnect_errors(
+    tmp_path: Path, mocker: MockerFixture, failure_stage: str
 ) -> None:
     suffix = _suffix()
     switch, host = f"s{suffix}", f"h{suffix}"
@@ -313,27 +314,38 @@ async def test_network_shutdown_reports_and_retries_async_disconnect_scheduling_
     sw = net.switch(switch)
     client = sw.async_client
     client._election_id = (0, 0)
+    disconnect = client.disconnect
     retry = None
     try:
         await client.connect()
         channel = client._channel
         owner = asyncio.get_running_loop()
         schedule = asyncio.run_coroutine_threadsafe
-        failure = OSError("async disconnect scheduling failed")
+        failure_type = TimeoutError if failure_stage == "timeout" else OSError
+        failure = failure_type("async disconnect failed")
         attempts: list[Coroutine[Any, Any, None]] = []
         retry_scheduled = asyncio.Event()
+
+        async def fail_during_disconnect() -> None:
+            assert asyncio.get_running_loop() is owner
+            if len(attempts) == 1:
+                raise failure
+            await disconnect()
 
         def fail_once(
             coroutine: Coroutine[Any, Any, None], loop: asyncio.AbstractEventLoop
         ) -> Future[None]:
             assert loop is owner and loop.is_running()
             attempts.append(coroutine)
-            if len(attempts) == 1:
+            if len(attempts) == 1 and failure_stage == "schedule":
                 raise failure
             result = schedule(coroutine, loop)
-            loop.call_soon_threadsafe(retry_scheduled.set)
+            if len(attempts) > 1:
+                loop.call_soon_threadsafe(retry_scheduled.set)
             return result
 
+        if failure_stage != "schedule":
+            mocker.patch.object(client, "disconnect", side_effect=fail_during_disconnect)
         mocker.patch.object(asyncio, "run_coroutine_threadsafe", side_effect=fail_once)
         # Keep the reader from closing the channel after BMv2 exits.
         async with client._teardown_lock:
@@ -342,9 +354,13 @@ async def test_network_shutdown_reports_and_retries_async_disconnect_scheduling_
             ) as raised:
                 await net.astop()
             assert isinstance(raised.value.__cause__, ConnectionError)
-            assert raised.value.__cause__.__cause__ is failure
-            (unscheduled,) = attempts
-            assert getcoroutinestate(unscheduled) == CORO_CLOSED
+            cause = raised.value.__cause__.__cause__
+            if failure_stage == "timeout":
+                assert isinstance(cause, TimeoutError) and cause.args == failure.args
+            else:
+                assert cause is failure
+            (first_attempt,) = attempts
+            assert getcoroutinestate(first_attempt) == CORO_CLOSED
             assert client._channel is channel
             assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
             assert not net.is_running and not sw.bmv2.is_running()
@@ -355,7 +371,7 @@ async def test_network_shutdown_reports_and_retries_async_disconnect_scheduling_
             retry = asyncio.create_task(net.astop())
             await asyncio.wait_for(retry_scheduled.wait(), timeout=3)
         await asyncio.wait_for(retry, timeout=3)
-        assert len(attempts) == 2 and attempts[1] is not unscheduled
+        assert len(attempts) == 2 and attempts[1] is not first_attempt
         assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
         assert client._channel is None and client._loop is None
         assert not net._async_disconnects and net not in _cleanup._ACTIVE
@@ -363,7 +379,7 @@ async def test_network_shutdown_reports_and_retries_async_disconnect_scheduling_
         if retry is not None:
             await asyncio.gather(retry, return_exceptions=True)
         try:
-            await client.disconnect()
+            await disconnect()
         finally:
             await net.astop()
 
