@@ -362,9 +362,10 @@ class Network:
         """Bring the topology up in a worker thread without blocking the event loop.
 
         Call from the main thread's event loop to install signal cleanup
-        handlers. Cancellation waits for startup and then shuts the network
-        down before propagating. Startup failures roll back partial resources
-        and propagate their original exception.
+        handlers. Cancellation waits for startup and attempts shutdown before
+        propagating. A shutdown error becomes the cause of the cancellation.
+        Startup failures roll back partial resources and propagate their
+        original exception.
 
         Raises:
             NetworkAlreadyRunningError: if already running or starting.
@@ -381,23 +382,28 @@ class Network:
                 self._end_start(future)
             raise
 
-        cancelled = False
+        cancellation: asyncio.CancelledError | None = None
         try:
             while not startup.done():
                 try:
                     await asyncio.shield(startup)
-                except asyncio.CancelledError:
-                    cancelled = True
+                except asyncio.CancelledError as exc:
+                    if cancellation is None:
+                        cancellation = exc
             startup.result()
         except BaseException:
             await wait_for_signal_cleanup()
-            if cancelled and self._stop_future is not None:
+            if cancellation is None or self._stop_future is None:
+                raise
+        if cancellation is not None:
+            try:
                 await self.astop()
-                raise asyncio.CancelledError from None
-            raise
-        if cancelled:
-            await self.astop()
-            raise asyncio.CancelledError
+            except asyncio.CancelledError as exc:
+                # astop has already waited for cleanup and chained any failure.
+                raise cancellation from exc.__cause__
+            except Exception as exc:
+                raise cancellation from exc
+            raise cancellation from None
 
     def stop(self) -> None:
         """Tear the network down. Repeated calls are safe.

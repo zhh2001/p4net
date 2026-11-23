@@ -184,6 +184,87 @@ async def test_cancelled_astart_cleans_up_real_switch_and_links(
         await net.astop()
 
 
+@pytest.mark.parametrize("cancel_again", [False, True])
+async def test_cancelled_astart_preserves_a_shutdown_error(
+    tmp_path: Path, mocker: MockerFixture, cancel_again: bool
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    loop = asyncio.get_running_loop()
+    ready, closing = asyncio.Event(), asyncio.Event()
+    resume_startup, resume_close = threading.Event(), threading.Event()
+    start = net._do_start
+    failure = OSError("could not close channel during startup rollback")
+    cancellation = None
+
+    def pause_startup() -> None:
+        start()
+        loop.call_soon_threadsafe(ready.set)
+        assert resume_startup.wait(timeout=5)
+
+    async def observe_startup() -> None:
+        nonlocal cancellation
+        try:
+            await net.astart()
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            raise
+
+    mocker.patch.object(net, "_do_start", side_effect=pause_startup)
+    startup = asyncio.create_task(observe_startup())
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=10)
+        client = net._clients[switch]
+        channel = client._channel
+        close = channel.close
+        namespaces = tuple(net._namespaces.values())
+        bmv2 = net._bmv2_switches[switch]
+
+        def fail_once() -> None:
+            if attempt.call_count == 1:
+                loop.call_soon_threadsafe(closing.set)
+                assert resume_close.wait(timeout=5)
+                raise failure
+            close()
+
+        attempt = mocker.patch.object(channel, "close", side_effect=fail_once)
+        assert startup.cancel("cancel startup")
+        await asyncio.sleep(0)
+        assert not startup.done()
+        resume_startup.set()
+        await asyncio.wait_for(closing.wait(), timeout=3)
+        if cancel_again:
+            assert startup.cancel("cancel during rollback")
+            await asyncio.sleep(0)
+            assert not startup.done()
+        resume_close.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(startup, timeout=4)
+        assert cancellation is not None and cancellation.args == ("cancel startup",)
+        error = cancellation.__cause__
+        assert isinstance(error, NetworkError)
+        assert isinstance(error.__cause__, ConnectionError)
+        assert error.__cause__.__cause__ is failure
+        assert not net.is_running and not bmv2.is_running()
+        assert namespaces and not any(ns.exists for ns in namespaces)
+        assert not net._veth_pairs
+        assert client._channel is channel and net in _cleanup._ACTIVE
+
+        await net.astop()
+        assert attempt.call_count == 2 and client._channel is None
+        assert net not in _cleanup._ACTIVE
+    finally:
+        resume_startup.set()
+        resume_close.set()
+        await asyncio.gather(startup, return_exceptions=True)
+        await net.astop()
+
+
 @pytest.mark.parametrize("mode", ["async", "worker", "owner"])
 async def test_network_stop_closes_async_connection(
     tmp_path: Path, mocker: MockerFixture, mode: str

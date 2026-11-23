@@ -189,7 +189,7 @@ An outer `asyncio.wait_for()` cancels the operation it is awaiting, so its final
 
 Use `await net.astart()` to start a network inside a coroutine. It installs cleanup handlers on the calling thread, registers the network, and runs startup in a worker thread. Run the event loop on the main thread for automatic SIGINT/SIGTERM cleanup. Python only allows [signal handler registration on the main thread](https://docs.python.org/3/library/signal.html#signals-and-threads). The synchronous `net.start()` remains available.
 
-If `astart()` is cancelled, it waits for the startup worker and closes the network before propagating `CancelledError`. A startup failure rolls back partial resources and propagates the original exception. Shutdown requested through `stop()` or `astop()` waits for the startup worker before cleanup. The startup call raises `NetworkError` if it has not already completed.
+If `astart()` is cancelled, it waits for the startup worker and attempts to shut down the network before propagating `CancelledError`. If that shutdown fails, `CancelledError` carries the shutdown error as its cause. A startup failure rolls back partial resources and propagates the original exception. Shutdown requested through `stop()` or `astop()` waits for the startup worker before cleanup. The startup call raises `NetworkError` if it has not already completed.
 
 Connect, use, and close an async client on the same event loop. The [gRPC AsyncIO documentation](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats) also requires async objects to be used on the thread where they were created.
 
