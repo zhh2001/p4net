@@ -460,6 +460,59 @@ def test_stop_after_external_bmv2_kill(tmp_path: Path) -> None:
     assert h1 not in _list_netns()
 
 
+def test_network_reports_and_retries_xterm_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    terminal = tmp_path / "xterm"
+    terminal.write_text("#!/bin/sh\nexec sleep 60\n", encoding="utf-8")
+    terminal.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path), prepend=os.pathsep)
+    monkeypatch.setenv("DISPLAY", ":0")
+    suffix = _suffix()
+    hostname, switch = f"h{suffix}", f"s{suffix}"
+    topo = Topology()
+    topo.add_host(hostname, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(hostname, switch, port_b=1)
+
+    with Network(topo, log_dir=tmp_path / "logs") as net:
+        host = net.host(hostname)
+        bmv2 = net.switch(switch).bmv2
+        terminal_process = net.xterm(host)
+        failure = PermissionError("could not terminate terminal")
+        terminate = terminal_process.terminate
+
+        def fail_once() -> None:
+            if attempt.call_count == 1:
+                raise failure
+            terminate()
+
+        attempt = mocker.patch.object(terminal_process, "terminate", side_effect=fail_once)
+        try:
+            with pytest.raises(
+                NetworkError, match=rf"could not stop xterm processes.*{terminal_process.pid}"
+            ) as raised:
+                net.stop()
+            assert raised.value.__cause__ is failure
+            assert terminal_process.poll() is None
+            assert net._spawned_processes == [terminal_process]
+            assert net._registered
+            assert not net._veth_pairs and not host.namespace.exists and not bmv2.is_running()
+            with pytest.raises(NetworkError, match="Network shutdown is still running"):
+                net.start()
+            with pytest.raises(NetworkError, match="Network is shutting down or has stopped"):
+                net.xterm(host)
+
+            asyncio.run(net.astop())
+            assert attempt.call_count == 2
+            assert terminal_process.wait(timeout=1) != 0
+            assert not net._spawned_processes
+            net.start()
+        finally:
+            terminal_process.kill()
+            terminal_process.wait(timeout=2)
+
+
 def test_network_reports_and_retries_host_command_cleanup_failure(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:

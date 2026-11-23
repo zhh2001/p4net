@@ -1201,6 +1201,44 @@ def test_already_exited_spawn_skips_terminate_and_wait(
     fake_proc.kill.assert_not_called()
 
 
+@pytest.mark.parametrize("reap_times_out", [False, True])
+def test_xterm_waits_after_sigkill(
+    patched: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reap_times_out: bool
+) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    net.start()
+    host = net.host("h1")
+    process = MagicMock(pid=1234)
+    process.poll.return_value = None
+    term_timeout = subprocess.TimeoutExpired("xterm", 2)
+    kill_timeout = subprocess.TimeoutExpired("xterm", 2)
+    process.wait.side_effect = [term_timeout, kill_timeout if reap_times_out else 0, 0]
+    host.namespace.popen = MagicMock(return_value=process)  # type: ignore[method-assign]
+    net.xterm(host)
+
+    if reap_times_out:
+        with pytest.raises(NetworkError, match="could not stop xterm processes 1234") as raised:
+            net.stop()
+        assert raised.value.__cause__ is kill_timeout
+        assert net._spawned_processes == [process]
+        assert net._registered
+    else:
+        net.stop()
+    assert process.method_calls == [
+        call.poll(),
+        call.terminate(),
+        call.wait(timeout=2),
+        call.kill(),
+        call.wait(timeout=2),
+    ]
+
+    net.stop()
+    assert process.terminate.call_count == (2 if reap_times_out else 1)
+    assert not net._spawned_processes
+    assert not net._registered
+
+
 def test_host_command_reaps_group_if_interrupted_while_spawning() -> None:
     net = Network(Topology())
     host = MagicMock()

@@ -181,7 +181,7 @@ The cleanup order is:
 4. Veth pairs, then host namespaces.
 5. Cleanup registry entries and running-node handles.
 
-If shutdown fails to stop an interactive host command, `Network` finishes the remaining cleanup and raises `NetworkError` with the process ID. The process handle is kept for the next `stop()` or `astop()` call.
+If shutdown fails to stop an interactive host command or a terminal opened with `net.xterm()`, `Network` finishes the remaining cleanup and raises `NetworkError` with the process ID. It keeps the process handle so the next `stop()` or `astop()` call can retry.
 
 `BMv2Switch.stop(timeout=...)` requires a finite positive integer or float, excluding `bool`. Invalid values raise `ValueError` before checking process state or sending signals, including when the process has not started or has already exited. Valid calls retain the normal cleanup and repeated-call behavior.
 

@@ -63,6 +63,7 @@ from p4net.topo.exceptions import TopologyError
 logger = logging.getLogger(__name__)
 
 _IPV6_READY_TIMEOUT = 5.0
+_XTERM_STOP_TIMEOUT = 2.0
 
 _DURATION_UNITS_NS: dict[str, int] = {
     "ns": 1,
@@ -92,6 +93,7 @@ class _ShutdownFailures:
     veth_pairs: dict[VethPair, Exception]
     namespaces: dict[str, Exception]
     host_commands: dict[int, Exception]
+    terminals: dict[int, Exception]
 
 
 def _hosts_with_ip(hosts: Mapping[str, RunningHost], *, ipv6: bool) -> dict[str, RunningHost]:
@@ -312,6 +314,7 @@ class Network:
                 or self._veth_pairs
                 or self._namespaces
                 or self._host_commands
+                or self._spawned_processes
                 or any(client._has_channel for client in self._clients.values())
                 or any(not close.done() for close in self._async_disconnects)
             ):
@@ -404,7 +407,7 @@ class Network:
         Startup already in progress finishes or rolls back before teardown.
 
         Raises:
-            NetworkError: if host command, BMv2, veth, or namespace cleanup
+            NetworkError: if host process, BMv2, veth, or namespace cleanup
                 fails, a gRPC channel close fails or times out, or an async
                 client's event loop is paused or closed. Call again to retry
                 pending cleanup.
@@ -426,6 +429,7 @@ class Network:
                     or self._veth_pairs
                     or self._namespaces
                     or self._host_commands
+                    or self._spawned_processes
                 )
             ):
                 self._stop_future = Future()
@@ -477,6 +481,12 @@ class Network:
                     f"{', '.join(map(str, pids))}"
                 )
                 error.__cause__ = failures.host_commands[pids[0]]
+            elif failures.terminals:
+                pids = sorted(failures.terminals)
+                error = NetworkError(
+                    f"shutdown failed: could not stop xterm processes {', '.join(map(str, pids))}"
+                )
+                error.__cause__ = failures.terminals[pids[0]]
             elif self._closed_async_client_loops:
                 switches = ", ".join(repr(name) for name in sorted(self._closed_async_client_loops))
                 error = NetworkError(
@@ -506,7 +516,7 @@ class Network:
         Cancellation is propagated after cleanup finishes.
 
         Raises:
-            NetworkError: if host command, BMv2, veth, or namespace cleanup
+            NetworkError: if host process, BMv2, veth, or namespace cleanup
                 fails, a gRPC channel close fails or times out, or an async
                 client's event loop is paused or closed. Call again to retry
                 pending cleanup.
@@ -621,21 +631,22 @@ class Network:
     ) -> NSProcess:
         """Spawn an ``xterm`` running ``shell`` inside ``host``'s namespace.
 
-        Returns the :class:`NSProcess`; the orchestrator tracks it and
-        terminates it on :meth:`stop`. Raises :class:`NetworkError` if
-        ``$DISPLAY`` is unset (no X server reachable from the current
-        process). This method is intended for interactive use; the test
-        suite does not exercise it because CI has no X server.
+        Returns an :class:`NSProcess` that :meth:`stop` terminates and waits
+        for. Raises :class:`NetworkError` if ``$DISPLAY`` is unset or the
+        network is shutting down or has stopped.
         """
-        target = host if isinstance(host, RunningHost) else self.host(host)
-        if not os.environ.get("DISPLAY"):
-            raise NetworkError(
-                "cannot spawn xterm: $DISPLAY is unset (no X server reachable). "
-                "Set DISPLAY (e.g. ':0') and ensure xhost permits this process."
-            )
-        argv = ["xterm", "-T", title or f"p4net: {target.name}", "-e", shell]
-        proc = target.popen(argv)
-        self._spawned_processes.append(proc)
+        with defer_cleanup_signals(), self._stop_lock:
+            if self._stop_future is not None:
+                raise NetworkError("Network is shutting down or has stopped")
+            target = host if isinstance(host, RunningHost) else self.host(host)
+            if not os.environ.get("DISPLAY"):
+                raise NetworkError(
+                    "cannot spawn xterm: $DISPLAY is unset (no X server reachable). "
+                    "Set DISPLAY (e.g. ':0') and ensure xhost permits this process."
+                )
+            argv = ["xterm", "-T", title or f"p4net: {target.name}", "-e", shell]
+            proc = target.popen(argv)
+            self._spawned_processes.append(proc)
         return proc
 
     # ----- Internal start/stop ------------------------------------------
@@ -1040,6 +1051,7 @@ class Network:
         failed_host_commands: dict[int, Exception] = {}
         with self._stop_lock:
             commands = tuple(self._host_commands)
+            terminals = tuple(self._spawned_processes)
         for command in commands:
             try:
                 command._stop_group()
@@ -1050,17 +1062,23 @@ class Network:
                 with self._stop_lock:
                     self._host_commands.discard(command)
 
-        for proc in list(self._spawned_processes):
+        failed_terminals: dict[int, Exception] = {}
+        pending_terminals: list[NSProcess] = []
+        for proc in terminals:
             try:
                 if proc.poll() is None:
                     proc.terminate()
                     try:
-                        proc.wait(timeout=2.0)
-                    except Exception:
+                        proc.wait(timeout=_XTERM_STOP_TIMEOUT)
+                    except subprocess.TimeoutExpired:
                         proc.kill()
+                        proc.wait(timeout=_XTERM_STOP_TIMEOUT)
             except Exception as exc:
-                logger.warning("spawned process reap (pid=%s): %r", getattr(proc, "pid", "?"), exc)
-        self._spawned_processes.clear()
+                failed_terminals[proc.pid] = exc
+                pending_terminals.append(proc)
+                logger.warning("xterm cleanup (pid=%s): %r", proc.pid, exc)
+        with self._stop_lock:
+            self._spawned_processes = pending_terminals
 
         # Reject sync reconnects while waiting for async clients to close.
         for client in self._clients.values():
@@ -1137,7 +1155,11 @@ class Network:
 
         # 5. unregister hooks
         if self._registered and not (
-            self._bmv2_switches or self._veth_pairs or self._namespaces or self._host_commands
+            self._bmv2_switches
+            or self._veth_pairs
+            or self._namespaces
+            or self._host_commands
+            or self._spawned_processes
         ):
             with contextlib.suppress(Exception):
                 unregister(self)
@@ -1156,6 +1178,7 @@ class Network:
             failed_veth_pairs,
             failed_namespaces,
             failed_host_commands,
+            failed_terminals,
         )
 
     # Context manager ----------------------------------------------------
