@@ -894,6 +894,71 @@ async def test_network_stop_timeout_blocks_restart_until_async_close_finishes(
         await net.astop()
 
 
+async def test_network_astop_shares_timeout_across_async_channels(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    topo = Topology()
+    switch_names = [f"s{index}{suffix}" for index in (1, 2)]
+    for index, switch in enumerate(switch_names, start=1):
+        host = f"h{index}{suffix}"
+        topo.add_host(host, ip=f"10.0.0.{index}/24")
+        topo.add_switch(
+            switch, p4_src=_SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port()
+        )
+        topo.add_link(host, switch, port_b=1)
+
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    release = asyncio.Event()
+    shutdown = None
+
+    def hold_close(channel: grpc.aio.Channel) -> asyncio.Event:
+        closing = asyncio.Event()
+        close = channel.close
+
+        async def close_after_release() -> None:
+            closing.set()
+            await release.wait()
+            await close()
+
+        mocker.patch.object(channel, "close", side_effect=close_after_release)
+        return closing
+
+    try:
+        switches = [net.switch(name) for name in switch_names]
+        channels = []
+        closing = []
+        for switch in switches:
+            client = switch.async_client
+            client._election_id = (0, 0)
+            await client.connect()
+            channel = client._channel
+            assert channel is not None
+            channels.append(channel)
+            closing.append(hold_close(channel))
+
+        shutdown = asyncio.create_task(net.astop())
+        done, _ = await asyncio.wait([shutdown], timeout=8.0)
+        assert shutdown in done, "async channel timeouts accumulated across switches"
+        with pytest.raises(NetworkError, match="async client shutdown did not finish"):
+            shutdown.result()
+        assert all(event.is_set() for event in closing)
+        assert all(channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN for channel in channels)
+        assert all(not switch.bmv2.is_running() for switch in switches)
+        assert {close.switch for close in net._async_disconnects} == set(switch_names)
+
+        release.set()
+        await asyncio.wait_for(net.astop(), timeout=3.0)
+        assert all(channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN for channel in channels)
+        assert not net._async_disconnects
+    finally:
+        release.set()
+        if shutdown is not None:
+            await asyncio.gather(shutdown, return_exceptions=True)
+        await net.astop()
+
+
 async def test_network_astop_during_async_connect(tmp_path: Path, mocker: MockerFixture) -> None:
     suffix = _suffix()
     switch = f"s{suffix}"

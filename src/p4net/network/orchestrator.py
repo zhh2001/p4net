@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 
 _IPV6_READY_TIMEOUT = 5.0
 _XTERM_STOP_TIMEOUT = 2.0
+_ASYNC_DISCONNECT_TIMEOUT = 5.0
 
 _DURATION_UNITS_NS: dict[str, int] = {
     "ns": 1,
@@ -1051,6 +1052,7 @@ class Network:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
             current_loop = None
+        deadline = time.monotonic() + _ASYNC_DISCONNECT_TIMEOUT
         for close in scheduled:
             if self._settle_closed_async_loop(close):
                 continue
@@ -1061,7 +1063,7 @@ class Network:
                 continue
             try:
                 # Read the task's exception separately from a timeout waiting for it.
-                error = future.exception(timeout=5.0)
+                error = future.exception(timeout=max(0.0, deadline - time.monotonic()))
             except FutureTimeoutError:
                 if not self._settle_closed_async_loop(close):
                     pending.append(close)
