@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
@@ -504,7 +505,7 @@ class Network:
         """Wait for async clients and network resources to finish shutting down.
 
         Client event loops must remain running until shutdown completes.
-        Cancellation is propagated after cleanup finishes.
+        Cancellation of this call is propagated after cleanup finishes.
 
         Raises:
             NetworkError: if host process, BMv2, veth, or namespace cleanup
@@ -1023,12 +1024,23 @@ class Network:
                 if not self._settle_closed_async_loop(close):
                     pending.append(close)
                     logger.warning("async client disconnect %r timed out", close.switch)
-            except ConnectionError as exc:
-                if not self._settle_closed_async_loop(close):
-                    close.future = None
-                    pending.append(close)
-                    failed_channels[close.switch] = exc
-                    logger.warning("async client disconnect %r: %s", close.switch, exc)
+            except (ConnectionError, FutureCancelledError) as exc:
+                if self._settle_closed_async_loop(close):
+                    continue
+                if isinstance(exc, ConnectionError):
+                    failure = exc
+                else:
+                    if close.done():
+                        continue
+                    failure = ConnectionError(
+                        f"Async disconnect cancelled before closing gRPC channel for "
+                        f"{close.client.target!r}"
+                    )
+                    failure.__cause__ = exc
+                close.future = None
+                pending.append(close)
+                failed_channels[close.switch] = failure
+                logger.warning("async client disconnect %r: %s", close.switch, failure)
             except Exception as exc:
                 if not self._settle_closed_async_loop(close):
                     logger.warning("async client disconnect %r: %r", close.switch, exc)

@@ -18,6 +18,7 @@ import signal
 import socket
 import threading
 import uuid
+from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import ExitStack
 from pathlib import Path
 from runpy import run_path
@@ -293,6 +294,93 @@ async def test_network_shutdown_reports_and_retries_channel_close_failure(
         await net.astop()
         if channel is not None and original_close is not None:
             await original_close()
+
+
+@pytest.mark.parametrize("during_close", [False, True])
+async def test_network_shutdown_handles_cancelled_async_disconnect(
+    tmp_path: Path, mocker: MockerFixture, during_close: bool
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    sw = net.switch(switch)
+    client = sw.async_client
+    client._election_id = (0, 0)
+    disconnect = client.disconnect
+    closing, release = asyncio.Event(), asyncio.Event()
+    scheduled = asyncio.get_running_loop().create_future()
+    tasks = []
+    try:
+        await client.connect()
+        channel = client._channel
+        close = channel.close
+        failure = RuntimeError("concurrent gRPC close failed")
+
+        async def close_after_release() -> None:
+            closing.set()
+            await release.wait()
+            if not during_close and close_spy.await_count == 1:
+                raise failure
+            await close()
+
+        async def track_disconnect() -> None:
+            if not scheduled.done():
+                scheduled.set_result(asyncio.current_task())
+            await disconnect()
+
+        close_spy = mocker.patch.object(channel, "close", side_effect=close_after_release)
+        if not during_close:
+            concurrent_close = asyncio.create_task(disconnect())
+            tasks.append(concurrent_close)
+            await asyncio.wait_for(closing.wait(), timeout=2)
+
+        disconnect_spy = mocker.patch.object(client, "disconnect", side_effect=track_disconnect)
+        shutdown = asyncio.create_task(net.astop())
+        tasks.append(shutdown)
+        network_disconnect = await asyncio.wait_for(scheduled, timeout=2)
+        if during_close:
+            await asyncio.wait_for(closing.wait(), timeout=2)
+        assert network_disconnect.cancel()
+
+        if during_close:
+            release.set()
+            await asyncio.wait_for(shutdown, timeout=3)
+            disconnect_spy.assert_awaited_once()
+        else:
+            with pytest.raises(
+                NetworkError, match=f"could not close gRPC channel for '{switch}'"
+            ) as shutdown_error:
+                await asyncio.wait_for(shutdown, timeout=3)
+            assert isinstance(shutdown_error.value.__cause__, ConnectionError)
+            assert isinstance(shutdown_error.value.__cause__.__cause__, FutureCancelledError)
+            (pending,) = net._async_disconnects
+            assert pending.client is client and pending.future is None
+            assert net in _cleanup._ACTIVE
+            release.set()
+            with pytest.raises(ConnectionError) as concurrent_error:
+                await asyncio.wait_for(concurrent_close, timeout=3)
+            assert concurrent_error.value.__cause__ is failure
+            assert client._channel is channel
+            assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
+            await asyncio.wait_for(net.astop(), timeout=3)
+            assert disconnect_spy.await_count == 2
+
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+        assert client._channel is None and client._loop is None
+        assert not net.is_running and not sw.bmv2.is_running()
+        assert not net._async_disconnects and net not in _cleanup._ACTIVE
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            await disconnect()
+        finally:
+            await net.astop()
 
 
 @pytest.mark.parametrize("close_through_network", [True, False])
