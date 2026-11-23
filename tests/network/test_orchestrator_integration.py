@@ -34,7 +34,7 @@ from pytest_mock import MockerFixture
 from p4net import Network
 from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
-from p4net.control import ConnectionError
+from p4net.control import ConnectionError, P4RuntimeClient
 from p4net.network import NetworkError, RunningHost, _cleanup
 from p4net.runtime import BMv2StartupError, LinkError
 from p4net.topo import Topology
@@ -141,6 +141,69 @@ def test_single_host_loopback(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 2. Two hosts via one switch with table programming
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("entry", ["start", "astart"])
+@pytest.mark.parametrize("close_before_retry", [False, True])
+async def test_startup_rollback_continues_after_sync_client_retirement_fails(
+    tmp_path: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    entry: str,
+    close_before_retry: bool,
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    origin = OSError("pipeline verification failed")
+    startup_error = ValueError("startup failed")
+    rollback_error = OSError("could not retire sync client")
+    start, retire = net._do_start, P4RuntimeClient._retire
+    switches = []
+
+    def fail_startup() -> None:
+        start()
+        switches.append(net.switch(switch))
+        raise startup_error from origin
+
+    def fail_first_retirement(client: P4RuntimeClient) -> None:
+        if attempt.call_count == 1:
+            raise rollback_error
+        retire(client)
+
+    mocker.patch.object(net, "_do_start", side_effect=fail_startup)
+    attempt = mocker.patch.object(
+        P4RuntimeClient, "_retire", autospec=True, side_effect=fail_first_retirement
+    )
+    try:
+        with pytest.raises(ValueError, match="startup failed") as raised:
+            if entry == "start":
+                await asyncio.to_thread(net.start)
+            else:
+                await net.astart()
+        assert raised.value is startup_error and startup_error.__cause__ is origin
+        assert str(rollback_error) in caplog.text
+        (sw,) = switches
+        assert net._clients == {switch: sw.client} and net in _cleanup._ACTIVE
+        assert not net.is_running and not sw.bmv2.is_running()
+        assert not net._veth_pairs and host not in _list_netns()
+        attempt.assert_called_once_with(sw.client)
+
+        if close_before_retry:
+            await asyncio.to_thread(sw.client.disconnect)
+            assert not sw.client._has_channel
+            with pytest.raises(NetworkError, match="Network shutdown is still running"):
+                await net.astart()
+
+        await net.astop()
+        assert attempt.call_count == 2 and attempt.call_args.args == (sw.client,)
+        assert not sw.client._has_channel and net not in _cleanup._ACTIVE
+    finally:
+        await net.astop()
 
 
 @pytest.mark.parametrize("retry", ["network", "client", "hook"])

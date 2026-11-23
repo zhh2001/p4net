@@ -315,7 +315,9 @@ class Network:
                 or self._namespaces
                 or self._host_commands
                 or self._spawned_processes
-                or any(client._has_channel for client in self._clients.values())
+                or any(
+                    client._has_channel or not client._retired for client in self._clients.values()
+                )
                 or any(not close.done() for close in self._async_disconnects)
             ):
                 raise NetworkError("Network shutdown is still running")
@@ -346,10 +348,16 @@ class Network:
                     raise NetworkError("Network startup was interrupted by shutdown")
                 self._running = True
         except BaseException:
-            self._do_stop()
+            self._rollback_startup()
             raise
         finally:
             self._end_start(future)
+
+    def _rollback_startup(self) -> None:
+        try:
+            self._do_stop()
+        except Exception:
+            logger.exception("Network startup rollback failed")
 
     def _register_cleanup(self) -> None:
         if not self._registered or threading.current_thread() is threading.main_thread():
@@ -377,7 +385,7 @@ class Network:
             startup = asyncio.get_running_loop().run_in_executor(None, self._run_start, future)
         except BaseException:
             try:
-                self._do_stop()
+                self._rollback_startup()
             finally:
                 self._end_start(future)
             raise
@@ -1123,8 +1131,19 @@ class Network:
             self._spawned_processes = pending_terminals
 
         # Reject sync reconnects while waiting for async clients to close.
-        for client in self._clients.values():
-            client._retire()
+        pending_clients: dict[str, P4RuntimeClient] = {}
+        failed_channels: dict[str, ConnectionError] = {}
+        for sw_name, client in self._clients.items():
+            try:
+                client._retire()
+            except Exception as exc:
+                failure = ConnectionError(
+                    f"Could not retire P4Runtime client for {client.target!r}: {exc!r}"
+                )
+                failure.__cause__ = exc
+                pending_clients[sw_name] = client
+                failed_channels[sw_name] = failure
+                logger.warning("retire client %r: %s", sw_name, failure)
 
         # 1a. Close async clients on the loops that own their gRPC resources.
         for sw_name, rs in list(self._running_switches.items()):
@@ -1134,11 +1153,12 @@ class Network:
             ac, loop = cleanup
             if loop is not None:
                 self._async_disconnects.append(_AsyncDisconnect(sw_name, ac, loop))
-        failed_channels = self._close_async_clients()
+        failed_channels.update(self._close_async_clients())
 
         # 1. P4Runtime clients
-        pending_clients = {}
         for sw_name, client in list(self._clients.items()):
+            if sw_name in pending_clients:
+                continue
             try:
                 client.disconnect()
             except Exception as exc:

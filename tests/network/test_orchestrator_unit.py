@@ -2129,6 +2129,41 @@ async def test_astart_executor_failure_unregisters_and_allows_retry(
     await net.astop()
 
 
+@pytest.mark.parametrize("failure_stage", ["startup", "submit"])
+async def test_start_preserves_original_error_when_rollback_raises(
+    patched: dict[str, Any],
+    tmp_path: Path,
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+    failure_stage: str,
+) -> None:
+    net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
+    startup_error = RuntimeError("startup failed")
+    startup_error.__cause__ = ValueError("original startup error")
+    rollback_error = OSError("unexpected rollback error")
+    rollback = mocker.patch.object(net, "_do_stop", side_effect=rollback_error)
+    if failure_stage == "submit":
+        start = mocker.patch.object(
+            asyncio.get_running_loop(), "run_in_executor", side_effect=startup_error
+        )
+    else:
+        start = mocker.patch.object(net, "_do_start", side_effect=startup_error)
+
+    try:
+        with pytest.raises(RuntimeError, match="startup failed") as raised:
+            await net.astart()
+        assert raised.value is startup_error
+        assert str(startup_error.__cause__) == "original startup error"
+        assert any(
+            record.exc_info and record.exc_info[1] is rollback_error for record in caplog.records
+        )
+        assert net._start_future is None and not net.is_running
+    finally:
+        mocker.stop(start)
+        mocker.stop(rollback)
+        await net.astop()
+
+
 @pytest.mark.parametrize("initial", ["start", "astart"])
 async def test_duplicate_astart_preserves_running_network(
     patched: dict[str, Any], tmp_path: Path, initial: str
