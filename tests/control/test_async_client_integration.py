@@ -132,6 +132,73 @@ async def test_basic_lifecycle(tmp_path: Path, entry: str) -> None:
         await net.astop()
 
 
+async def test_cancelled_async_disconnect_preserves_channel_close_failure(
+    tmp_path: Path, mocker: MockerFixture
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    await net.astart()
+    client = net.switch(switch).async_client
+    client._election_id = (0, 0)
+    closing, release = asyncio.Event(), asyncio.Event()
+    failure = OSError("gRPC close failed during cancellation")
+    cancellation = None
+    disconnect = None
+
+    async def observe_disconnect() -> None:
+        nonlocal cancellation
+        try:
+            await client.disconnect()
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            raise
+
+    try:
+        await client.connect()
+        owner = asyncio.get_running_loop()
+        channel = client._channel
+        close = channel.close
+
+        async def fail_once() -> None:
+            if attempt.await_count == 1:
+                closing.set()
+                await release.wait()
+                raise failure
+            await close()
+
+        attempt = mocker.patch.object(channel, "close", side_effect=fail_once)
+        disconnect = asyncio.create_task(observe_disconnect())
+        await asyncio.wait_for(closing.wait(), timeout=2)
+        for message in ("cancel disconnect", "cancel again"):
+            assert disconnect.cancel(message)
+            await asyncio.sleep(0)
+            assert not disconnect.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(disconnect, timeout=3)
+        assert cancellation is not None and cancellation.args == ("cancel disconnect",)
+        assert isinstance(cancellation.__cause__, ConnectionError)
+        assert cancellation.__cause__.__cause__ is failure
+        assert client._channel is channel and client._owning_loop is owner
+        assert channel.get_state() != grpc.ChannelConnectivity.SHUTDOWN
+        assert not client.is_connected and net.is_running
+
+        await client.disconnect()
+        assert attempt.await_count == 2 and client._channel is None
+        assert client._owning_loop is None
+        assert channel.get_state() == grpc.ChannelConnectivity.SHUTDOWN
+    finally:
+        release.set()
+        if disconnect is not None:
+            await asyncio.gather(disconnect, return_exceptions=True)
+        await net.astop()
+
+
 async def test_cancelled_astart_cleans_up_real_switch_and_links(
     tmp_path: Path, mocker: MockerFixture
 ) -> None:

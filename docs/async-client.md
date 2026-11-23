@@ -201,7 +201,7 @@ If a cached async client's event loop is paused or the client takes too long to 
 
 If an async client's event loop has already closed with the client still connected, shutdown releases the other network resources and raises `NetworkError` naming the affected switch.
 
-If closing a gRPC channel fails, both synchronous and asynchronous clients raise `p4net.control.ConnectionError` from `disconnect()`. Network shutdown releases the other network resources and raises `NetworkError` with that error as its cause. Call the disconnect or shutdown method again to retry the original channel. Keep the owning event loop running for an async client.
+If closing a gRPC channel fails, `disconnect()` reports `p4net.control.ConnectionError`. If an async `disconnect()` is cancelled during channel closure, it waits for the close attempt and propagates `CancelledError` with any close error as its cause. Network shutdown releases the other network resources and reports channel failures through `NetworkError`. Call the disconnect or shutdown method again to retry the original channel. Keep the owning event loop running for an async client.
 
 With a running event loop, the SIGINT/SIGTERM handler awaits network cleanup before restoring the previous handler and delivering the signal again. Outside an event loop, it uses synchronous cleanup.
 

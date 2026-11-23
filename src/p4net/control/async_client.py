@@ -372,9 +372,10 @@ class AsyncP4RuntimeClient:
         """Close the channel and release connection resources.
 
         In a PacketIn callback, close the stream that delivered the packet.
-        A cancellation during channel closure is propagated after cleanup.
-        On a channel close failure, raise :class:`ConnectionError` and keep
-        the channel for another attempt on the same event loop.
+        A cancellation during channel closure is propagated after the close
+        attempt, with any close error as its cause. A channel close failure
+        is reported as :class:`ConnectionError` and leaves the channel
+        available for another attempt on the same event loop.
         """
         callback = _PACKET_IN_CALLBACK.get()
         if callback is not None and callback[0] is self:
@@ -419,7 +420,7 @@ class AsyncP4RuntimeClient:
                 stream_task.cancel()
             else:
                 stream_task = None
-            cancelled = await self._close_channel()
+            cancellation = await self._close_channel()
             self._channel = None
             self._stub = None
             self._stream_call = None
@@ -430,8 +431,8 @@ class AsyncP4RuntimeClient:
             if was_connected:
                 logger.info("AsyncP4RuntimeClient %s disconnected", self.target)
 
-        if cancelled:
-            raise asyncio.CancelledError
+        if cancellation is not None:
+            raise cancellation
         # A callback may call disconnect from its cancellation handler.
         # Wait for it only after releasing the lifecycle lock.
         if stream_task is not None:
@@ -447,24 +448,28 @@ class AsyncP4RuntimeClient:
         except ConnectionError as exc:
             logger.warning("%s: %r", exc, exc.__cause__)
 
-    async def _close_channel(self) -> bool:
-        """Finish closing the channel and report whether the caller was cancelled."""
+    async def _close_channel(self) -> asyncio.CancelledError | None:
+        """Close the channel and retain any cancellation of the caller."""
         if self._channel is None:
-            return False
-        cancelled = False
+            return None
+        cancellation: asyncio.CancelledError | None = None
         try:
             closing = asyncio.create_task(self._channel.close())
             while not closing.done():
                 try:
-                    await asyncio.shield(closing)
-                except asyncio.CancelledError:
-                    cancelled = True
+                    # Waiting here keeps caller cancellation separate from the close result.
+                    await asyncio.wait((closing,))
+                except asyncio.CancelledError as exc:
+                    if cancellation is None:
+                        cancellation = exc
             closing.result()
         except (Exception, asyncio.CancelledError) as exc:
-            raise ConnectionError(
-                f"Could not close async gRPC channel for {self.target!r}"
-            ) from exc
-        return cancelled
+            failure = ConnectionError(f"Could not close async gRPC channel for {self.target!r}")
+            if cancellation is None:
+                raise failure from exc
+            failure.__cause__ = exc
+            raise cancellation from failure
+        return cancellation
 
     @staticmethod
     def _suppress_queue_full() -> Any:

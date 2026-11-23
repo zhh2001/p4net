@@ -1066,25 +1066,35 @@ async def test_cancelled_disconnect_finishes_closing_the_channel(
     client = await _connect(patched_aio)
     close_started = asyncio.Event()
     release_close = asyncio.Event()
+    cancellation = None
 
     async def close() -> None:
         close_started.set()
         await release_close.wait()
 
+    async def observe_disconnect() -> None:
+        nonlocal cancellation
+        try:
+            await client.disconnect()
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+            raise
+
     patched_aio["channel"].close.side_effect = close
-    first = asyncio.create_task(client.disconnect())
+    first = asyncio.create_task(observe_disconnect())
     second = None
     try:
         await asyncio.wait_for(close_started.wait(), timeout=1.0)
         second = asyncio.create_task(client.disconnect())
-        for _ in range(2):
-            first.cancel()
+        for message in ("cancel disconnect", "cancel again"):
+            first.cancel(message)
             await asyncio.sleep(0)
         assert not first.done()
         assert not second.done()
         release_close.set()
         with pytest.raises(asyncio.CancelledError):
             await first
+        assert cancellation is not None and cancellation.args == ("cancel disconnect",)
         await asyncio.wait_for(second, timeout=1.0)
         assert not client.is_connected
         patched_aio["channel"].close.assert_awaited_once()
