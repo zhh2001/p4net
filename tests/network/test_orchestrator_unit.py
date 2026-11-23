@@ -1608,8 +1608,12 @@ class _LoopBoundClient:
     async def create(cls) -> _LoopBoundClient:
         return cls()
 
-    def _retire(self) -> asyncio.AbstractEventLoop | None:
+    @property
+    def _owning_loop(self) -> asyncio.AbstractEventLoop | None:
         return None if self.closed else self._loop
+
+    def _retire(self) -> asyncio.AbstractEventLoop | None:
+        return self._owning_loop
 
     async def disconnect(self) -> None:
         assert asyncio.get_running_loop() is self._loop
@@ -1787,12 +1791,13 @@ def test_stop_closes_client_owned_by_background_loop(
 
 @pytest.mark.parametrize("state", ["cached", "deferred", "scheduled"])
 def test_stop_reports_closed_async_client_loop(
-    patched: dict[str, Any], tmp_path: Path, state: str
+    patched: dict[str, Any], tmp_path: Path, mocker: MockerFixture, state: str
 ) -> None:
     loop = asyncio.new_event_loop()
     net = Network(_make_simple_topology(), log_dir=tmp_path / "logs")
     try:
         client = loop.run_until_complete(_LoopBoundClient.create())
+        retirement = mocker.spy(client, "_retire")
         net.start()
         net.switch("s1")._async_client = client  # type: ignore[assignment]
         if state != "cached":
@@ -1808,6 +1813,7 @@ def test_stop_reports_closed_async_client_loop(
     for stop in (net.stop, lambda: asyncio.run(net.astop())):
         with pytest.raises(NetworkError, match="event loop is closed for 's1'"):
             stop()
+    retirement.assert_called_once_with()
     assert client.disconnect_count == 0
     assert not net.is_running
     assert not net._async_disconnects

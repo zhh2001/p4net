@@ -289,13 +289,20 @@ async def test_network_stop_closes_async_connection(
         channel = client._channel
         stream_task = client._stream_task
         close = channel.close
+        retire = client._retire
         closed_on: list[asyncio.AbstractEventLoop] = []
 
         async def close_on_owner() -> None:
             closed_on.append(asyncio.get_running_loop())
             await close()
 
+        def fail_if_retired_again() -> asyncio.AbstractEventLoop | None:
+            if retire_spy.call_count == 2:
+                raise OSError("status check attempted a second retirement")
+            return retire()
+
         mocker.patch.object(channel, "close", side_effect=close_on_owner)
+        retire_spy = mocker.patch.object(client, "_retire", side_effect=fail_if_retired_again)
         if mode == "worker":
             await asyncio.to_thread(net.stop)
         elif mode == "owner":
@@ -315,6 +322,7 @@ async def test_network_stop_closes_async_connection(
         assert not sw.bmv2.is_running()
         assert not net.is_running
         await net.astop()
+        retire_spy.assert_called_once_with()
     finally:
         await client.disconnect()
         await asyncio.to_thread(net.stop)
@@ -684,6 +692,7 @@ def test_stop_retains_async_client_while_its_loop_is_paused(
     client = sw.async_client
     client._election_id = (0, 0)
     owner = asyncio.new_event_loop()
+    retirement = mocker.spy(client, "_retire")
     try:
         owner.run_until_complete(client.connect())
         channel = client._channel
@@ -706,6 +715,7 @@ def test_stop_retains_async_client_while_its_loop_is_paused(
         net.start()
         assert net.switch(switch) is not sw
         assert not net._async_disconnects
+        retirement.assert_called_once_with()
     finally:
         owner.run_until_complete(client.disconnect())
         owner.run_until_complete(net.astop())

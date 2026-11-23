@@ -356,6 +356,12 @@ class AsyncP4RuntimeClient:
                 f"P4Runtime async client for {self.target!r} closed by network shutdown"
             )
 
+    @property
+    def _owning_loop(self) -> asyncio.AbstractEventLoop | None:
+        """The loop responsible for connection startup and cleanup."""
+        with self._connection_state_lock:
+            return self._loop
+
     def _retire(self) -> asyncio.AbstractEventLoop | None:
         """Block future connections and return the event loop that can close the channel."""
         with self._connection_state_lock:

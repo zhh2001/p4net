@@ -83,7 +83,7 @@ class _AsyncDisconnect:
 
     def done(self) -> bool:
         # A finished future can still leave the client owning an open channel.
-        return (self.future is None or self.future.done()) and self.client._retire() is None
+        return (self.future is None or self.future.done()) and self.client._owning_loop is None
 
 
 @dataclass
@@ -993,7 +993,7 @@ class Network:
         """Settle a disconnect whose owning loop can no longer run."""
         if not close.loop.is_closed():
             return False
-        if close.client._retire() is not None:
+        if close.client._owning_loop is not None:
             self._closed_async_client_loops.add(close.switch)
             logger.warning("async client disconnect %r failed: event loop is closed", close.switch)
         return True
