@@ -9,7 +9,7 @@
 
 P4Net is a Python framework for BMv2 and P4Runtime experiments on Linux.
 
-Status: 1.10.1, stable. Public APIs follow the [API stability rules](https://zhh2001.github.io/p4net/api-stability/). See the [changelog](https://zhh2001.github.io/p4net/changelog/) for new features, fixes and upgrade notes.
+Status: 1.11.0, stable. Public APIs follow the [API stability rules](https://zhh2001.github.io/p4net/api-stability/). See the [changelog](https://zhh2001.github.io/p4net/changelog/) for new features, fixes and upgrade notes.
 
 ## Why use P4Net
 

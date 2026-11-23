@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-23
+
+### Added
+
+- The sync client's `set_pipeline_config(action="COMMIT")` and the async client's `push_pipeline(action="COMMIT")` can activate a pipeline saved with `VERIFY_AND_SAVE`. Pipeline arguments are optional for this action. Both clients read the committed P4Info back from the switch.
+
+### Changed
+
+- The sync and async clients provided by `RunningSwitch` share a P4Info cache. Both client types refresh P4Info when reconnecting. The network-managed async client also reads P4Info on its first connection.
+- The async client buffers up to 256 PacketIn messages per connection for `expect_packet_in()`. When the buffer is full, new packets still reach registered handlers.
+- Updated the README quick start and the English and Chinese example guides for async programming, IPv6, asymmetric links, and INT.
+
+### Fixed
+
+- Concurrent `connect()` calls share one connection attempt per client. Failed setup attempts release connection resources, and disconnects wake pending PacketIn waiters.
+- `VERIFY` preserves the active P4Info index. Operations that use P4Info now detect and report stale connections and pipeline changes.
+- `stop()` and `astop()` report cleanup failures and let callers retry pending cleanup. Async channel closes share one timeout per shutdown attempt. Startup rollback preserves the original startup exception.
+- Fixed veth endpoint tracking after a move to PID 1's network namespace.
+- The INT examples sample queue depth at egress after dequeue. The async concurrent example closes its clients if setup fails.
+
+### Upgrading from 1.10
+
+- Handle `NetworkError` when shutdown cannot finish. Keep async clients' event loops running through `await net.astop()` and retry pending cleanup before restarting. After restarting, obtain fresh switch clients from the network.
+
 ## [1.10.1] - 2026-11-21
 
 ### Added
