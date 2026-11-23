@@ -133,7 +133,7 @@ See the [control-plane API](api/control.md).
 9. Wait for configured IPv6 addresses to finish duplicate address detection, with a five-second budget shared by all hosts. A duplicate address or an expired wait fails startup.
 10. Create the `RunningHost` and `RunningSwitch` handles exposed by `host()`, `switch()`, `hosts`, and `switches`.
 
-A failed startup reports the original error and attempts to release the resources already created. Rollback failures are logged, and `stop()` or `astop()` can retry pending cleanup. `await net.astart()` registers cleanup on the calling thread before submitting the startup work to a worker thread. Use the main thread's event loop for automatic signal handling. Cancelling startup waits for the worker and cleanup before propagating cancellation. A concurrent shutdown waits for startup before releasing resources.
+A failed startup reports the original error and attempts to release the resources already created. Rollback failures are logged, and `stop()` or `astop()` can retry pending cleanup. `await net.astart()` registers cleanup on the calling thread before submitting the startup work to a worker thread. Use the main thread's event loop for automatic signal handling. Cancellation and concurrent shutdown both wait for the startup worker and cleanup.
 
 `RunningHost` exposes namespace commands and connectivity checks. `RunningSwitch` exposes the BMv2 process, compilation result, synchronous client, and a lazily created, cached async client. The async client must be connected before use.
 

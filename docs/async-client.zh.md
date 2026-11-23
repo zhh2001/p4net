@@ -189,7 +189,9 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 在协程中使用 `await net.astart()` 启动网络。它先在调用线程安装清理处理器、注册网络，再由工作线程执行启动。需要自动处理 SIGINT/SIGTERM 时，让事件循环运行在主线程。Python 只允许在[主线程注册信号处理器](https://docs.python.org/3/library/signal.html#signals-and-threads)。同步接口 `net.start()` 仍可使用。
 
-取消 `astart()` 后，它会等待启动线程结束，再尝试关闭网络并传播 `CancelledError`。如果这次关闭失败，关闭错误会保留在异常链中。启动失败时会回收已创建的资源，并传播原始异常。在启动期间调用 `stop()` 或 `astop()`，清理会等待启动线程结束。如果启动尚未完成，启动调用会抛出 `NetworkError`。
+取消 `astart()` 后，它会等待启动线程结束。如果启动成功，它会先尝试关闭网络，再抛出 `CancelledError`。如果关闭失败，关闭异常会保留在 `CancelledError` 的异常链中。如果启动失败且没有其他关闭请求，`astart()` 会在尝试回收资源后抛出原始启动异常，即使已收到取消请求。
+
+在启动期间调用 `stop()` 或 `astop()`，关闭过程会等启动线程结束后再释放资源。如果关闭打断了启动，且启动调用没有被取消，`astart()` 会抛出 `NetworkError`。
 
 在同一事件循环中连接、使用和关闭异步客户端。[gRPC AsyncIO 文档](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats)也要求异步对象在创建它们的线程中使用。
 

@@ -384,10 +384,11 @@ class Network:
         """Bring the topology up in a worker thread without blocking the event loop.
 
         Call from the main thread's event loop to install signal cleanup
-        handlers. Cancellation waits for startup and attempts shutdown before
-        propagating. A shutdown error becomes the cause of the cancellation.
-        Startup failures roll back partial resources and propagate their
-        original exception.
+        handlers. Cancelling this call waits for the startup worker. If startup
+        succeeds, this call attempts shutdown before raising ``CancelledError``.
+        A shutdown error becomes the cause of the cancellation. If startup
+        fails without a separate shutdown request, this call attempts rollback
+        and raises the original startup exception, even after cancellation.
 
         Raises:
             NetworkAlreadyRunningError: if already running or starting.
