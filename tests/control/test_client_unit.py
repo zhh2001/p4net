@@ -198,8 +198,9 @@ def test_connect_sends_arbitration_and_succeeds(
 
 
 @pytest.mark.parametrize("step", ["stub", "stream"])
+@pytest.mark.parametrize("close_fails", [False, True])
 def test_connect_initialization_failure_closes_channel_and_allows_retry(
-    patched_grpc: dict[str, Any], step: str
+    patched_grpc: dict[str, Any], step: str, close_fails: bool
 ) -> None:
     client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
     failed_channel = patched_grpc["channel"]
@@ -211,13 +212,15 @@ def test_connect_initialization_failure_closes_channel_and_allows_retry(
     original_side_effect = failing_call.side_effect
     failure = RuntimeError(f"{step} initialization failed")
     failing_call.side_effect = failure
+    if close_fails:
+        failed_channel.close.side_effect = [RuntimeError("close failed"), None]
 
     try:
         with pytest.raises(RuntimeError) as raised, client:
             pytest.fail("connection unexpectedly succeeded")
         assert raised.value is failure
         failed_channel.close.assert_called_once()
-        assert client._channel is None
+        assert client._channel is (failed_channel if close_fails else None)
         assert client._stream_thread is None
         assert not client.is_connected()
 
@@ -226,8 +229,32 @@ def test_connect_initialization_failure_closes_channel_and_allows_retry(
         with client:
             assert client.is_connected()
         retry_channel.close.assert_called_once()
-        failed_channel.close.assert_called_once()
+        assert failed_channel.close.call_count == (2 if close_fails else 1)
     finally:
+        client.disconnect()
+
+
+def test_failed_sync_channel_close_can_be_retried(patched_grpc: dict[str, Any]) -> None:
+    patched_grpc["stream"].responses.put(_make_arbitration_response(1, (1, 0)))
+    client = P4RuntimeClient("127.0.0.1:50051", device_id=1)
+    client.connect(timeout=2.0)
+    channel = patched_grpc["channel"]
+    failure = RuntimeError("close failed")
+    channel.close.side_effect = [failure, failure, None]
+    try:
+        for operation in (client.disconnect, client.connect):
+            with pytest.raises(ConnectionError, match="Could not close gRPC channel") as raised:
+                operation()
+            assert raised.value.__cause__ is failure
+            assert not client.is_connected()
+            assert client._channel is channel
+            assert client._stream_thread is None
+        patched_grpc["channel_factory"].assert_called_once()
+        client.disconnect()
+        assert client._channel is None
+        assert channel.close.call_count == 3
+    finally:
+        channel.close.side_effect = None
         client.disconnect()
 
 

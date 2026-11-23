@@ -201,7 +201,7 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 如果异步客户端尚未断开，所属的事件循环就已关闭，网络仍会释放其他资源，并抛出 `NetworkError`，指出受影响的交换机。
 
-gRPC 通道关闭失败时，`await client.disconnect()` 会抛出 `p4net.control.ConnectionError`。关闭网络时，其他网络资源仍会释放，并抛出以该异常为原因的 `NetworkError`。让原事件循环继续运行，再次调用关闭方法即可尝试关闭原通道。
+gRPC 通道关闭失败时，同步和异步客户端的 `disconnect()` 都会抛出 `p4net.control.ConnectionError`。关闭网络时，其他资源仍会释放，并抛出以该异常为原因的 `NetworkError`。再次调用断开连接或关闭网络的方法，可以重试关闭原通道。异步客户端需要保持所属的事件循环运行。
 
 事件循环运行时，SIGINT/SIGTERM 处理器会先等待网络清理，再恢复原处理器并重新投递信号。事件循环之外使用同步清理。
 

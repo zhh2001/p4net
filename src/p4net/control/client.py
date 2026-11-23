@@ -224,6 +224,11 @@ class P4RuntimeClient:
         """``True`` while the gRPC channel is open and arbitration succeeded."""
         return self._connected and not self._closed
 
+    @property
+    def _has_channel(self) -> bool:
+        """Whether the client still owns a gRPC channel."""
+        return self._channel is not None
+
     # Lifecycle ----------------------------------------------------------
 
     def connect(self, *, timeout: float = 10.0) -> None:
@@ -250,10 +255,13 @@ class P4RuntimeClient:
                     reconnect = self._has_connected
                     if reconnect:
                         self._p4info_unconfirmed = True
+                    self._close_channel_locked()
                     try:
                         stream_call, stream_event = self._start_stream_locked()
                     except BaseException:
-                        failed_thread = self._close_stream_locked()
+                        failed_thread, close_error = self._close_stream_locked()
+                        if close_error is not None:
+                            logger.warning("%s: %r", close_error, close_error.__cause__)
                         raise
                 elif self._stream_thread is threading.current_thread():
                     raise ConnectionError("cannot wait for arbitration from a PacketIn handler")
@@ -286,7 +294,7 @@ class P4RuntimeClient:
             if attempt is not None:
                 try:
                     if stream_call is not None:
-                        self._teardown(expected_stream=stream_call)
+                        self._teardown(expected_stream=stream_call, raise_close_error=False)
                     self._join_stream_thread(failed_thread)
                 finally:
                     with self._teardown_lock:
@@ -414,20 +422,28 @@ class P4RuntimeClient:
             self._retired = True
 
     def disconnect(self) -> None:
-        """Close the stream channel and the gRPC channel. Idempotent."""
+        """Close the stream channel and the gRPC channel. Idempotent.
+
+        On a channel close failure, raise ``ConnectionError`` and keep the
+        channel for another attempt.
+        """
         self._teardown()
 
-    def _teardown(self, *, expected_stream: Any = None) -> None:
+    def _teardown(self, *, expected_stream: Any = None, raise_close_error: bool = True) -> None:
         with self._teardown_lock:
             if expected_stream is not None and expected_stream is not self._stream_call:
                 return
             was_connected = self._connected
-            stream_thread = self._close_stream_locked()
+            stream_thread, close_error = self._close_stream_locked()
         self._join_stream_thread(stream_thread)
-        if was_connected:
+        if close_error is not None:
+            if raise_close_error:
+                raise close_error
+            logger.warning("%s: %r", close_error, close_error.__cause__)
+        elif was_connected:
             logger.debug("P4Runtime client %r disconnected", self._target)
 
-    def _close_stream_locked(self) -> threading.Thread | None:
+    def _close_stream_locked(self) -> tuple[threading.Thread | None, ConnectionError | None]:
         self._closed = True
         if self._channel is not None and not self._connected:
             if self._stream_error is None:
@@ -450,17 +466,25 @@ class P4RuntimeClient:
             except Exception as exc:
                 logger.debug("stream cancel raised: %r", exc)
         stream_thread = self._stream_thread
-        if self._channel is not None:
-            try:
-                self._channel.close()
-            except Exception as exc:
-                logger.debug("channel close raised: %r", exc)
-        self._channel = None
+        close_error = None
+        try:
+            self._close_channel_locked()
+        except ConnectionError as exc:
+            close_error = exc
         self._stub = None
         self._stream_call = None
         self._stream_thread = None
         self._outgoing = None
-        return stream_thread
+        return stream_thread, close_error
+
+    def _close_channel_locked(self) -> None:
+        if self._channel is None:
+            return
+        try:
+            self._channel.close()
+        except Exception as exc:
+            raise ConnectionError(f"Could not close gRPC channel for {self.target!r}") from exc
+        self._channel = None
 
     @staticmethod
     def _join_stream_thread(stream_thread: threading.Thread | None) -> None:
@@ -503,7 +527,7 @@ class P4RuntimeClient:
                             f"P4Runtime stream ended for {self._target!r}"
                         )
                     self._stream_event.set()
-                    self._teardown(expected_stream=stream_call)
+                    self._teardown(expected_stream=stream_call, raise_close_error=False)
 
     def _dispatch_packet_in(self, packet: Any, stream_call: Any) -> None:
         """Decode a PacketIn and fan out to registered handlers."""

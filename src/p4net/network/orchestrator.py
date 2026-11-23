@@ -297,8 +297,13 @@ class Network:
             if self._running or self._start_future is not None:
                 raise NetworkAlreadyRunningError("Network is already running or starting")
             stopping = self._stop_future is not None and not self._stop_future.done()
-            if stopping or any(not close.done() for close in self._async_disconnects):
+            if (
+                stopping
+                or any(client._has_channel for client in self._clients.values())
+                or any(not close.done() for close in self._async_disconnects)
+            ):
                 raise NetworkError("Network shutdown is still running")
+            self._clients.clear()
             self._async_disconnects.clear()
             self._closed_async_client_loops.clear()
             self._stop_future = None
@@ -386,8 +391,8 @@ class Network:
         Startup already in progress finishes or rolls back before teardown.
 
         Raises:
-            NetworkError: if an async client's event loop is paused or closed,
-                or the channel close fails or times out. After a pause, timeout,
+            NetworkError: if a gRPC channel close fails or times out, or an async
+                client's event loop is paused or closed. After a pause, timeout,
                 or channel close error, call again to wait for shutdown.
         """
         try:
@@ -398,7 +403,9 @@ class Network:
             in_event_loop = True
 
         with self._stop_lock:
-            if self._stop_future is None or (self._stop_future.done() and self._async_disconnects):
+            if self._stop_future is None or (
+                self._stop_future.done() and (self._clients or self._async_disconnects)
+            ):
                 self._stop_future = Future()
                 initiate = True
             else:
@@ -435,7 +442,7 @@ class Network:
             elif failed_channels:
                 switches = ", ".join(repr(name) for name in sorted(failed_channels))
                 error = NetworkError(
-                    f"async client shutdown failed: could not close gRPC channel for {switches}"
+                    f"client shutdown failed: could not close gRPC channel for {switches}"
                 )
                 error.__cause__ = next(iter(failed_channels.values()))
             elif self._async_disconnects:
@@ -456,8 +463,8 @@ class Network:
         Cancellation is propagated after cleanup finishes.
 
         Raises:
-            NetworkError: if an async client's event loop is paused or closed,
-                or the channel close fails or times out. After a pause, timeout,
+            NetworkError: if a gRPC channel close fails or times out, or an async
+                client's event loop is paused or closed. After a pause, timeout,
                 or channel close error, call again to wait for shutdown.
         """
         with self._stop_lock:
@@ -665,8 +672,8 @@ class Network:
                 election_id=election_id,
                 thrift_address=("127.0.0.1", int(bmv2.thrift_port)),
             )
-            client.connect()
             self._clients[sw_name] = client
+            client.connect()
             client.set_pipeline_config(
                 bmv2_json=self._compile_results[sw_name].bmv2_json,
                 p4info=self._compile_results[sw_name].p4info,
@@ -1007,12 +1014,17 @@ class Network:
         failed_channels = self._close_async_clients()
 
         # 1. P4Runtime clients
+        pending_clients = {}
         for sw_name, client in list(self._clients.items()):
             try:
                 client.disconnect()
+            except ConnectionError as exc:
+                pending_clients[sw_name] = client
+                failed_channels.setdefault(sw_name, exc)
+                logger.warning("disconnect %r: %s", sw_name, exc)
             except Exception as exc:
                 logger.warning("disconnect %r: %r", sw_name, exc)
-        self._clients.clear()
+        self._clients = pending_clients
 
         # 2. BMv2 switches
         for sw_name, bmv2 in list(self._bmv2_switches.items()):

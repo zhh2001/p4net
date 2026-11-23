@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, call
 import pytest
 from pytest_mock import MockerFixture
 
+from p4net.control import ConnectionError
 from p4net.network import (
     Network,
     NetworkAlreadyRunningError,
@@ -540,10 +541,15 @@ def test_rollback_on_bmv2_startup_failure(patched: dict[str, Any], tmp_path: Pat
     assert net.is_running is False
 
 
-def test_rollback_on_p4runtime_connect_failure(patched: dict[str, Any], tmp_path: Path) -> None:
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_rollback_on_p4runtime_connect_failure(
+    patched: dict[str, Any], tmp_path: Path, close_fails: bool
+) -> None:
     def make_client(target: str, **kw: Any) -> MagicMock:
         m = MagicMock()
         m.connect.side_effect = RuntimeError("connect failed")
+        if close_fails:
+            m.disconnect.side_effect = [ConnectionError("close failed"), None]
         patched["clients"].append(m)
         return m
 
@@ -555,6 +561,13 @@ def test_rollback_on_p4runtime_connect_failure(patched: dict[str, Any], tmp_path
     for b in patched["bmv2s"]:
         b.stop.assert_called()
     assert net.is_running is False
+    client = patched["clients"][0]
+    client.disconnect.assert_called_once()
+    if close_fails:
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+        net.stop()
+        assert client.disconnect.call_count == 2
 
 
 # ---------------------------------------------------------------------------

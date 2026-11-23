@@ -32,7 +32,7 @@ from p4net import Network
 from p4net.cli import CommandDispatcher
 from p4net.compiler import P4Compiler
 from p4net.control import ConnectionError
-from p4net.network import RunningHost
+from p4net.network import NetworkError, RunningHost
 from p4net.runtime import BMv2StartupError
 from p4net.topo import Topology
 
@@ -138,6 +138,63 @@ def test_single_host_loopback(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 2. Two hosts via one switch with table programming
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("retry_through_network", [True, False])
+def test_network_shutdown_reports_and_retries_sync_channel_close_failure(
+    tmp_path: Path, mocker: MockerFixture, retry_through_network: bool
+) -> None:
+    suffix = _suffix()
+    switch, host = f"s{suffix}", f"h{suffix}"
+    topo = Topology()
+    topo.add_host(host, ip="10.0.0.1/24")
+    topo.add_switch(switch, _SIMPLE_ROUTING, grpc_port=_free_port(), thrift_port=_free_port())
+    topo.add_link(host, switch, port_b=1)
+    net = Network(topo, log_dir=tmp_path / "logs")
+    net.start()
+    sw = net.switch(switch)
+    client = sw.client
+    channel = client._channel
+    close = channel.close
+    failure = RuntimeError("gRPC close failed")
+    close_calls = 0
+
+    def fail_first_close() -> None:
+        nonlocal close_calls
+        close_calls += 1
+        if close_calls == 1:
+            raise failure
+        close()
+
+    try:
+        mocker.patch.object(channel, "close", side_effect=fail_first_close)
+        with pytest.raises(
+            NetworkError, match=f"could not close gRPC channel for '{switch}'"
+        ) as raised:
+            net.stop()
+        assert isinstance(raised.value.__cause__, ConnectionError)
+        assert raised.value.__cause__.__cause__ is failure
+        assert not net.is_running and not sw.bmv2.is_running()
+        assert host not in _list_netns()
+        assert client._channel is channel
+        assert (
+            channel._channel.check_connectivity_state(False)
+            != grpc.ChannelConnectivity.SHUTDOWN.value[0]
+        )
+        with pytest.raises(NetworkError, match="Network shutdown is still running"):
+            net.start()
+
+        if retry_through_network:
+            net.stop()
+        else:
+            client.disconnect()
+        assert client._channel is None
+        assert close_calls == 2
+        net.start()
+        assert net.switch(switch) is not sw
+    finally:
+        net.stop()
+        close()
 
 
 def test_shutdown_refuses_connect_on_retained_sync_client(
