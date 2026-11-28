@@ -197,10 +197,30 @@ p4net> topology graph ./topology.svg format=svg
 
 ## 提交问题
 
-[提交 issue](https://github.com/zhh2001/p4net/issues) 时，附上下列版本输出、完整异常、最小拓扑和 P4 程序，以及交换机日志中相关内容：
+[提交问题](https://github.com/zhh2001/p4net/issues)时，附上完整错误信息、可复现问题的最小拓扑和 P4 程序，以及相关的交换机日志。同时附上 P4Net、p4c 和 BMv2 的版本。
+
+通过 [pipx 全局安装](getting-started/installation.md#install-cli)时，查看输出中 `package p4net` 那一行。
+
+```bash
+sudo pipx list --global
+```
+
+如果安装时用了旧版 pipx 的目录设置，查询时沿用相同的目录。
+
+```bash
+sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+  PIPX_MAN_DIR=/usr/local/share/man pipx list
+```
+
+在[项目虚拟环境](getting-started/installation.md#project-environments)中安装时，先激活该环境，再查询版本。
 
 ```bash
 python -c "import p4net; print(p4net.__version__)"
+```
+
+查询编译器和交换机版本。
+
+```bash
 p4c --version
 simple_switch_grpc --version
 ```

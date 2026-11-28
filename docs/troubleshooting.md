@@ -197,10 +197,30 @@ The second command requires Graphviz. `topology graph` without a path prints the
 
 ## Report a problem
 
-Include the version outputs below, the complete exception, a minimal topology and P4 program, and relevant lines from the switch log when [opening an issue](https://github.com/zhh2001/p4net/issues):
+When [opening an issue](https://github.com/zhh2001/p4net/issues), include the complete error, a minimal topology and P4 program that reproduce it, and the relevant switch logs. Include the versions of P4Net, p4c and BMv2.
+
+For a [global pipx installation](getting-started/installation.md#install-cli), look for the `package p4net` line in the output.
+
+```bash
+sudo pipx list --global
+```
+
+If you installed with older pipx using explicit paths, use the same paths when listing packages.
+
+```bash
+sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+  PIPX_MAN_DIR=/usr/local/share/man pipx list
+```
+
+For a [project virtual environment](getting-started/installation.md#project-environments), activate it before checking the version.
 
 ```bash
 python -c "import p4net; print(p4net.__version__)"
+```
+
+Check the versions of the compiler and switch.
+
+```bash
 p4c --version
 simple_switch_grpc --version
 ```
