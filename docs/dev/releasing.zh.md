@@ -65,7 +65,9 @@ python -m build --outdir "$release_dir"
 python -m twine check --strict "$release_dir"/*.whl "$release_dir"/*.tar.gz
 ```
 
-核对包内容和版本。wheel 应包含库代码，源码包应包含 `pyproject.toml` 选定的源码、文档、示例和测试。CI 的安装包任务会将源码包的文件清单和内容与 Git 已跟踪文件逐一比对。
+对照 `pyproject.toml` 的 `[project]` 配置，检查 wheel 中的 `*.dist-info/METADATA` 和源码包顶层目录的 `PKG-INFO`。核对包名和版本（`Name`、`Version`）、简介和分类标签（`Summary`、`Classifier`）、Python 版本要求（`Requires-Python`）、许可证（`License-Expression`）及项目链接（`Project-URL`）。检查依赖和可选依赖组（`Requires-Dist`、`Provides-Extra`），留意依赖的版本约束和适用环境。
+
+wheel 应包含库代码，源码包应包含 `pyproject.toml` 选定的源码、文档、示例和测试。CI 的安装包任务会将源码包的文件清单和内容与 Git 已跟踪文件逐一比对。
 
 ## 分别验证两种安装方式
 

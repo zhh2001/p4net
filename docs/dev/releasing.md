@@ -65,7 +65,9 @@ python -m build --outdir "$release_dir"
 python -m twine check --strict "$release_dir"/*.whl "$release_dir"/*.tar.gz
 ```
 
-Check the package contents and version. The wheel must contain the library, and the sdist must include the source, documentation, examples and tests selected in `pyproject.toml`. The CI package job compares the sdist file list and contents with Git-tracked files.
+Compare `*.dist-info/METADATA` in the wheel and `PKG-INFO` in the sdist's top-level directory with the `[project]` settings in `pyproject.toml`. Check the package name and version (`Name`, `Version`), summary and classifiers (`Summary`, `Classifier`), Python version requirement (`Requires-Python`), license (`License-Expression`), and project links (`Project-URL`). Check the dependencies and extras (`Requires-Dist`, `Provides-Extra`), including their version constraints and environment markers.
+
+The wheel must contain the library, and the sdist must include the source, documentation, examples and tests selected in `pyproject.toml`. The CI package job compares the sdist file list and contents with Git-tracked files.
 
 ## Verify both installations
 
