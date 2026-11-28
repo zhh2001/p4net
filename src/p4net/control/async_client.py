@@ -107,7 +107,7 @@ def _parse_register_read_array(output: str, name: str, size: int) -> list[int]:
 
 
 class AsyncP4RuntimeClient:
-    """Async parallel to :class:`P4RuntimeClient`. **Stable** in 1.x since 1.7.0."""
+    """Async parallel to ``P4RuntimeClient``. **Stable** in 1.x since 1.7.0."""
 
     def __init__(
         self,
@@ -204,7 +204,7 @@ class AsyncP4RuntimeClient:
         Reconnecting also reads the device's P4Info within the same timeout.
         Clients from ``RunningSwitch.async_client`` do so on their first
         connection as well. Once network shutdown starts closing the switch's
-        client, further calls raise :class:`ConnectionError`.
+        client, further calls raise ``ConnectionError``.
         """
         with self._connection_state_lock:
             self._require_connectable()
@@ -374,7 +374,7 @@ class AsyncP4RuntimeClient:
         In a PacketIn callback, close the stream that delivered the packet.
         A cancellation during channel closure is propagated after the close
         attempt, with any close error as its cause. A channel close failure
-        is reported as :class:`ConnectionError` and leaves the channel
+        is reported as ``ConnectionError`` and leaves the channel
         available for another attempt on the same event loop.
         """
         callback = _PACKET_IN_CALLBACK.get()
@@ -709,7 +709,7 @@ class AsyncP4RuntimeClient:
         priority: int | None = None,
         timeout: float = 5.0,
     ) -> None:
-        """Modify an entry using the priority rules of :meth:`insert_table_entry`."""
+        """Modify an entry using the priority rules of ``insert_table_entry``."""
         await self._write_entry(table, match, action, params, priority, "MODIFY", timeout)
 
     async def delete_table_entry(

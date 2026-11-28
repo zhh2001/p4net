@@ -299,7 +299,7 @@ class VethPair:
         ``family=socket.AF_INET6``. Validates the input via
         ``ipaddress.IPv6Interface`` and rejects IPv4 strings (their `/0`
         through `/32` masks would parse as IPv6Interface only by accident).
-        Raises :class:`LinkError` on assignment failure.
+        Raises ``LinkError`` on assignment failure.
         """
         _validate_side(side)
         if isinstance(cidr, str) and "." in cidr:

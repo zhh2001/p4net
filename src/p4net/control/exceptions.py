@@ -52,10 +52,10 @@ class NoSuchRegisterError(P4RuntimeError):
 class AsyncOperationCancelledError(P4RuntimeError):
     """An async client operation was cancelled mid-flight.
 
-    Raised by :class:`p4net.control.AsyncP4RuntimeClient` when an in-flight
+    Raised by ``p4net.control.AsyncP4RuntimeClient`` when an in-flight
     RPC is cancelled (typically because the owning task was cancelled, or
     because ``disconnect()`` is called while another coroutine is awaiting
-    a response). Subclasses :class:`P4RuntimeError` so existing
+    a response). Subclasses ``P4RuntimeError`` so existing
     ``except P4RuntimeError`` handlers still cover it, but lets cancellation
     sites distinguish a clean cancel from a connection failure.
 

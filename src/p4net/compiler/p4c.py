@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class CompileResult:
-    """Output of one :meth:`P4Compiler.compile` call.
+    """Output of one ``P4Compiler.compile`` call.
 
     Attributes:
         source: The P4 source file that was compiled.

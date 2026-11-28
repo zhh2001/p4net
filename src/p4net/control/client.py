@@ -133,7 +133,7 @@ class P4RuntimeClient:
     """gRPC client for a single P4Runtime device.
 
     When the StreamChannel ends or fails, the client closes its channel
-    and clears the connected state. Call :meth:`connect` to reconnect.
+    and clears the connected state. Call ``connect`` to reconnect.
     Lifecycle calls wait for any channel cleanup already in progress.
     """
 
@@ -208,7 +208,7 @@ class P4RuntimeClient:
 
     @property
     def index(self) -> P4InfoIndex:
-        """The cached :class:`P4InfoIndex` for the device's pipeline.
+        """The cached ``P4InfoIndex`` for the device's pipeline.
 
         Raises:
             P4RuntimeError: if no P4Info is cached.
@@ -772,7 +772,7 @@ class P4RuntimeClient:
         timeout: float = 5.0,
     ) -> None:
         """Modify an existing entry in ``table``. Same arguments as
-        :meth:`insert_table_entry`. Raises :class:`EntryNotFoundError`
+        ``insert_table_entry``. Raises ``EntryNotFoundError``
         if no matching entry exists."""
         self._write_entry(
             table,

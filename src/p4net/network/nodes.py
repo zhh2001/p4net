@@ -97,7 +97,7 @@ class RunningHost:
 
     @property
     def descriptor(self) -> Host:
-        """The :class:`Host` topology descriptor that produced this runtime."""
+        """The ``Host`` topology descriptor that produced this runtime."""
         return self._host
 
     @property
@@ -145,12 +145,12 @@ class RunningHost:
         Args:
             argv: Command and arguments to execute.
             timeout: Per-call timeout in seconds.
-            check: Raise :class:`subprocess.CalledProcessError` on rc != 0.
+            check: Raise ``subprocess.CalledProcessError`` on rc != 0.
             capture_output: Capture stdout/stderr instead of inheriting.
             env: Optional environment variable overrides.
 
         Returns:
-            The completed :class:`subprocess.CompletedProcess`.
+            The completed ``subprocess.CompletedProcess``.
         """
         return self._namespace.exec(
             argv,
@@ -171,7 +171,7 @@ class RunningHost:
     ) -> NSProcess:
         """Spawn a long-running process inside the host's namespace.
 
-        Returns an :class:`NSProcess` whose lifecycle the caller manages.
+        Returns an ``NSProcess`` whose lifecycle the caller manages.
         """
         return self._namespace.popen(argv, env=env, stdout=stdout, stderr=stderr, stdin=stdin)
 
@@ -191,7 +191,7 @@ class RunningHost:
 
         Auto-selects IPv4 vs IPv6 based on the target string (``:`` → IPv6),
         or pass ``force_ipv6=True`` to force the IPv6 path. When ``dst`` is a
-        :class:`RunningHost`, the IPv4 primary is preferred (least surprise
+        ``RunningHost``, the IPv4 primary is preferred (least surprise
         for existing callers); pass ``force_ipv6=True`` plus a string target
         if you need IPv6 explicitly.
         """
@@ -280,7 +280,7 @@ class RunningSwitch:
 
     @property
     def descriptor(self) -> P4Switch:
-        """The :class:`P4Switch` topology descriptor that produced this runtime."""
+        """The ``P4Switch`` topology descriptor that produced this runtime."""
         return self._switch
 
     @property
@@ -293,7 +293,7 @@ class RunningSwitch:
         """The P4Runtime gRPC client connected to this switch.
 
         Once network shutdown starts closing switch clients, calling
-        ``connect()`` on this client raises :class:`p4net.control.ConnectionError`.
+        ``connect()`` on this client raises ``p4net.control.ConnectionError``.
         """
         return self._client
 
@@ -333,7 +333,7 @@ class RunningSwitch:
     def async_client(self) -> AsyncP4RuntimeClient:
         """Lazy-constructed async P4Runtime client for this switch.
 
-        Returns an **unconnected** :class:`AsyncP4RuntimeClient`. Call
+        Returns an **unconnected** ``AsyncP4RuntimeClient``. Call
         ``await async_client.connect()`` to attach. The async client
         shares the sync client's P4Info cache and reads the current
         P4Info from the switch on each new connection.
@@ -341,20 +341,20 @@ class RunningSwitch:
         The async client generates its own timestamp-based election ID
         on first connection. Its primary status is independent of the
         sync client's. To choose an election ID explicitly, construct an
-        :class:`AsyncP4RuntimeClient` yourself. A higher election ID can
+        ``AsyncP4RuntimeClient`` yourself. A higher election ID can
         take primary status from an existing client; ``(0, 0)`` permits
         a backup connection for reads.
 
         Concurrent accesses share the cached instance. ``Network.stop()``
         and ``Network.astop()`` close it on its owning event loop and clear it.
         Calling ``connect()`` on that instance during or after its shutdown
-        raises :class:`p4net.control.ConnectionError`.
+        raises ``p4net.control.ConnectionError``.
 
         Raises:
             NetworkNotRunningError: if the network has retired this switch during shutdown.
 
         **Stable** in p4net 1.x since version 1.7.0 — see
-        :class:`AsyncP4RuntimeClient`.
+        ``AsyncP4RuntimeClient``.
         """
         with self._async_client_lock:
             if self._stopped:

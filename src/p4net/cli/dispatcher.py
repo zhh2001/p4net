@@ -227,12 +227,12 @@ class CommandDispatcher:
 
     @property
     def host_names(self) -> list[str]:
-        """Names of the hosts in the underlying :class:`Network`."""
+        """Names of the hosts in the underlying ``Network``."""
         return list(self._network.hosts.keys())
 
     @property
     def switch_names(self) -> list[str]:
-        """Names of the switches in the underlying :class:`Network`."""
+        """Names of the switches in the underlying ``Network``."""
         return list(self._network.switches.keys())
 
     @property
@@ -1072,7 +1072,7 @@ def _render_action_params(
 ) -> dict[str, str]:
     """Decode raw action-param bytes into width-aware human strings.
 
-    The ``index`` argument MUST be the :class:`P4InfoIndex` of the switch the
+    The ``index`` argument MUST be the ``P4InfoIndex`` of the switch the
     table-dump invocation is targeting; never a globally-cached or
     first-found index. This is what allows multi-switch topologies where two
     switches share an action name to render each switch's params correctly.

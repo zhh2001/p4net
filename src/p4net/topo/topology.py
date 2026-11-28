@@ -102,24 +102,24 @@ class Topology:
 
     @property
     def hosts(self) -> Mapping[str, Host]:
-        """Map of host name → :class:`Host`."""
+        """Map of host name → ``Host``."""
         return self._hosts
 
     @property
     def switches(self) -> Mapping[str, P4Switch]:
-        """Map of switch name → :class:`P4Switch`."""
+        """Map of switch name → ``P4Switch``."""
         return self._switches
 
     @property
     def links(self) -> Sequence[Link]:
-        """Tuple of every :class:`Link` in declaration order."""
+        """Tuple of every ``Link`` in declaration order."""
         return tuple(self._links)
 
     def node(self, name: str) -> NodeKind:
         """Look up a node by name.
 
         Returns:
-            The :class:`Host` or :class:`P4Switch` named ``name``.
+            The ``Host`` or ``P4Switch`` named ``name``.
 
         Raises:
             TopologyError: if no node with that name exists.
@@ -140,7 +140,7 @@ class Topology:
         ip6: str | None = None,
         default_route6: str | None = None,
     ) -> Host:
-        """Append a :class:`Host` to the topology.
+        """Append a ``Host`` to the topology.
 
         Args:
             name: Host name; must be unique across hosts and switches.
@@ -151,7 +151,7 @@ class Topology:
             default_route6: IPv6 default-route gateway address.
 
         Returns:
-            The newly created :class:`Host`.
+            The newly created ``Host``.
         """
         self._reject_existing_name(name)
         host = Host(
@@ -178,7 +178,7 @@ class Topology:
         log_level: str = "info",
         pcap_enabled: bool = True,
     ) -> P4Switch:
-        """Append a :class:`P4Switch` to the topology.
+        """Append a ``P4Switch`` to the topology.
 
         Args:
             name: Switch name; must be unique across hosts and switches.
@@ -193,7 +193,7 @@ class Topology:
                 directory via ``Network(pcap_dir=...)`` or CLI ``--pcap-dir``.
 
         Returns:
-            The newly created :class:`P4Switch`.
+            The newly created ``P4Switch``.
         """
         self._reject_existing_name(name)
         idx = len(self._switches)
@@ -250,7 +250,7 @@ class Topology:
         loss_pct_a_to_b_extra: float | None = None,
         loss_pct_b_to_a_extra: float | None = None,
     ) -> Link:
-        """Append a :class:`Link` between two nodes.
+        """Append a ``Link`` between two nodes.
 
         Endpoint sides ``a`` and ``b`` are anchored by argument order;
         per-direction impairment fields like ``delay_a_to_b`` shape only
@@ -258,7 +258,7 @@ class Topology:
 
         Ports must be non-negative ints, excluding bool. Switch data ports
         range from 0 to 510. Automatic allocation starts at 1 for switches,
-        skips the CPU port and raises :class:`TopologyError` when exhausted.
+        skips the CPU port and raises ``TopologyError`` when exhausted.
 
         Args:
             a: First endpoint (host or switch name, or a node object).
@@ -297,7 +297,7 @@ class Topology:
             loss_pct_b_to_a_extra: Same as above, ``b`` → ``a``.
 
         Returns:
-            The newly created :class:`Link`.
+            The newly created ``Link``.
 
         Raises:
             TopologyError: on invalid parameter combinations or
@@ -612,7 +612,7 @@ class Topology:
         ``format`` is forwarded to ``dot -T<format>`` (png, svg, pdf, dot).
         For ``format="dot"`` the source is written verbatim and ``dot`` is
         not invoked, so this path works without graphviz installed.
-        Raises :class:`TopologyError` if ``dot`` is missing or the render
+        Raises ``TopologyError`` if ``dot`` is missing or the render
         fails.
         """
         import shutil
@@ -653,10 +653,10 @@ class Topology:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Topology:
-        """Reconstruct a :class:`Topology` from a :meth:`to_dict` payload.
+        """Reconstruct a ``Topology`` from a ``to_dict`` payload.
 
         Node keys, names, endpoint ports, interface names, and address overrides
-        are restored as stored. Call :meth:`validate` to check node identity and
+        are restored as stored. Call ``validate`` to check node identity and
         endpoint assignments, and reject IP addresses on switch data ports.
         """
         topo = cls()

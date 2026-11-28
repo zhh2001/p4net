@@ -227,22 +227,22 @@ class Network:
 
     @property
     def is_running(self) -> bool:
-        """``True`` once :meth:`start` has succeeded and before :meth:`stop`."""
+        """``True`` once ``start`` has succeeded and before ``stop``."""
         return self._running
 
     @property
     def topology(self) -> Topology:
-        """The :class:`Topology` description backing this network."""
+        """The ``Topology`` description backing this network."""
         return self._topology
 
     @property
     def hosts(self) -> Mapping[str, RunningHost]:
-        """Map of host name → :class:`RunningHost`. Empty until :meth:`start`."""
+        """Map of host name → ``RunningHost``. Empty until ``start``."""
         return self._running_hosts
 
     @property
     def switches(self) -> Mapping[str, RunningSwitch]:
-        """Map of switch name → :class:`RunningSwitch`. Empty until :meth:`start`."""
+        """Map of switch name → ``RunningSwitch``. Empty until ``start``."""
         return self._running_switches
 
     @property
@@ -250,14 +250,14 @@ class Network:
         """Directory where BMv2 log files are written.
 
         Raises:
-            RuntimeError: if accessed before :meth:`start`.
+            RuntimeError: if accessed before ``start``.
         """
         if self._log_dir is None:
             raise RuntimeError("log_dir is not yet allocated; call start() first")
         return self._log_dir
 
     def host(self, name: str) -> RunningHost:
-        """Return the :class:`RunningHost` named ``name``.
+        """Return the ``RunningHost`` named ``name``.
 
         Raises:
             NodeNotFoundError: if no such host is in this network.
@@ -268,7 +268,7 @@ class Network:
         return rh
 
     def switch(self, name: str) -> RunningSwitch:
-        """Return the :class:`RunningSwitch` named ``name``.
+        """Return the ``RunningSwitch`` named ``name``.
 
         Raises:
             NodeNotFoundError: if no such switch is in this network.
@@ -306,7 +306,7 @@ class Network:
         addresses and impairment, launches BMv2 processes, opens
         P4Runtime clients, and pushes pipeline configs. Waits up to five
         seconds for configured IPv6 addresses to finish duplicate address
-        detection. On failure, rolls back via :meth:`_do_stop` before re-raising.
+        detection. On failure, rolls back via ``_do_stop`` before re-raising.
 
         Raises:
             NetworkAlreadyRunningError: if already running or starting.
@@ -432,7 +432,7 @@ class Network:
         """Tear the network down. Repeated calls are safe.
 
         Async clients close on their owning event loops. Inside an event
-        loop, shutdown runs in a background thread; use :meth:`astop` to
+        loop, shutdown runs in a background thread; use ``astop`` to
         wait for it. Outside an event loop, this method waits for cleanup.
         Startup already in progress finishes or rolls back before teardown.
 
@@ -659,8 +659,8 @@ class Network:
     ) -> NSProcess:
         """Spawn an ``xterm`` running ``shell`` inside ``host``'s namespace.
 
-        Returns an :class:`NSProcess` that :meth:`stop` terminates and waits
-        for. Raises :class:`NetworkError` if ``$DISPLAY`` is unset or the
+        Returns an ``NSProcess`` that ``stop`` terminates and waits
+        for. Raises ``NetworkError`` if ``$DISPLAY`` is unset or the
         network is shutting down or has stopped.
         """
         with defer_cleanup_signals(), self._stop_lock:

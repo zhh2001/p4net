@@ -227,7 +227,7 @@ def decode_ipv6(data: bytes) -> str:
 
     Inputs shorter than 16 bytes are zero-extended on the high side, matching
     P4Runtime canonical encoding (§8.4). The condensed form is whatever
-    :class:`ipaddress.IPv6Address.__str__` produces (e.g. ``"fd00::1"``).
+    ``ipaddress.IPv6Address.__str__`` produces (e.g. ``"fd00::1"``).
     """
     if not isinstance(data, bytes):
         raise EncodingError(f"data must be bytes, got {type(data).__name__}")

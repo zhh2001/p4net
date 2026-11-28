@@ -77,7 +77,7 @@ class P4NetShell:
 
     @property
     def dispatcher(self) -> CommandDispatcher:
-        """The :class:`CommandDispatcher` this shell delegates each line to."""
+        """The ``CommandDispatcher`` this shell delegates each line to."""
         return self._dispatcher
 
     def _print_error(self, detail: str) -> None:
