@@ -182,17 +182,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- ``test_two_switches_each_insert_their_own_shim`` aligned-causal slack widened from 5 ms to 20 ms to absorb the Popen + BMv2 early-init drift observed reproducibly under full-suite load. The slack is alignment-drift bookkeeping, not data-plane latency; real per-hop forwarding latency through BMv2's userspace pipeline remains in the tens-to-hundreds of microseconds.
+- The multi-hop INT integration test now allows a 20 ms timestamp alignment tolerance instead of 5 ms to account for variation in BMv2 startup time.
 
 ## [1.4.0] - 2026-05-11
 
 ### Added
 
-- `RunningSwitch.boot_timestamp_us`: wall-clock microseconds since Unix epoch when the switch's BMv2 process started. Captured immediately before ``subprocess.Popen``, so drift from BMv2's internal clock zero is bounded by Popen overhead (sub-millisecond typically). Combine with INT shim ``ingress_timestamp_us`` to compute wall-clock arrival time and align timestamps across multiple switches. **Stable** per the API stability commitment. Underlying machinery: ``BMv2Switch.boot_timestamp_us`` (read-only, ``None`` when the switch is not running).
+- `RunningSwitch.boot_timestamp_us`: the Unix timestamp in microseconds recorded just before launching BMv2. Use it as the estimated start of the switch's timestamp counter to align INT timestamps across switches. **Stable**. The corresponding read-only `BMv2Switch.boot_timestamp_us` property returns `None` when the switch is stopped.
 
 ### Changed
 
-- Multi-hop INT example listener now reads each switch's BMv2 boot timestamp from a coordination file at ``/tmp/p4net-int-multi-hop-boot-times.json`` written by ``topology.py``'s ``setup(net)``, and displays both raw and aligned wall-clock timestamps plus a computed ``latency_s1_to_s2`` line (real per-hop forwarding latency through BMv2's userspace pipeline plus the veth pair). Listener falls back gracefully to the v1.3 unaligned display when the coordination file is missing.
+- The multi-hop INT listener reads switch launch timestamps from `/tmp/p4net-int-multi-hop-boot-times.json`, written by `topology.py`'s `setup(net)`. It displays raw timestamps and estimated arrival times. `latency_s1_to_s2` is the estimated arrival time at `s2` minus the estimated arrival time at `s1`. Differences in BMv2 startup time can make the estimate negative. When the file is missing, the listener shows unaligned timestamps as in v1.3.
 - Multi-hop INT example README and docs page updated to document the alignment formula and replace the v1.3 caveat about non-comparable cross-switch timestamps.
 - Multi-hop INT integration test asserts aligned causal ordering (`aligned_s2 >= aligned_s1 - 5 ms`) — an assertion that could not hold on v1.3's raw-timestamp path.
 
