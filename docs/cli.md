@@ -255,11 +255,12 @@ Range bounds must satisfy `low <= high`. Equal bounds match one value. Reversed 
 
 For a 16-bit range field, `key=0..65535` matches every value. Such wildcard fields are omitted from entries shown by `table dump`; the table still requires a priority.
 
-For exact/LPM-only tables, omit `priority:`. Tables with optional, ternary or range keys require it when inserting entries, including entries that omit an optional field as a wildcard. The priority must be an integer from `1` to `2147483647`. Zero, negative and out-of-range values report an `EncodingError` before sending the request. For a table with an exact destination MAC, a ternary source MAC, and a range of EtherTypes:
+For exact/LPM-only tables, omit `priority:`. Tables with optional, ternary or range keys require it when inserting entries, including entries that omit an optional field as a wildcard. The priority must be an integer from `1` to `2147483647`. Zero, negative and out-of-range values report an `EncodingError` before sending the request.
+
+Before using this example, check the table name and key types with `s1 table list`. The command assumes that the P4 program on `s1` defines `MyIngress.l2_match` with an exact destination MAC, a ternary source MAC, and an EtherType range. The table must allow the `MyIngress.set_egress_port` action with a `port` parameter.
 
 ```text
-p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
-ok
+s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
 ```
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]`

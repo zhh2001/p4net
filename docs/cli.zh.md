@@ -255,11 +255,12 @@ range 的下界不能大于上界。上下界相等时匹配单个值，顺序�
 
 16 位 range 字段可用 `key=0..65535` 匹配全部值。`table dump` 不显示这样的通配字段，表仍需要优先级。
 
-仅含 exact/LPM 字段的表不填写 `priority:`，含 optional、ternary 或 range 字段的表在插入时需要优先级，省略 optional 字段作通配匹配的条目也一样。优先级必须是 `1` 到 `2147483647` 之间的整数，零、负数和越界值会在发送请求前报 `EncodingError`。下面的表按目标 MAC 做 exact 匹配、按源 MAC 做 ternary 匹配，并对 EtherType 做 range 匹配：
+仅含 exact/LPM 字段的表不填写 `priority:`，含 optional、ternary 或 range 字段的表在插入时需要优先级，省略 optional 字段作通配匹配的条目也一样。优先级必须是 `1` 到 `2147483647` 之间的整数，零、负数和越界值会在发送请求前报 `EncodingError`。
+
+使用下面的示例前，先用 `s1 table list` 核对表名和匹配字段的类型。示例假设 `s1` 加载的 P4 程序定义了 `MyIngress.l2_match` 表，目标 MAC 用 exact，源 MAC 用 ternary，EtherType 用 range。该表还需支持带 `port` 参数的 `MyIngress.set_egress_port` 动作。
 
 ```text
-p4net> s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
-ok
+s1 table add MyIngress.l2_match match: hdr.ethernet.dstAddr=00:00:00:00:00:02,hdr.ethernet.srcAddr=00:00:00:00:00:00&&&ff:ff:ff:ff:ff:00,hdr.ethernet.etherType=0x88b0..0x88bf action: MyIngress.set_egress_port params: port=2 priority: 17
 ```
 
 ### `<switch> table del <table> match: <kv>... [priority: <n>]`
