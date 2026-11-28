@@ -4,7 +4,7 @@ description: Reproduce topology startup, shutdown, idle CPU and memory measureme
 
 # Performance baseline
 
-The baseline measures how long a local topology takes to start and stop, how much CPU and memory its running processes use while idle, and whether its host pairs can communicate. Run it against the checkout you want to measure.
+The benchmark measures topology startup and shutdown times, along with idle CPU and memory use. It uses `ping` to check connectivity before sampling. The results below are from P4Net 1.7.0. [Run the benchmark locally](#run-locally) to measure your checkout.
 
 ## Methodology
 

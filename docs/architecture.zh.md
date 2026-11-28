@@ -205,7 +205,7 @@ IPv4 和 IPv6 地址只能配置在主机端点。交换机数据端口上的 `i
 
 声明链路时，`a`、`b` 的顺序决定方向。`*_a_to_b` 参数应用在 `a` 接口的出方向，`*_b_to_a` 参数应用在 `b` 接口的出方向，端点是主机还是交换机不影响这一规则。
 
-例如，`topology.add_link(h1, s1, delay_a_to_b="200ms")` 让离开 `h1` 的流量延迟 200 ms。再设置 `topology.add_link(h2, s1, delay_b_to_a="20ms")`，让交换机发往 `h2` 的流量延迟 20 ms。两项配置为 `h1` 到 `h2` 的请求路径增加了 220 ms 时延。实际 RTT 还包括转发、排队和主机调度耗时，测量方法见[性能评测](performance.md)。
+例如，`topology.add_link(h1, s1, delay_a_to_b="200ms")` 让离开 `h1` 的流量延迟 200 ms。再设置 `topology.add_link(h2, s1, delay_b_to_a="20ms")`，让交换机发往 `h2` 的流量延迟 20 ms。从 `h1` 发往 `h2` 的流量因此增加了 220 ms 时延。实际往返时延（RTT）还包括转发、排队和主机调度耗时。[非对称链路示例](examples/asymmetric-link.md)演示了如何用 `ping` 测量往返时延。
 
 ## ICMP 数据通路
 

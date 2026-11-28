@@ -205,7 +205,7 @@ The latter settings disable router-advertisement processing and SLAAC. Link-loca
 
 For a link declared with endpoints `a` and `b`, `*_a_to_b` settings apply to egress on the `a` interface. `*_b_to_a` settings apply to egress on `b`. The endpoint order determines the direction, whether the endpoint is a host or a switch.
 
-For example, `topology.add_link(h1, s1, delay_a_to_b="200ms")` delays traffic leaving `h1`. Adding `topology.add_link(h2, s1, delay_b_to_a="20ms")` delays traffic leaving `s1` toward `h2`. Together these settings add 220 ms of configured delay to the request path from `h1` to `h2`. Measured RTT also includes forwarding, queuing, and host scheduling. See [performance measurements](performance.md).
+For example, `topology.add_link(h1, s1, delay_a_to_b="200ms")` delays traffic leaving `h1`. Adding `topology.add_link(h2, s1, delay_b_to_a="20ms")` delays traffic leaving `s1` toward `h2`. Together these settings add 220 ms to traffic from `h1` to `h2`. The round-trip time (RTT) also includes forwarding, queuing, and host scheduling. The [asymmetric link example](examples/asymmetric-link.md) shows how to measure RTT with `ping`.
 
 ## Data flow walk-through
 
