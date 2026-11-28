@@ -68,9 +68,13 @@ sudo "$(command -v python)" async_demo.py
 
 `net.switch("s1").async_client` 会延迟创建并缓存一个尚未连接的客户端。同一 `RunningSwitch` 的两个客户端共用 P4Info 缓存。异步客户端首次连接时从交换机回读当前 P4Info。手动构造的客户端首次连接时使用 `info_index=` 提供的索引。同步和异步客户端各有自己的通道与选举 ID，连接其中一个不会关闭另一个。
 
+在同一事件循环中连接、使用和关闭异步客户端。[gRPC AsyncIO 文档](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats)也要求异步对象在创建它们的线程中使用。
+
 如果交换机还没有安装流水线，主客户端建立连接后可以用 `push_pipeline()` 下发。
 
 无论使用同步还是异步客户端，同一实例上的并发 `connect()` 都共用一次连接尝试。发起连接的调用为仲裁和 P4Info 回读设定总超时时间。使用异步客户端时，取消某个等待中的调用，连接尝试会继续。取消发起连接的调用时，客户端会清理连接，并向仍在等待的调用传播 `asyncio.CancelledError`。
+
+StreamChannel 结束或报错后，客户端会清除连接和主控状态并关闭通道。可在同一实例上调用 `connect()` 重连。初次仲裁期间断流会直接结束连接等待，清理进行中调用 `connect()` 或 `disconnect()` 会等待清理完成。
 
 同步和异步客户端断开后重连时，都会从交换机回读 P4Info，回读和仲裁共用连接超时时间。
 
@@ -79,6 +83,8 @@ sudo "$(command -v python)" async_demo.py
 若只需作为备用客户端读取，构造时设置 `election_id=(0, 0)`。该值允许客户端以备用身份完成连接。其他选举 ID 在初次仲裁未获得主控权时，`connect()` 会抛出 `NotPrimaryError` 并关闭连接。
 
 `client.is_primary` 反映最近一次仲裁结果。连接后失去主控权仍可读表，P4Runtime 写请求会抛出 `NotPrimaryError`。`client.is_connected` 是布尔属性，使用时不加括号。
+
+`grpc.aio` 仍使用后台线程。需要创建工作进程时，应先创建进程，再在各自进程中建立 gRPC 连接。
 
 ## 与同步接口的区别
 
@@ -185,7 +191,11 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 外层 `asyncio.wait_for()` 会取消正在等待的操作，其最终异常也受该操作的取消处理影响。
 
-## 关闭网络
+## 网络启停
+
+[完整示例](#完整示例)用 `await net.astart()` 启动网络，并在 `finally` 块中调用 `await net.astop()` 完成关闭。
+
+### 启动网络
 
 在协程中使用 `await net.astart()` 启动网络。它先在调用线程安装清理处理器、注册网络，再由工作线程执行启动。需要自动处理 SIGINT/SIGTERM 时，让事件循环运行在主线程。Python 只允许在[主线程注册信号处理器](https://docs.python.org/3/library/signal.html#signals-and-threads)。同步接口 `net.start()` 仍可使用。
 
@@ -193,20 +203,18 @@ RPC 错误会转换成 p4net 异常，原始 `grpc.aio.AioRpcError` 保留在 `_
 
 在启动期间调用 `stop()` 或 `astop()`，关闭过程会等启动线程结束后再释放资源。如果关闭打断了启动，且启动调用没有被取消，`astart()` 会抛出 `NetworkError`。
 
-在同一事件循环中连接、使用和关闭异步客户端。[gRPC AsyncIO 文档](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats)也要求异步对象在创建它们的线程中使用。
+### 关闭网络
 
 `await net.astop()` 会关闭网络缓存的异步客户端，再释放网络资源。自行构造的客户端需要用 `async with` 或 `await client.disconnect()` 关闭，完整示例使用了前一种方式。保持客户端所属的事件循环运行，直到关闭完成。取消 `astop()` 后，它会等待本次清理结束，再传播 `CancelledError`。如果清理失败，清理错误会保留在异常链中。
 
 `net.stop()` 在事件循环之外会等待清理完成，在事件循环内则启动后台清理并返回。需要等待关闭时，使用 `await net.astop()`。
+
+事件循环运行时，SIGINT/SIGTERM 处理器会先等待网络清理，再恢复原处理器并重新投递信号。事件循环之外使用同步清理。
+
+### 关闭失败与重试
 
 如果缓存的异步客户端所属的事件循环暂停，或等待客户端关闭时超时，其他网络资源仍会释放，等待清理的调用会抛出 `NetworkError`。让客户端所属的事件循环运行，再调用 `net.stop()` 或 `await net.astop()` 完成关闭。在这些客户端全部关闭前，用 `net.start()` 或 `await net.astart()` 重启同一个网络也会抛出 `NetworkError`。
 
 如果异步客户端尚未断开，所属的事件循环就已关闭，网络仍会释放其他资源，并抛出 `NetworkError`，指出受影响的交换机。
 
 gRPC 通道关闭失败时，`disconnect()` 会报告 `p4net.control.ConnectionError`。异步 `disconnect()` 在关闭通道期间被取消时，会等本次关闭结束再传播 `CancelledError`，并将关闭错误保留在异常链中。关闭网络时，其他资源仍会释放，通道错误会通过 `NetworkError` 报告。再次调用断开连接或关闭网络的方法，可以重试关闭原通道。异步客户端需要保持所属的事件循环运行。
-
-事件循环运行时，SIGINT/SIGTERM 处理器会先等待网络清理，再恢复原处理器并重新投递信号。事件循环之外使用同步清理。
-
-StreamChannel 结束或报错后，客户端会清除连接和主控状态并关闭通道。可在同一实例上调用 `connect()` 重连。初次仲裁期间断流会直接结束连接等待，清理进行中调用 `connect()` 或 `disconnect()` 会等待清理完成。
-
-`grpc.aio` 仍使用后台线程。需要创建工作进程时，应先创建进程，再在各自进程中建立 gRPC 连接。参见 [gRPC 的 fork 说明](https://github.com/grpc/grpc/blob/master/doc/fork_support.md)。

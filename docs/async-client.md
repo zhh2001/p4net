@@ -68,9 +68,13 @@ The output should contain a `MyIngress.ipv4_lpm` entry with action parameters `{
 
 `net.switch("s1").async_client` lazily creates and caches an unconnected client. The two clients on a `RunningSwitch` share a P4Info cache. The async client reads the current P4Info from the switch on its first connection. A client you construct yourself uses the `info_index=` argument on its first connection. Sync and async clients have separate channels and election IDs. Connecting one does not close the other.
 
+Connect, use, and close an async client on the same event loop. The [gRPC AsyncIO documentation](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats) also requires async objects to be used on the thread where they were created.
+
 After connecting to a switch with no installed pipeline, the primary client can install one with `push_pipeline()`.
 
 Concurrent `connect()` calls on a single instance share one connection attempt in both clients. The first call sets the timeout for arbitration and any P4Info readback. With the async client, cancelling a waiting call leaves the attempt running. Cancelling the first call cleans up the attempt and propagates `asyncio.CancelledError` to the remaining callers.
+
+When the StreamChannel ends or fails, the client clears its connection and primary status and closes the channel. Call `connect()` on the same instance to reconnect. If the stream ends during initial arbitration, the connection wait ends immediately. `connect()` and `disconnect()` wait for any cleanup already in progress.
 
 Both clients read the switch's P4Info when they reconnect. The readback and arbitration share the connection timeout.
 
@@ -79,6 +83,8 @@ Without an explicit `election_id`, the async client generates one from the curre
 For a backup client that only reads, construct it with `election_id=(0, 0)`. This value permits a backup connection. With other election IDs, an unsuccessful initial arbitration makes `connect()` raise `NotPrimaryError` and close the connection.
 
 `client.is_primary` reflects the latest arbitration response. After losing primary status, a connected client can still read tables, while P4Runtime writes raise `NotPrimaryError`. `client.is_connected` is a Boolean property, used without parentheses.
+
+`grpc.aio` still uses background threads. When creating worker processes, start the processes before opening gRPC connections in each process. See [gRPC's fork documentation](https://github.com/grpc/grpc/blob/master/doc/fork_support.md).
 
 ## Differences from the sync API
 
@@ -185,7 +191,11 @@ Cancellation and timeout results depend on the operation. The timeout column ref
 
 An outer `asyncio.wait_for()` cancels the operation it is awaiting, so its final exception also depends on that operation's cancellation handling.
 
-## Shutting down a network
+## Network startup and shutdown
+
+The [complete example](#complete-example) uses `await net.astart()` to start the network and calls `await net.astop()` in a `finally` block.
+
+### Starting a network
 
 Use `await net.astart()` to start a network inside a coroutine. It installs cleanup handlers on the calling thread, registers the network, and runs startup in a worker thread. Run the event loop on the main thread for automatic SIGINT/SIGTERM cleanup. Python only allows [signal handler registration on the main thread](https://docs.python.org/3/library/signal.html#signals-and-threads). The synchronous `net.start()` remains available.
 
@@ -193,20 +203,18 @@ When `astart()` is cancelled, it waits for the startup worker to finish. If star
 
 Shutdown requested through `stop()` or `astop()` waits for the startup worker before releasing resources. If shutdown interrupts startup and the startup call has not been cancelled, `astart()` raises `NetworkError`.
 
-Connect, use, and close an async client on the same event loop. The [gRPC AsyncIO documentation](https://grpc.github.io/grpc/python/grpc_asyncio.html#caveats) also requires async objects to be used on the thread where they were created.
+### Shutting down a network
 
 `await net.astop()` closes the network's cached async clients before releasing network resources. Close clients you construct yourself with `async with` or `await client.disconnect()`, as the complete example does. Keep the clients' event loops running until shutdown finishes. If `astop()` is cancelled, it waits for the cleanup attempt before propagating `CancelledError`. If cleanup fails, `CancelledError` carries the cleanup error as its cause.
 
 Outside an event loop, `net.stop()` waits for cleanup. Inside an event loop, it starts cleanup in a background thread and returns. Use `await net.astop()` when you need to wait for shutdown.
+
+With a running event loop, the SIGINT/SIGTERM handler awaits network cleanup before restoring the previous handler and delivering the signal again. Outside an event loop, it uses synchronous cleanup.
+
+### Shutdown errors and retries
 
 If a cached async client's event loop is paused or the client takes too long to close, the remaining network resources are released and the waiting call raises `NetworkError`. Run the client's event loop and call `net.stop()` or `await net.astop()` again to finish shutdown. Until those clients finish closing, `net.start()` and `await net.astart()` raise `NetworkError`.
 
 If an async client's event loop has already closed with the client still connected, shutdown releases the other network resources and raises `NetworkError` naming the affected switch.
 
 If closing a gRPC channel fails, `disconnect()` reports `p4net.control.ConnectionError`. If an async `disconnect()` is cancelled during channel closure, it waits for the close attempt and propagates `CancelledError` with any close error as its cause. Network shutdown releases the other network resources and reports channel failures through `NetworkError`. Call the disconnect or shutdown method again to retry the original channel. Keep the owning event loop running for an async client.
-
-With a running event loop, the SIGINT/SIGTERM handler awaits network cleanup before restoring the previous handler and delivering the signal again. Outside an event loop, it uses synchronous cleanup.
-
-When the StreamChannel ends or fails, the client clears its connection and primary status and closes the channel. Call `connect()` on the same instance to reconnect. If the stream ends during initial arbitration, the connection wait ends immediately. `connect()` and `disconnect()` wait for any cleanup already in progress.
-
-`grpc.aio` still uses background threads. When creating worker processes, start the processes before opening gRPC connections in each process. See [gRPC's fork documentation](https://github.com/grpc/grpc/blob/master/doc/fork_support.md).

@@ -16,4 +16,4 @@ Add or remove nodes and links while the network is running. See [topology change
 
 ## Async network management
 
-Manage a network with `async with`, or coordinate startup and shutdown for multiple networks in an async application. See the [async lifecycle guide](async-client.md#shutting-down-a-network) for the current methods.
+Manage a network with `async with`, or coordinate startup and shutdown for multiple networks in an async application. See the [async lifecycle guide](async-client.md#network-startup-and-shutdown) for the current methods.

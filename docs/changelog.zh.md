@@ -83,7 +83,7 @@ CLI 新增 `key=值&&&掩码` 三态匹配和 `key=下界..上界` 范围匹配�
 
 ### 从 1.7 升级
 
-- 在事件循环中使用 `await net.astart()`、`await net.astop()`，等待启停和资源回收完成。异步客户端所属的循环应持续运行到关闭完成。同步场景继续使用 `start()`、`stop()`。示例见[异步指南](async-client.md#关闭网络)。
+- 在事件循环中使用 `await net.astart()`、`await net.astop()`，等待启停和资源回收完成。异步客户端所属的循环应持续运行到关闭完成。同步场景继续使用 `start()`、`stop()`。示例见[异步指南](async-client.md#完整示例)。
 - 地址和网关只传字符串或 `None`，整数字段不接受 `bool`，布尔开关只传 `bool`。导入拓扑快照时为每个端点提供 `port`、`iface_name`，再调用 `validate()`；新建拓扑可由 builder 分配。修正重复节点名和实际接口 IP。非法快照在校验时报 `TopologyError`，导入本身保留端点数据。
 - LPM 使用 `10.0.0.0/24`，不要使用带主机位的 `10.0.0.5/24`。TERNARY 使用 `(0xa0, 0xf0)`，不要使用掩码外仍有值位的 `(0xab, 0xf0)`。反向范围和超出位宽的值会在 RPC 前报 `EncodingError`。`/0` 与零掩码保留现有通配行为。
 - 含 OPTIONAL、TERNARY 或 RANGE 键的表，插入和删除表项都要提供 `1..2147483647` 的整数优先级，包括通配表项。仅含 EXACT/LPM 键的表省略优先级。语法与示例见 [CLI 参考](cli.md#table-add--match--action--params--priority-)。
