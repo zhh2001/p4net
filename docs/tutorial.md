@@ -4,24 +4,24 @@ description: A four-host, two-switch p4net walk-through covering IPv4 and IPv6 L
 
 # Tutorial
 
-This tutorial builds a richer topology than [Quick Start](getting-started/quickstart.md): four hosts, two switches, IPv4 and IPv6 dual-stack, asymmetric link delay, and a CPU-port punt path that lets the controller observe unmatched packets.
+This tutorial expands the [Quick Start](getting-started/quickstart.md) topology to four hosts and two switches. Configure IPv4 and IPv6 forwarding and one-way link delays, then use PacketIn to inspect packets whose destinations have no matching route.
 
 Set up the external tools and the CLI using the [installation guide](getting-started/installation.md).
 
 ## What we're building
 
 ```
-                 +----+
-                 | h1 | 10.0.0.1/24, fd00::1/64
-                 +-+--+
-                   | (h1↔s1 link with delay_a_to_b="50ms")
-                 +-+--+        +----+
-                 | s1 |--------| s2 |
-                 +-+--+        +-+--+
-                   |             |
-                 +-+--+        +-+--+
-        h2/h3 -- |    |        |    | -- h4
-                 ...both attach to s1 / s2 respectively...
+             +----+
+             | h1 | 10.0.0.1/24, fd00::1/64
+             +-+--+
+               | (h1↔s1 link with delay_a_to_b="50ms")
+             +-+--+        +----+
+             | s1 |--------| s2 |
+             +-+--+        +-+--+
+               |             |
+             +-+--+        +-+--+
+    h2/h3 -- |    |        |    | -- h4
+             ...both attach to s1 / s2 respectively...
 ```
 
 Concretely:
@@ -30,7 +30,7 @@ Concretely:
 - `h3` and `h4` attach to `s2`.
 - `s1` ↔ `s2` is a backbone link with 100 ms delay one-way (s1 → s2).
 - Every host has IPv4 and IPv6 addresses on the same `/24` / `/64`.
-- The pipeline forwards IPv4 via an `ipv4_lpm` table and IPv6 via an `ipv6_lpm` table, both programmed at runtime. Unmatched packets get punted to the controller via the CPU port.
+- The pipeline forwards IPv4 through `ipv4_lpm` and IPv6 through `ipv6_lpm`. The setup function installs entries in both tables through P4Runtime.
 
 ## Step 1: scaffold the topology
 
@@ -61,7 +61,7 @@ s1 = topology.add_switch("s1", p4_src=P4_SRC, cpu_port=510)
 s2 = topology.add_switch("s2", p4_src=P4_SRC, cpu_port=510)
 ```
 
-Both switches load the same `tutorial.p4` source — the compiler cache ensures it's compiled once. `cpu_port=510` is BMv2's convention for punt: packets directed at port 510 surface as `PacketIn` to the controller.
+Both switches load `tutorial.p4` and share the compiled files. This example sets the BMv2 CPU port to 510, matching the `CPU_PORT` constant in the P4 program below.
 
 ## Step 2: links with asymmetric delay
 
@@ -192,7 +192,7 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 
 The interesting bits:
 
-- The two LPM tables share a `default_action = punt()`. Anything that misses both tables flows to the CPU port with the `packet_in` controller header populated.
+- The ingress control looks up IPv4 packets from hosts in `ipv4_lpm` and IPv6 packets in `ipv6_lpm`. When no entry matches, the table's default action `punt()` writes the ingress port into the `packet_in` header and sends the packet to the CPU port. BMv2 delivers it to the controller as a PacketIn.
 - `set_egress_port(port)` is parameterised, so the controller can install routes for any host without a per-host action.
 - A controller-injected packet (parsed via the `packet_out` header) is forwarded to `hdr.packet_out.egress_port` and the controller header is invalidated before deparse so the wire packet looks normal.
 
@@ -380,7 +380,7 @@ When `Waiting for 1 packet on s1` appears, send the probe from the second termin
 sudo ip netns exec h1 ping -n -c 1 -W 1 10.0.0.99
 ```
 
-`s1` has no forwarding entry for `10.0.0.99`, so it sends the probe to the controller as a PacketIn. The ping times out in the second terminal. The `p4net` shell shows a packet from ingress port 1, where `h1` is connected. The hex bytes vary with the packet.
+`s1` finds no match for `10.0.0.99` in `ipv4_lpm`, so it sends the probe to the controller as a PacketIn. The ping times out in the second terminal. The `p4net` shell shows a packet from ingress port 1, where `h1` is connected. The hex bytes vary with the packet.
 
 ```text
 p4net> s1 packet listen count=1 timeout=30

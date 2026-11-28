@@ -4,24 +4,24 @@ description: 一个四主机两交换机的 p4net 教程，覆盖 IPv4 与 IPv6 
 
 # 教程
 
-本教程构建的拓扑比[快速上手](getting-started/quickstart.md)更复杂：四台主机、两台交换机，IPv4 与 IPv6 双栈，单向链路延迟，以及一条让控制器观察未匹配数据包的 CPU 端口 punt 路径。
+本教程将[快速上手](getting-started/quickstart.md)的拓扑扩展到四台主机和两台交换机。配置 IPv4、IPv6 转发和单向链路时延后，用 PacketIn 查看未匹配到转发表项的报文。
 
 先按[安装指南](getting-started/installation.md)配置外部工具和 p4net 命令行。
 
 ## 我们要构建什么
 
 ```
-                 +----+
-                 | h1 | 10.0.0.1/24, fd00::1/64
-                 +-+--+
-                   | （h1↔s1 链路上设置 delay_a_to_b="50ms"）
-                 +-+--+        +----+
-                 | s1 |--------| s2 |
-                 +-+--+        +-+--+
-                   |             |
-                 +-+--+        +-+--+
-        h2/h3 -- |    |        |    | -- h4
-                 ...分别接到 s1 / s2...
+             +----+
+             | h1 | 10.0.0.1/24, fd00::1/64
+             +-+--+
+               | （h1↔s1 链路上设置 delay_a_to_b="50ms"）
+             +-+--+        +----+
+             | s1 |--------| s2 |
+             +-+--+        +-+--+
+               |             |
+             +-+--+        +-+--+
+    h2/h3 -- |    |        |    | -- h4
+             ...分别接到 s1 / s2...
 ```
 
 具体来说：
@@ -30,7 +30,7 @@ description: 一个四主机两交换机的 p4net 教程，覆盖 IPv4 与 IPv6 
 - `h3` 与 `h4` 接到 `s2`。
 - `s1` ↔ `s2` 是骨干链路，单向延迟 100ms（s1 → s2）。
 - 每台主机都拥有同一个 `/24` 与 `/64` 上的 IPv4 与 IPv6 地址。
-- 流水线通过 `ipv4_lpm` 表转发 IPv4，通过 `ipv6_lpm` 表转发 IPv6——两张表都在运行时编程。未匹配的包通过 CPU 端口上送控制器。
+- 流水线用 `ipv4_lpm` 转发 IPv4，用 `ipv6_lpm` 转发 IPv6。初始化函数通过 P4Runtime 向两张表下发表项。
 
 ## 步骤 1：定义拓扑
 
@@ -61,7 +61,7 @@ s1 = topology.add_switch("s1", p4_src=P4_SRC, cpu_port=510)
 s2 = topology.add_switch("s2", p4_src=P4_SRC, cpu_port=510)
 ```
 
-两台交换机加载同一份 `tutorial.p4`——编译缓存确保它只被编译一次。`cpu_port=510` 是 BMv2 的 punt 约定：发往端口 510 的数据包以 `PacketIn` 形式上送控制器。
+两台交换机加载同一份 `tutorial.p4`，共用编译产物。本例将 BMv2 的 CPU 端口设为 510，与下方 P4 程序中的 `CPU_PORT` 一致。
 
 ## 步骤 2：带非对称延迟的链路
 
@@ -192,7 +192,7 @@ V1Switch(MyParser(), MyVerifyChecksum(), MyIngress(), MyEgress(),
 
 值得注意的几个点：
 
-- 两张 LPM 表共用 `default_action = punt()`。两张表都未命中的包会以填好 `packet_in` 控制器报头的形式上送 CPU 端口。
+- 对主机发来的报文，入口处理按 IP 版本查表。IPv4 查 `ipv4_lpm`，IPv6 查 `ipv6_lpm`。如果对应的表没有匹配项，就执行默认动作 `punt()`，把入端口写入 `packet_in` 报头，再将报文送往 CPU 端口。BMv2 将该报文作为 PacketIn 交给控制器。
 - `set_egress_port(port)` 带参数，控制器为任意主机安装路由时无需为每台主机定义不同动作。
 - 控制器注入的包（解析时走 `packet_out` 报头分支）会按 `hdr.packet_out.egress_port` 转发，并在 deparse 之前把控制器报头标记无效，从而让线上包看起来正常。
 
@@ -379,7 +379,7 @@ s1 packet listen count=1 timeout=30
 sudo ip netns exec h1 ping -n -c 1 -W 1 10.0.0.99
 ```
 
-`s1` 的转发表没有 `10.0.0.99` 的匹配项，因此把探测报文作为 PacketIn 交给控制器。第二个终端的 `ping` 会超时，`p4net` Shell 会显示从端口 1 收到的报文，该端口连接 `h1`。十六进制内容随报文而变化。
+`s1` 在 `ipv4_lpm` 中找不到 `10.0.0.99` 的匹配项，因此把探测报文作为 PacketIn 交给控制器。第二个终端的 `ping` 会超时，`p4net` Shell 会显示从端口 1 收到的报文，该端口连接 `h1`。十六进制内容随报文而变化。
 
 ```text
 p4net> s1 packet listen count=1 timeout=30
